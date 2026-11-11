@@ -1,11 +1,11 @@
-import streamlit as st
+ import streamlit as st
 import numpy as np
 import pandas as pd
 import yfinance as yf
 from scipy.stats import norm
 import matplotlib.pyplot as plt
 
-# 1. 页面基本配置与全局 CSS 样式
+# 1. 页面基本配置与全局专业终端样式
 st.set_page_config(
     page_title="CAPITAL QUANT v2 - Pro Terminal",
     page_icon="📈",
@@ -16,13 +16,15 @@ st.markdown("""
 <style>
     html, body, [class*="css"] {
         font-size: 18px !important;
+        background-color: #070a13;
+        color: #f3f4f6;
     }
     .big-price {
         font-size: 20px !important;
         font-weight: 700 !important;
     }
     div.stVerticalBlock > div.stElementContainer {
-        margin-bottom: -12px !important;
+        margin-bottom: -10px !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -44,7 +46,7 @@ def get_bs_gamma(S, K, T, r, sigma):
     d1 = (np.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
     return norm.pdf(d1) / (S * sigma * np.sqrt(T))
 
-# --- 期权 GEX 与期权链核心函数 ---
+# --- 数据与期权抓取核心函数 ---
 def fetch_gex_and_chain(ticker_symbol):
     try:
         ticker = yf.Ticker(ticker_symbol)
@@ -123,7 +125,7 @@ def fetch_gex_and_chain(ticker_symbol):
 
 
 # ==========================================
-# 顶部导航栏切换
+# 顶部全局导航栏
 # ==========================================
 st.markdown("### 📊 CAPITAL QUANT v2 &nbsp; | &nbsp; **Pro Trading Terminal**")
 
@@ -140,7 +142,7 @@ st.session_state.nav_mode = nav_tab
 st.markdown("---")
 
 # ==========================================
-# 视图一：Market Watch 看板
+# 视图一：Market Watch 看板（完美保留你满意的第一页）
 # ==========================================
 if st.session_state.nav_mode == "Market Watch":
     col_input, col_add, col_update = st.columns([4, 1.5, 1.5])
@@ -253,7 +255,7 @@ if st.session_state.nav_mode == "Market Watch":
 
 
 # ==========================================
-# 视图二：Stock Analysis 终端（完美契合截图364格式）
+# 视图二：Stock Analysis 终端（完全按图 3 布局与 Trading 212 图表设计）
 # ==========================================
 else:
     c_head1, c_head2 = st.columns([3, 1])
@@ -277,7 +279,7 @@ else:
     if spot is None:
         st.error(f"Failed to load data for {selected_analysis_stock}.")
     else:
-        # 顶级标签页切换
+        # 顶部的子标签页切换（对应图 3 的标签风格）
         sub_tab = st.radio(
             "Analysis View", 
             ["Price Chart & Price Level", "Gamma & Walls Analysis", f"Options Chain ({nearest_exp})"],
@@ -287,80 +289,111 @@ else:
         st.markdown("---")
         
         if sub_tab == "Price Chart & Price Level":
-            # 黄金比例分栏：左侧 Trading 212 风格虚线图表，右侧精细价格阶梯挂单面板
-            col_chart, col_price_level = st.columns([2.6, 1.2])
+            # 黄金比例左右两栏：左侧 Trading 212 风格图表，右侧 PRICE LEVEL 面板
+            col_chart, col_price_level = st.columns([2.8, 1.2])
             
             with col_chart:
-                st.markdown(f"#### 📉 {selected_analysis_stock} — Price Chart & Moving Averages")
-                fig_p, ax_p = plt.subplots(figsize=(8, 4.5))
-                # 使用 Trading 212 经典的明亮青色曲线和多重虚线 MA 均线
-                ax_p.plot(hist_df.index, hist_df['Close'], label='Close Price', color='#00ffff', linewidth=1.8)
-                if len(hist_df) >= 20:
-                    ax_p.plot(hist_df.index, hist_df['Close'].rolling(20).mean(), label='MA20', color='#facc15', linestyle='--', linewidth=1.2)
-                if len(hist_df) >= 50:
-                    ax_p.plot(hist_df.index, hist_df['Close'].rolling(50).mean(), label='MA50', color='#fb923c', linestyle='--', linewidth=1.2)
-                if len(hist_df) >= 200:
-                    ax_p.plot(hist_df.index, hist_df['Close'].rolling(200).mean(), label='MA200', color='#e879f9', linestyle='--', linewidth=1.2)
+                st.markdown(f"#### 📈 **{selected_analysis_stock} — Price Chart & Moving Averages**")
                 
-                ax_p.set_facecolor('#0b0f19')
-                fig_p.patch.set_facecolor('#0b0f19')
-                ax_p.tick_params(colors='white')
-                ax_p.xaxis.label.set_color('white')
-                ax_p.yaxis.label.set_color('white')
-                ax_p.legend(loc='upper left', fontsize='small', facecolor='#111827', edgecolor='none', labelcolor='white')
-                ax_p.grid(True, color='#1f2937', alpha=0.5, linestyle=':')
+                # 创建 Trading 212 风格的精美面积图与均线图
+                fig_p, ax_p = plt.subplots(figsize=(8, 4.6))
+                
+                # 曲线与面积填充（Trading 212 经典蓝绿色）
+                price_line = ax_p.plot(hist_df.index, hist_df['Close'], label='Close Price', color='#00d2ff', linewidth=2.0)
+                ax_p.fill_between(hist_df.index, hist_df['Close'], hist_df['Close'].min() * 0.95, color='#0284c7', alpha=0.15)
+                
+                # 均线虚线
+                if len(hist_df) >= 20:
+                    ax_p.plot(hist_df.index, hist_df['Close'].rolling(20).mean(), label='MA20', color='#facc15', linestyle='--', linewidth=1.4)
+                if len(hist_df) >= 50:
+                    ax_p.plot(hist_df.index, hist_df['Close'].rolling(50).mean(), label='MA50', color='#fb923c', linestyle='--', linewidth=1.4)
+                if len(hist_df) >= 200:
+                    ax_p.plot(hist_df.index, hist_df['Close'].rolling(200).mean(), label='MA200', color='#e879f9', linestyle='--', linewidth=1.4)
+                
+                ax_p.set_facecolor('#0d111a')
+                fig_p.patch.set_facecolor('#070a13')
+                ax_p.tick_params(colors='#9ca3af', labelsize=10)
+                ax_p.xaxis.label.set_color('#9ca3af')
+                ax_p.yaxis.label.set_color('#9ca3af')
+                ax_p.legend(loc='upper left', fontsize='small', facecolor='#111827', edgecolor='#1f2937', labelcolor='#f3f4f6')
+                ax_p.grid(True, color='#1f2937', alpha=0.6, linestyle=':')
+                
+                for spine in ax_p.spines.values():
+                    spine.set_color('#374151')
+                
                 st.pyplot(fig_p)
 
             with col_price_level:
                 st.markdown("#### 📊 **PRICE LEVEL** (Limit Orders)")
-                st.markdown("<hr style='margin: 0px 0px 8px 0px;'>", unsafe_allow_html=True)
+                st.markdown("<hr style='margin: 0px 0px 8px 0px; border-color: #1f2937;'>", unsafe_allow_html=True)
                 
-                # 按照你的要求：上下波动 20%, 15%, 12%, 10%, 8%, 6%, CURRENT, 以及负向
+                # 精确按照你的要求：上下波动 20%, 15%, 12%, 10%, 8%, 6%, CURRENT
                 percentages = [20, 15, 12, 10, 8, 6, 0, -6, -8, -10, -12, -15, -20]
                 
                 for p in percentages:
                     target_price = spot * (1 + p / 100.0)
                     if p == 0:
                         st.markdown(f"""
-                        <div style="background-color: #1e3a8a; padding: 6px 10px; border-radius: 4px; margin-bottom: 3px; display: flex; justify-content: space-between; align-items: center;">
+                        <div style="background-color: #1e3a8a; padding: 7px 12px; border-radius: 5px; margin-bottom: 4px; display: flex; justify-content: space-between; align-items: center; border: 1px solid #3b82f6;">
                             <span style="color: #facc15; font-weight: bold; font-size: 14px;">CURRENT</span>
-                            <span style="color: #facc15; font-weight: bold; font-size: 14px;">${target_price:.2f}</span>
+                            <span style="color: #facc15; font-weight: bold; font-size: 15px;">${target_price:.2f}</span>
                         </div>
                         """, unsafe_allow_html=True)
                     else:
                         label_str = f"{p:+d}%"
                         st.markdown(f"""
-                        <div style="background-color: #111827; border: 1px solid #374151; padding: 4px 10px; border-radius: 3px; margin-bottom: 2px; display: flex; justify-content: space-between; align-items: center;">
+                        <div style="background-color: #111827; border: 1px solid #1f2937; padding: 5px 12px; border-radius: 4px; margin-bottom: 3px; display: flex; justify-content: space-between; align-items: center;">
                             <span style="color: { '#34d399' if p > 0 else '#f87171' }; font-weight: bold; font-size: 13px;">{label_str}</span>
-                            <span style="color: #ffffff; font-weight: 500; font-size: 13px;">${target_price:.2f}</span>
+                            <span style="color: #ffffff; font-weight: 500; font-size: 14px;">${target_price:.2f}</span>
                         </div>
                         """, unsafe_allow_html=True)
 
-            st.markdown("---")
+            st.markdown("<br>", unsafe_allow_html=True)
             
-            # 3. 完美放置在图表和 PRICE LEVEL 下方的 KEY DATA 关键数据面板
+            # 3. 完美横跨在图表与价格面板下方的专业级 KEY DATA 终端卡片面板（对应图 3 底部布局）
             st.markdown("#### 📌 **KEY DATA**")
-            kd1, kd2, kd3 = st.columns(3)
+            
             prev_close = hist_df['Close'].iloc[-2] if len(hist_df) > 1 else spot
             chg_pct = ((spot - prev_close) / prev_close) * 100
             chg_val = spot - prev_close
-            
-            with kd1:
-                st.metric("Current Price", f"${spot:.2f}", f"{chg_val:+.2f} ({chg_pct:+.2f}%)")
-                st.metric("Day High", f"${hist_df['High'].iloc[-1]:.2f}")
-            with kd2:
-                st.metric("52 Week High", f"${hist_df['High'].max():.2f}")
-                st.metric("52 Week Low", f"${hist_df['Low'].min():.2f}")
-            with kd3:
-                pe_val = info_dict.get('trailingPE', 'N/A') if info_dict else 'N/A'
-                pe_str = f"{pe_val:.2f}" if isinstance(pe_val, (int, float)) else "N/A"
-                st.metric("P/E Ratio", pe_str)
-                
-                delta_s = hist_df['Close'].diff()
-                gain_s = (delta_s.where(delta_s > 0, 0)).rolling(14).mean().iloc[-1]
-                loss_s = (-delta_s.where(delta_s < 0, 0)).rolling(14).mean().iloc[-1]
-                rsi_v = 100 - (100 / (1 + (gain_s / loss_s))) if loss_s != 0 else 50.0
-                st.metric("RSI (14)", f"{rsi_v:.1f}")
+            pe_val = info_dict.get('trailingPE', 'N/A') if info_dict else 'N/A'
+            pe_str = f"{pe_val:.2f}" if isinstance(pe_val, (int, float)) else "N/A"
+            eps_val = info_dict.get('trailingEps', 'N/A') if info_dict else 'N/A'
+            eps_str = f"{eps_val:.2f}" if isinstance(eps_val, (int, float)) else "N/A"
+            mkt_cap = info_dict.get('marketCap', 0) if info_dict else 0
+            if mkt_cap > 1e12:
+                mkt_str = f"${mkt_cap/1e12:.2f}T"
+            elif mkt_cap > 1e9:
+                mkt_str = f"${mkt_cap/1e9:.2f}B"
+            else:
+                mkt_str = f"${mkt_cap:,.0f}"
+
+            delta_s = hist_df['Close'].diff()
+            gain_s = (delta_s.where(delta_s > 0, 0)).rolling(14).mean().iloc[-1]
+            loss_s = (-delta_s.where(delta_s < 0, 0)).rolling(14).mean().iloc[-1]
+            rsi_v = 100 - (100 / (1 + (gain_s / loss_s))) if loss_s != 0 else 50.0
+
+            st.markdown(f"""
+            <div style="background-color: #111827; border: 1px solid #1f2937; border-radius: 8px; padding: 16px 20px;">
+                <table style="width: 100%; color: #f3f4f6; font-size: 15px; border-collapse: collapse;">
+                    <tr>
+                        <td style="padding: 8px 0; width: 33%;"><strong>Current Price:</strong> &nbsp;<span style="color: #38bdf8; font-weight: bold; font-size: 17px;">${spot:.2f}</span> &nbsp;<span style="color: { '#34d399' if chg_val >= 0 else '#f87171' }; font-size: 14px;">{chg_val:+.2f} ({chg_pct:+.2f}%)</span></td>
+                        <td style="padding: 8px 0; width: 33%;"><strong>52 Week High:</strong> &nbsp;<span style="font-weight: 600;">${hist_df['High'].max():.2f}</span></td>
+                        <td style="padding: 8px 0; width: 33%;"><strong>P/E Ratio:</strong> &nbsp;<span style="font-weight: 600;">{pe_str}</span></td>
+                    </tr>
+                    <tr style="border-top: 1px solid #1f2937;">
+                        <td style="padding: 8px 0;"><strong>Day High:</strong> &nbsp;<span style="font-weight: 600;">${hist_df['High'].iloc[-1]:.2f}</span></td>
+                        <td style="padding: 8px 0;"><strong>52 Week Low:</strong> &nbsp;<span style="font-weight: 600;">${hist_df['Low'].min():.2f}</span></td>
+                        <td style="padding: 8px 0;"><strong>EPS:</strong> &nbsp;<span style="font-weight: 600;">{eps_str}</span></td>
+                    </tr>
+                    <tr style="border-top: 1px solid #1f2937;">
+                        <td style="padding: 8px 0;"><strong>Day Low:</strong> &nbsp;<span style="font-weight: 600;">${hist_df['Low'].iloc[-1]:.2f}</span></td>
+                        <td style="padding: 8px 0;"><strong>Market Cap:</strong> &nbsp;<span style="font-weight: 600;">{mkt_str}</span></td>
+                        <td style="padding: 8px 0;"><strong>RSI (14):</strong> &nbsp;<span style="background-color: { '#065f46' if rsi_v < 70 else '#991b1b' }; color: white; padding: 2px 8px; border-radius: 4px; font-weight: bold;">{rsi_v:.1f}</span></td>
+                    </tr>
+                </table>
+            </div>
+            """, unsafe_allow_html=True)
 
         elif sub_tab == "Gamma & Walls Analysis":
             net_mil = net_gex / 1e6 if net_gex else 0
