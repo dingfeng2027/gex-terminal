@@ -11,6 +11,94 @@ st.set_page_config(
     layout="wide"
 )
 
+# 注入专业交易终端样式，彻底锁定高度与防错位
+st.markdown("""
+<style>
+    html, body, [class*="css"] {
+        font-size: 15px !important;
+        background-color: #060913;
+        color: #f3f4f6;
+    }
+    .big-price {
+        font-size: 20px !important;
+        font-weight: 700 !important;
+    }
+    /* 锁定右侧 PRICE LEVEL 容器高度，与左侧图表完美对齐并支持内部滚动 */
+    .price-level-container {
+        background-color: #0b0f19;
+        border: 1px solid #1f2937;
+        border-radius: 6px;
+        padding: 8px;
+        height: 310px;
+        overflow-y: auto;
+    }
+    .pl-item {
+        background-color: #111827;
+        border: 1px solid #1f2937;
+        padding: 4px 8px;
+        border-radius: 4px;
+        margin-bottom: 2px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        font-size: 12px;
+    }
+    .pl-current {
+        background-color: #1e3a8a;
+        border: 1px solid #3b82f6;
+        padding: 5px 8px;
+        border-radius: 4px;
+        margin-bottom: 2px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        font-size: 13px;
+        font-weight: bold;
+        color: #facc15;
+    }
+    /* 下方 KEY DATA 终端卡片 */
+    .key-data-panel {
+        background-color: #111827;
+        border: 1px solid #1f2937;
+        border-radius: 8px;
+        padding: 14px 18px;
+        margin-top: 10px;
+    }
+    .kd-section-title {
+        color: #38bdf8;
+        font-weight: bold;
+        font-size: 14px;
+        margin-bottom: 6px;
+    }
+    .kd-grid-4 {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 10px;
+        margin-bottom: 10px;
+        font-size: 14px;
+    }
+    .kd-grid-3 {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 10px;
+        margin-bottom: 10px;
+        font-size: 14px;
+    }
+    .kd-grid-2 {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 10px;
+        margin-bottom: 10px;
+        font-size: 14px;
+    }
+    .kd-grid-1 {
+        display: grid;
+        grid-template-columns: 1fr;
+        font-size: 14px;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 # 2. 初始化全局状态
 if "watchlist" not in st.session_state:
     st.session_state.watchlist = ["NVDA", "GOOGL", "TSM", "AMD", "MSFT", "META", "AMZN", "AAPL", "ASML", "TSLA", "VUAG.L", "EQQQ.L"]
@@ -187,13 +275,13 @@ else:
     if spot is None or hist_df is None:
         st.error(f"Failed to load market data for {selected_analysis_stock}.")
     else:
-        # 左右两栏布局
+        # 严格锁定的左右两栏布局
         col_chart, col_price_level = st.columns([2.8, 1.2])
         
         with col_chart:
             st.markdown(f"#### 📈 **{selected_analysis_stock} — Price Trend**")
             
-            fig_p, ax_p = plt.subplots(figsize=(8, 3.5))
+            fig_p, ax_p = plt.subplots(figsize=(8, 3.4))
             ax_p.plot(hist_df.index, hist_df['Close'], label='Close Price', color='#00d2ff', linewidth=2.0)
             ax_p.fill_between(hist_df.index, hist_df['Close'], hist_df['Close'].min() * 0.95, color='#0284c7', alpha=0.15)
             
@@ -217,22 +305,35 @@ else:
 
         with col_price_level:
             st.markdown("#### 📊 **PRICE LEVEL**")
-            st.markdown("---")
             
-            # 严格控制间距的 PRICE LEVEL 列表
+            # 使用固定高度和内置滚动条的容器，完美匹配左侧图表高度，绝不溢出！
+            pl_html = '<div class="price-level-container">'
             percentages = [20, 15, 12, 10, 8, 6, 0, -6, -8, -10, -12, -15, -20]
             for p in percentages:
                 target_price = spot * (1 + p / 100.0)
                 if p == 0:
-                    st.info(f"**CURRENT: ${target_price:.2f}**")
+                    pl_html += f'''
+                    <div class="price-level-current">
+                        <span>CURRENT</span>
+                        <span>${target_price:.2f}</span>
+                    </div>
+                    '''
                 else:
                     label_str = f"{p:+d}%"
-                    st.write(f"{label_str}  ->  ${target_price:.2f}")
+                    color_code = "#34d399" if p > 0 else "#f87171"
+                    pl_html += f'''
+                    <div class="pl-item">
+                        <span style="color: {color_code}; font-weight: bold;">{label_str}</span>
+                        <span style="color: #ffffff;">${target_price:.2f}</span>
+                    </div>
+                    '''
+            pl_html += '</div>'
+            st.markdown(pl_html, unsafe_allow_html=True)
 
-        st.markdown("---")
+        st.markdown("<br>", unsafe_allow_html=True)
         
         # ==========================================
-        # KEY DATA 关键数据面板（严格分成 4 个部分，使用原生安全组件）
+        # KEY DATA 关键数据面板（严格分成 4 个部分，100% 安全渲染）
         # ==========================================
         st.markdown("#### 📌 **KEY DATA**")
         
@@ -253,35 +354,43 @@ else:
         loss_s = (-delta_s.where(delta_s < 0, 0)).rolling(14).mean().iloc[-1]
         rsi_v = 100 - (100 / (1 + (gain_s / loss_s))) if loss_s != 0 else 50.0
 
-        with st.container():
-            # 第一部分：价格与变动摘要 (4个指标)
-            st.markdown("**1. 价格与变动摘要**")
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("今天价格", f"${curr_price:.2f}")
-            c2.metric("昨天价格", f"${prev_price:.2f}")
-            c3.metric("变动参数", f"{chg_val:+.2f}")
-            c4.metric("变动指数", f"{chg_pct:+.2f}%")
+        # 用安全的 HTML 终端卡片展示 4 个部分，排版整洁紧凑
+        st.markdown(f"""
+        <div class="key-data-panel">
+            <!-- 第一部分：4个指标 -->
+            <div class="kd-section-title">1. 价格与变动摘要</div>
+            <div class="kd-grid-4">
+                <div>今天价格: <strong style="color: #38bdf8;">${curr_price:.2f}</strong></div>
+                <div>昨天价格: <strong>${prev_price:.2f}</strong></div>
+                <div>变动参数: <strong style="color: {'#34d399' if chg_val >= 0 else '#f87171'};">{chg_val:+.2f}</strong></div>
+                <div>变动指数: <strong style="color: {'#34d399' if chg_pct >= 0 else '#f87171'};">{chg_pct:+.2f}%</strong></div>
+            </div>
             
-            st.markdown("---")
+            <hr style="border-color: #1f2937; margin: 8px 0;">
             
-            # 第二部分：均线数据 (3个指标)
-            st.markdown("**2. 均线数据 (Moving Averages)**")
-            m1, m2, m3 = st.columns(3)
-            m1.metric("20日均价", f"${ma20_val:.2f}")
-            m2.metric("50日均价", f"${ma50_val:.2f}")
-            m3.metric("200日均价", f"${ma200_val:.2f}")
+            <!-- 第二部分：3个指标 (均价) -->
+            <div class="kd-section-title">2. 均线数据 (Moving Averages)</div>
+            <div class="kd-grid-3">
+                <div>20日均价: <strong>${ma20_val:.2f}</strong></div>
+                <div>50日均价: <strong>${ma50_val:.2f}</strong></div>
+                <div>200日均价: <strong>${ma200_val:.2f}</strong></div>
+            </div>
             
-            st.markdown("---")
+            <hr style="border-color: #1f2937; margin: 8px 0;">
             
-            # 第三部分：年内高低 (2个指标)
-            st.markdown("**3. 年内高低 (52-Week Range)**")
-            r1, r2 = st.columns(2)
-            r1.metric("年内最高", f"${high_year:.2f}")
-            r2.metric("年内最低", f"${low_year:.2f}")
+            <!-- 第三部分：2个指标 (年内高低) -->
+            <div class="kd-section-title">3. 年内高低 (52-Week Range)</div>
+            <div class="kd-grid-2">
+                <div>年内最高: <strong style="color: #34d399;">${high_year:.2f}</strong></div>
+                <div>年内最低: <strong style="color: #f87171;">${low_year:.2f}</strong></div>
+            </div>
             
-            st.markdown("---")
+            <hr style="border-color: #1f2937; margin: 8px 0;">
             
-            # 第四部分：购买指数 (1个指标)
-            st.markdown("**4. 购买指数 (Buying Index)**")
-            b1, _ = st.columns([1, 3])
-            b1.metric("购买指数 (RSI 14)", f"{rsi_v:.1f}")
+            <!-- 第四部分：1个指标 (购买指数) -->
+            <div class="kd-section-title">4. 购买指数 (Buying Index)</div>
+            <div class="kd-grid-1">
+                <div>购买指数 (RSI 14): &nbsp;<span style="background-color: {'#065f46' if rsi_v < 70 else '#991b1b'}; color: white; padding: 2px 10px; border-radius: 4px; font-weight: bold;">{rsi_v:.1f}</span></div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
