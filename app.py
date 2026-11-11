@@ -48,7 +48,6 @@ def fetch_stock_data(ticker_symbol, period_str):
     try:
         ticker = yf.Ticker(ticker_symbol)
         
-        # 映射时间周期
         p_map = {
             "1天": "1d",
             "1个星期": "5d",
@@ -61,11 +60,10 @@ def fetch_stock_data(ticker_symbol, period_str):
         
         hist = ticker.history(period=yf_period)
         if hist.empty:
-            return None, None, None
+            hist = ticker.history(period="1y")
             
         spot_price = hist['Close'].iloc[-1]
         
-        # 获取完整1年历史用于计算均线和高低点
         hist_1y = ticker.history(period="1y")
         if hist_1y.empty:
             hist_1y = hist
@@ -162,7 +160,6 @@ if st.session_state.nav_mode == "Market Watch":
                     
                 row_cols = st.columns(cols_width)
                 
-                # 点击公司名称，无缝跳转到第二页分析该股票
                 with row_cols[0]:
                     clean_sym = symbol.split('.')[0]
                     if st.button(f"🟡 {clean_sym}", key=f"nav_{symbol}"):
@@ -207,7 +204,7 @@ if st.session_state.nav_mode == "Market Watch":
 
 
 # ==========================================
-# 视图二：Stock Analysis 终端（完全重新编写的现代化布局）
+# 视图二：Stock Analysis 终端
 # ==========================================
 else:
     c_head1, c_head2 = st.columns([3, 1])
@@ -227,21 +224,18 @@ else:
         
     st.markdown("---")
     
-    # 获取当前选中股票的数据
     spot, hist_df, hist_1y = fetch_stock_data(selected_analysis_stock, st.session_state.timeframe)
     
     if spot is None or hist_df is None:
         st.error(f"Failed to load market data for {selected_analysis_stock}.")
     else:
-        # 黄金比例左右两栏：左侧 Trading 212 图表与时间周期按钮，右侧 PRICE LEVEL 阶梯挂单面板
+        # 黄金比例左右两栏
         col_chart, col_price_level = st.columns([2.7, 1.2])
         
         with col_chart:
             st.markdown(f"#### 📈 **{selected_analysis_stock} — Price Trend & Trading 212 Chart**")
             
-            # 绘制 Trading 212 风格的单根青色走势线+半透明渐变面积图
             fig_p, ax_p = plt.subplots(figsize=(8, 4.2))
-            
             ax_p.plot(hist_df.index, hist_df['Close'], label='Close Price', color='#00d2ff', linewidth=2.2)
             ax_p.fill_between(hist_df.index, hist_df['Close'], hist_df['Close'].min() * 0.95, color='#0284c7', alpha=0.18)
             
@@ -264,7 +258,6 @@ else:
             
             for i, tf in enumerate(tf_list):
                 with tf_cols[i]:
-                    btn_type = "primary" if st.session_state.timeframe == tf else "secondary"
                     if st.button(tf, key=f"tf_{tf}", use_container_width=True):
                         st.session_state.timeframe = tf
                         st.rerun()
@@ -273,7 +266,6 @@ else:
             st.markdown("#### 📊 **PRICE LEVEL** (Limit Orders)")
             st.markdown("<hr style='margin: 0px 0px 8px 0px; border-color: #1f2937;'>", unsafe_allow_html=True)
             
-            # 要求的上下波动挂单百分比：20%, 15%, 12%, 10%, 8%, 6%, CURRENT, 以及负向
             percentages = [20, 15, 12, 10, 8, 6, 0, -6, -8, -10, -12, -15, -20]
             
             for p in percentages:
@@ -297,7 +289,7 @@ else:
         st.markdown("<br>", unsafe_allow_html=True)
         
         # ==========================================
-        # 3. KEY DATA 关键数据面板（严格分成 4 个部分纵向排列）
+        # 3. KEY DATA 关键数据面板（严格分成 4 个部分纵向排列，使用安全的原生渲染）
         # ==========================================
         st.markdown("#### 📌 **KEY DATA**")
         
@@ -318,50 +310,63 @@ else:
         loss_s = (-delta_s.where(delta_s < 0, 0)).rolling(14).mean().iloc[-1]
         rsi_v = 100 - (100 / (1 + (gain_s / loss_s))) if loss_s != 0 else 50.0
 
-        st.markdown(f"""
-        <div style="background-color: #111827; border: 1px solid #1f2937; border-radius: 8px; padding: 16px 20px;">
-            <!-- 第一部分：4个指标 -->
-            <div style="font-weight: bold; color: #38bdf8; font-size: 14px; margin-bottom: 6px;">1. Price & Change Summary</div>
-            <table style="width: 100%; color: #f3f4f6; font-size: 15px; border-collapse: collapse; margin-bottom: 12px;">
-                <tr>
-                    <td style="padding: 6px 0; width: 25%;"><strong>今天价格:</strong> <span style="color: #38bdf8; font-weight: bold;">${curr_price:.2f}</span></td>
-                    <td style="padding: 6px 0; width: 25%;"><strong>昨天价格:</strong> <span>${prev_price:.2f}</span></td>
-                    <td style="padding: 6px 0; width: 25%;"><strong>变动参数:</strong> <span style="color: {'#34d399' if chg_val >= 0 else '#f87171'}; font-weight: bold;">{chg_val:+.2f}</span></td>
-                    <td style="padding: 6px 0; width: 25%;"><strong>变动指数:</strong> <span style="color: {'#34d399' if chg_pct >= 0 else '#f87171'}; font-weight: bold;">{chg_pct:+.2f}%</span></td>
-                </tr>
-            </table>
+        # 用安全的容器卡片展示 4 个部分
+        with st.container():
+            st.markdown("""
+            <style>
+                .kd-box {
+                    background-color: #111827;
+                    border: 1px solid #1f2937;
+                    border-radius: 8px;
+                    padding: 16px 20px;
+                    margin-bottom: 12px;
+                }
+                .kd-title {
+                    font-weight: bold;
+                    color: #38bdf8;
+                    font-size: 15px;
+                    margin-bottom: 8px;
+                }
+            </style>
+            """, unsafe_allow_html=True)
             
-            <hr style="border-color: #1f2937; margin: 8px 0;">
+            # 第一部分：4个指标
+            col_p1, col_p2, col_p3, col_p4 = st.columns(4)
+            with col_p1:
+                st.metric("今天价格", f"${curr_price:.2f}")
+            with col_p2:
+                st.metric("昨天价格", f"${prev_price:.2f}")
+            with col_p3:
+                st.metric("变动参数", f"{chg_val:+.2f}")
+            with col_p4:
+                st.metric("变动指数", f"{chg_pct:+.2f}%")
+                
+            st.markdown("---")
             
-            <!-- 第二部分：3个指标 (均价) -->
-            <div style="font-weight: bold; color: #38bdf8; font-size: 14px; margin-bottom: 6px;">2. Moving Averages</div>
-            <table style="width: 100%; color: #f3f4f6; font-size: 15px; border-collapse: collapse; margin-bottom: 12px;">
-                <tr>
-                    <td style="padding: 6px 0; width: 33%;"><strong>20日均价:</strong> <span>${ma20_val:.2f}</span></td>
-                    <td style="padding: 6px 0; width: 33%;"><strong>50日均价:</strong> <span>${ma50_val:.2f}</span></td>
-                    <td style="padding: 6px 0; width: 33%;"><strong>200日均价:</strong> <span>${ma200_val:.2f}</span></td>
-                </tr>
-            </table>
+            # 第二部分：3个指标 (均价)
+            st.markdown("**2. Moving Averages (均价)**")
+            col_m1, col_m2, col_m3 = st.columns(3)
+            with col_m1:
+                st.metric("20日均价", f"${ma20_val:.2f}")
+            with col_m2:
+                st.metric("50日均价", f"${ma50_val:.2f}")
+            with col_m3:
+                st.metric("200日均价", f"${ma200_val:.2f}")
+                
+            st.markdown("---")
             
-            <hr style="border-color: #1f2937; margin: 8px 0;">
+            # 第三部分：2个指标 (年内高低)
+            st.markdown("**3. 52-Week Range (年内高低)**")
+            col_r1, col_r2 = st.columns(2)
+            with col_r1:
+                st.metric("年内最高", f"${high_year:.2f}")
+            with col_r2:
+                st.metric("年内最低", f"${low_year:.2f}")
+                
+            st.markdown("---")
             
-            <!-- 第三部分：2个指标 (年内高低) -->
-            <div style="font-weight: bold; color: #38bdf8; font-size: 14px; margin-bottom: 6px;">3. 52-Week Range</div>
-            <table style="width: 100%; color: #f3f4f6; font-size: 15px; border-collapse: collapse; margin-bottom: 12px;">
-                <tr>
-                    <td style="padding: 6px 0; width: 50%;"><strong>年内最高:</strong> <span style="color: #34d399; font-weight: bold;">${high_year:.2f}</span></td>
-                    <td style="padding: 6px 0; width: 50%;"><strong>年内最低:</strong> <span style="color: #f87171; font-weight: bold;">${low_year:.2f}</span></td>
-                </tr>
-            </table>
-            
-            <hr style="border-color: #1f2937; margin: 8px 0;">
-            
-            <!-- 第四部分：1个指标 (购买指数) -->
-            <div style="font-weight: bold; color: #38bdf8; font-size: 14px; margin-bottom: 6px;">4. Buying Index</div>
-            <table style="width: 100%; color: #f3f4f6; font-size: 15px; border-collapse: collapse;">
-                <tr>
-                    <td style="padding: 6px 0;"><strong>购买指数 (RSI 14):</strong> &nbsp;<span style="background-color: {'#065f46' if rsi_v < 70 else '#991b1b'}; color: white; padding: 3px 12px; border-radius: 4px; font-weight: bold;">{rsi_v:.1f}</span></td>
-                </tr>
-            </table>
-        </div>
-        """, unsafe_allow_html=True)
+            # 第四部分：1个指标 (购买指数)
+            st.markdown("**4. Buying Index (购买指数)**")
+            col_b1, col_b2 = st.columns([1, 3])
+            with col_b1:
+                st.metric("购买指数 (RSI 14)", f"{rsi_v:.1f}")
