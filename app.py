@@ -1,4 +1,3 @@
-
 import streamlit as st
 import numpy as np
 import pandas as pd
@@ -16,10 +15,14 @@ st.set_page_config(
 st.markdown("""
 <style>
     html, body, [class*="css"] {
-        font-size: 16px !important;
+        font-size: 18px !important;
+    }
+    .big-price {
+        font-size: 20px !important;
+        font-weight: 700 !important;
     }
     div.stVerticalBlock > div.stElementContainer {
-        margin-bottom: -10px !important;
+        margin-bottom: -12px !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -28,6 +31,12 @@ st.markdown("""
 if "watchlist" not in st.session_state:
     st.session_state.watchlist = ["NVDA", "GOOGL", "TSM", "AMD", "MSFT", "META", "AMZN", "AAPL", "ASML", "TSLA", "VUAG.L", "EQQQ.L"]
 
+if "nav_mode" not in st.session_state:
+    st.session_state.nav_mode = "Market Watch"
+
+if "selected_stock" not in st.session_state:
+    st.session_state.selected_stock = "NVDA"
+
 # --- 辅助计算函数：Black-Scholes Gamma ---
 def get_bs_gamma(S, K, T, r, sigma):
     if T <= 0 or sigma <= 0:
@@ -35,98 +44,103 @@ def get_bs_gamma(S, K, T, r, sigma):
     d1 = (np.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
     return norm.pdf(d1) / (S * sigma * np.sqrt(T))
 
-# --- 期权 GEX 与期权链核心函数 ---
-@st.cache_data(ttl=600)
+# --- 期权 GEX 与期权链核心函数（不使用会导致序列化报错的缓存） ---
 def fetch_gex_and_chain(ticker_symbol):
-    ticker = yf.Ticker(ticker_symbol)
-    history = ticker.history(period="1y")
-    if history.empty:
-        return None, None, None, None, None, None, None, None, None
-        
-    spot_price = history['Close'].iloc[-1]
-    expirations = ticker.options
-    if not expirations:
-        return spot_price, None, None, None, None, None, None, None, history
-        
-    nearest_exp = expirations[0]
-    opt_chain = ticker.option_chain(nearest_exp)
-    
-    all_options = []
-    today = pd.Timestamp.today()
-    r = 0.045
-    
-    for exp in expirations[:5]:
-        t_days = (pd.to_datetime(exp) - today).days
-        if t_days <= 0:
-            continue
-        T = t_days / 365.0
-        opt = ticker.option_chain(exp)
-        
-        calls = opt.calls.copy()
-        calls['is_call'] = True
-        calls['T'] = T
-        puts = opt.puts.copy()
-        puts['is_call'] = False
-        puts['T'] = T
-        all_options.append(calls)
-        all_options.append(puts)
-        
-    if not all_options:
-        return spot_price, None, None, None, None, None, nearest_exp, opt_chain, history
-        
-    df = pd.concat(all_options, ignore_index=True)
-    df = df[df['openInterest'] > 0].copy()
-    df = df[(df['strike'] >= spot_price * 0.7) & (df['strike'] <= spot_price * 1.3)]
-    
-    gex_records = []
-    for _, row in df.iterrows():
-        iv = row['impliedVolatility']
-        K = row['strike']
-        T = row['T']
-        oi = row['openInterest']
-        is_call = row['is_call']
-        
-        gamma = get_bs_gamma(spot_price, K, T, r, iv)
-        dollar_gamma = gamma * oi * 100 * (spot_price ** 2) * 0.01
-        if not is_call:
-            dollar_gamma = -dollar_gamma
+    try:
+        ticker = yf.Ticker(ticker_symbol)
+        history = ticker.history(period="1y")
+        if history.empty:
+            return None, None, None, None, None, None, None, None, None
             
-        gex_records.append({'strike': K, 'gex': dollar_gamma})
+        spot_price = history['Close'].iloc[-1]
+        expirations = ticker.options
+        if not expirations:
+            return spot_price, None, None, None, None, None, None, None, history
+            
+        nearest_exp = expirations[0]
+        opt_chain = ticker.option_chain(nearest_exp)
         
-    df_gex = pd.DataFrame(gex_records)
-    gex_by_strike = df_gex.groupby('strike')['gex'].sum().reset_index().sort_values('strike')
-    
-    calls_above = gex_by_strike[gex_by_strike['strike'] >= spot_price]
-    call_wall = calls_above.loc[calls_above['gex'].idxmax()]['strike'] if not calls_above.empty else None
-    
-    puts_below = gex_by_strike[gex_by_strike['strike'] <= spot_price]
-    put_wall = puts_below.loc[puts_below['gex'].idxmin()]['strike'] if not puts_below.empty else None
-    
-    gex_by_strike['cum_gex'] = gex_by_strike['gex'].cumsum()
-    zero_crossings = np.where(np.diff(np.sign(gex_by_strike['cum_gex'])))[0]
-    gamma_flip = gex_by_strike.iloc[zero_crossings[0]]['strike'] if len(zero_crossings) > 0 else spot_price
-    
-    return spot_price, call_wall, put_wall, gamma_flip, gex_by_strike, gex_by_strike['gex'].sum(), nearest_exp, opt_chain, history
+        all_options = []
+        today = pd.Timestamp.today()
+        r = 0.045
+        
+        for exp in expirations[:5]:
+            t_days = (pd.to_datetime(exp) - today).days
+            if t_days <= 0:
+                continue
+            T = t_days / 365.0
+            opt = ticker.option_chain(exp)
+            
+            calls = opt.calls.copy()
+            calls['is_call'] = True
+            calls['T'] = T
+            puts = opt.puts.copy()
+            puts['is_call'] = False
+            puts['T'] = T
+            all_options.append(calls)
+            all_options.append(puts)
+            
+        if not all_options:
+            return spot_price, None, None, None, None, None, nearest_exp, opt_chain, history
+            
+        df = pd.concat(all_options, ignore_index=True)
+        df = df[df['openInterest'] > 0].copy()
+        df = df[(df['strike'] >= spot_price * 0.7) & (df['strike'] <= spot_price * 1.3)]
+        
+        gex_records = []
+        for _, row in df.iterrows():
+            iv = row['impliedVolatility']
+            K = row['strike']
+            T = row['T']
+            oi = row['openInterest']
+            is_call = row['is_call']
+            
+            gamma = get_bs_gamma(spot_price, K, T, r, iv)
+            dollar_gamma = gamma * oi * 100 * (spot_price ** 2) * 0.01
+            if not is_call:
+                dollar_gamma = -dollar_gamma
+                
+            gex_records.append({'strike': K, 'gex': dollar_gamma})
+            
+        df_gex = pd.DataFrame(gex_records)
+        gex_by_strike = df_gex.groupby('strike')['gex'].sum().reset_index().sort_values('strike')
+        
+        calls_above = gex_by_strike[gex_by_strike['strike'] >= spot_price]
+        call_wall = calls_above.loc[calls_above['gex'].idxmax()]['strike'] if not calls_above.empty else None
+        
+        puts_below = gex_by_strike[gex_by_strike['strike'] <= spot_price]
+        put_wall = puts_below.loc[puts_below['gex'].idxmin()]['strike'] if not puts_below.empty else None
+        
+        gex_by_strike['cum_gex'] = gex_by_strike['gex'].cumsum()
+        zero_crossings = np.where(np.diff(np.sign(gex_by_strike['cum_gex'])))[0]
+        gamma_flip = gex_by_strike.iloc[zero_crossings[0]]['strike'] if len(zero_crossings) > 0 else spot_price
+        
+        return spot_price, call_wall, put_wall, gamma_flip, gex_by_strike, gex_by_strike['gex'].sum(), nearest_exp, opt_chain, history
+    except Exception as e:
+        return None, None, None, None, None, None, None, None, None
 
 
 # ==========================================
-# 顶部导航栏选择器（Market Watch vs Stock Analysis）
+# 顶部导航栏切换
 # ==========================================
 st.markdown("### 📊 CAPITAL QUANT v2 &nbsp; | &nbsp; **Pro Trading Terminal**")
 
+nav_options = ["Market Watch", "Stock Analysis & Options Chain"]
 nav_tab = st.radio(
     "Navigation", 
-    ["Market Watch", "Stock Analysis & Options Chain"], 
+    nav_options, 
+    index=nav_options.index(st.session_state.nav_mode) if st.session_state.nav_mode in nav_options else 0,
     horizontal=True,
     label_visibility="collapsed"
 )
+st.session_state.nav_mode = nav_tab
 
 st.markdown("---")
 
 # ==========================================
 # 视图一：Market Watch 看板
 # ==========================================
-if nav_tab == "Market Watch":
+if st.session_state.nav_mode == "Market Watch":
     col_input, col_add, col_update = st.columns([4, 1.5, 1.5])
     with col_input:
         new_ticker = st.text_input("Add Ticker", placeholder="e.g. NVDA, AAPL", label_visibility="collapsed").upper()
@@ -137,7 +151,6 @@ if nav_tab == "Market Watch":
                 st.rerun()
     with col_update:
         if st.button("🔄 UPDATE ALL", use_container_width=True):
-            st.cache_data.clear()
             st.rerun()
 
     st.markdown("#### 📌 Portfolio & Watchlist Matrix")
@@ -153,7 +166,7 @@ if nav_tab == "Market Watch":
     
     for i, h in enumerate(headers):
         with h_cols[i]:
-            st.markdown(f"<span style='font-size:15px; font-weight:bold;'>{h}</span>", unsafe_allow_html=True)
+            st.markdown(f"<span style='font-size:16px; font-weight:bold;'>{h}</span>", unsafe_allow_html=True)
             
     st.markdown("<hr style='margin: 5px 0px 10px 0px;'>", unsafe_allow_html=True)
     
@@ -194,31 +207,35 @@ if nav_tab == "Market Watch":
                     
                 row_cols = st.columns(cols_width)
                 
+                # 点击公司名称按钮，直接无缝跳转到第二页分析该股票
                 with row_cols[0]:
                     clean_sym = symbol.split('.')[0]
-                    st.markdown(f"🟡 **{clean_sym}**")
+                    if st.button(f"🟡 {clean_sym}", key=f"nav_{symbol}"):
+                        st.session_state.selected_stock = symbol
+                        st.session_state.nav_mode = "Stock Analysis & Options Chain"
+                        st.rerun()
                 with row_cols[1]:
-                    st.markdown(f"<span style='font-size:15px;'>${curr:.2f}</span>", unsafe_allow_html=True)
+                    st.markdown(f"<span class='big-price'>${curr:.2f}</span>", unsafe_allow_html=True)
                 with row_cols[2]:
-                    st.markdown(f"<span style='font-size:15px;'>${prev:.2f}</span>", unsafe_allow_html=True)
+                    st.markdown(f"<span class='big-price'>${prev:.2f}</span>", unsafe_allow_html=True)
                 with row_cols[3]:
                     color_txt = "🟢" if pct >= 0 else "🔴"
-                    st.markdown(f"<span style='font-size:15px;'>{color_txt} {pct:+.2f}%</span>", unsafe_allow_html=True)
+                    st.markdown(f"<span style='font-size:17px; font-weight:bold;'>{color_txt} {pct:+.2f}%</span>", unsafe_allow_html=True)
                 with row_cols[4]:
-                    st.markdown(f"<span style='font-size:15px;'>{change:+.2f}</span>", unsafe_allow_html=True)
+                    st.markdown(f"<span style='font-size:17px; font-weight:bold;'>{change:+.2f}</span>", unsafe_allow_html=True)
                 with row_cols[5]:
-                    st.markdown(f"<span style='font-size:15px;'>${ma20:.2f}</span>", unsafe_allow_html=True)
+                    st.markdown(f"<span style='font-size:17px;'>${ma20:.2f}</span>", unsafe_allow_html=True)
                 with row_cols[6]:
-                    st.markdown(f"<span style='font-size:15px;'>${ma50:.2f}</span>", unsafe_allow_html=True)
+                    st.markdown(f"<span style='font-size:17px;'>${ma50:.2f}</span>", unsafe_allow_html=True)
                 with row_cols[7]:
-                    st.markdown(f"<span style='font-size:15px;'>${ma200:.2f}</span>", unsafe_allow_html=True)
+                    st.markdown(f"<span style='font-size:17px;'>${ma200:.2f}</span>", unsafe_allow_html=True)
                 with row_cols[8]:
-                    st.markdown(f"<span style='font-size:15px;'>${high_52w:.2f}</span>", unsafe_allow_html=True)
+                    st.markdown(f"<span style='font-size:17px;'>${high_52w:.2f}</span>", unsafe_allow_html=True)
                 with row_cols[9]:
-                    st.markdown(f"<span style='font-size:15px;'>${low_52w:.2f}</span>", unsafe_allow_html=True)
+                    st.markdown(f"<span style='font-size:17px;'>${low_52w:.2f}</span>", unsafe_allow_html=True)
                 with row_cols[10]:
                     badge_color = "green" if rsi < 70 else "red"
-                    st.markdown(f":{badge_color}[<span style='font-size:15px; font-weight:bold;'>{rsi:.1f}</span>]", unsafe_allow_html=True)
+                    st.markdown(f":{badge_color}[<span style='font-size:18px; font-weight:bold;'>{rsi:.1f}</span>]", unsafe_allow_html=True)
                 with row_cols[11]:
                     if st.button("🗑️", key=f"del_{symbol}"):
                         st.session_state.watchlist.remove(symbol)
@@ -240,12 +257,15 @@ if nav_tab == "Market Watch":
 else:
     st.markdown("### 🎯 **Stock Analysis & Options Microstructure Terminal**")
     
-    # 顶部个股选择器
+    if st.session_state.selected_stock not in st.session_state.watchlist:
+        st.session_state.selected_stock = st.session_state.watchlist[0]
+        
     selected_analysis_stock = st.selectbox(
         "Select Stock for Deep Analysis", 
         st.session_state.watchlist,
-        index=0
+        index=st.session_state.watchlist.index(st.session_state.selected_stock)
     )
+    st.session_state.selected_stock = selected_analysis_stock
     
     with st.spinner(f"Loading data and options chain for {selected_analysis_stock}..."):
         spot, c_wall, p_wall, g_flip, df_gex, net_gex, nearest_exp, opt_chain, hist_df = fetch_gex_and_chain(selected_analysis_stock)
@@ -253,7 +273,6 @@ else:
     if spot is None:
         st.error(f"Failed to load data for {selected_analysis_stock}.")
     else:
-        # 顶部三大标签页：(1) Price & MA Chart, (2) Gamma & Walls Analysis, (3) Options Chain Details (Calls & Puts)
         tab_chart, tab_gex, tab_chain = st.tabs([
             "📈 Price Chart & MA", 
             "📊 Gamma & Walls Analysis", 
@@ -275,7 +294,6 @@ else:
             ax_p.grid(True, alpha=0.3)
             st.pyplot(fig_p)
             
-            # 价格层级阶梯展示
             st.markdown("#### 📊 Price Level Percentage Ladders")
             ladder_cols = st.columns(6)
             percentages = [30, 20, 10, 5, -5, -10]
