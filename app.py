@@ -99,6 +99,7 @@ def fetch_gex_and_chain(ticker_symbol):
     
     return spot_price, call_wall, put_wall, gamma_flip, gex_by_strike, gex_by_strike['gex'].sum(), nearest_exp, opt_chain
 
+
 # ==========================================
 # 视图一：CAPITAL QUANT v2 — Market Watch 看板
 # ==========================================
@@ -125,8 +126,25 @@ if st.session_state.selected_stock is None:
             st.rerun()
 
     st.markdown("#### 📌 Portfolio & Watchlist Matrix")
+    st.markdown("<br>", unsafe_allow_html=True)
     
-    table_data = []
+    # 明确设置列宽及表头结构
+    cols_width = [1.3, 1.1, 1.1, 1.1, 1.1, 1.1, 1.1, 1.1, 1.1, 1.1, 1.1, 0.8]
+    
+    # 渲染带清晰标题的表头（Header Row）
+    h_cols = st.columns(cols_width)
+    headers = [
+        "公司名称", "今天价格", "昨天价格", "价格变动", "变动点数", 
+        "20日均价", "50日均价", "200日均价", "年内最高", "年内最低", 
+        "购买指数", "删除"
+    ]
+    
+    for i, h in enumerate(headers):
+        with h_cols[i]:
+            st.markdown(f"**{h}**")
+            
+    st.markdown("---")
+    
     gainers_count = 0
     losers_count = 0
     
@@ -134,11 +152,15 @@ if st.session_state.selected_stock is None:
         try:
             t = yf.Ticker(symbol)
             hist = t.history(period="1y")
-            if not hist.empty:
+            if not hist.empty and len(hist) >= 1:
                 curr = hist['Close'].iloc[-1]
                 prev = hist['Close'].iloc[-2] if len(hist) > 1 else curr
+                
+                if pd.isna(curr) or pd.isna(prev):
+                    continue
+                    
                 change = curr - prev
-                pct = (change / prev) * 100
+                pct = (change / prev) * 100 if prev != 0 else 0
                 
                 ma20 = hist['Close'].rolling(20).mean().iloc[-1] if len(hist) >= 20 else curr
                 ma50 = hist['Close'].rolling(50).mean().iloc[-1] if len(hist) >= 50 else curr
@@ -151,79 +173,82 @@ if st.session_state.selected_stock is None:
                 gain = (delta_series.where(delta_series > 0, 0)).rolling(14).mean().iloc[-1]
                 loss = (-delta_series.where(delta_series < 0, 0)).rolling(14).mean().iloc[-1]
                 rs = gain / loss if loss != 0 else 1
-                rsi = 100 - (100 / (1 + rs))
-                
-                info = t.info
-                pe = info.get('trailingPE', 'None')
-                pe_str = f"{pe:.2f}" if isinstance(pe, (int, float)) else "None"
+                rsi = 100 - (100 / (1 + rs)) if not pd.isna(rs) else 50.0
                 
                 if pct >= 0:
                     gainers_count += 1
                 else:
                     losers_count += 1
                     
-                table_data.append({
-                    "Symbol": symbol,
-                    "Today Price": f"${curr:.2f}",
-                    "Yesterday": f"${prev:.2f}",
-                    "Change": f"{change:+.2f}",
-                    "Change %": f"{pct:+.2f}%",
-                    "MA20": f"${ma20:.2f}",
-                    "MA50": f"${ma50:.2f}",
-                    "MA200": f"${ma200:.2f}",
-                    "PE Rate": pe_str,
-                    "Yearly High": f"${high_52w:.2f}",
-                    "Yearly Low": f"${low_52w:.2f}",
-                    "RSI (14)": f"{rsi:.1f}",
-                    "raw_pct": pct
-                })
-        except:
+                row_cols = st.columns(cols_width)
+                
+                # 1. 公司名称（Trading 212 风格 Logo 按钮）
+                with row_cols[0]:
+                    clean_sym = symbol.split('.')[0]
+                    if st.button(f"🟡 {clean_sym}", key=f"nav_{symbol}", help=f"进入 {symbol} 专属面板"):
+                        st.session_state.selected_stock = symbol
+                        st.rerun()
+                
+                # 2. 今天价格
+                with row_cols[1]:
+                    st.write(f"${curr:.2f}")
+                    
+                # 3. 昨天价格
+                with row_cols[2]:
+                    st.write(f"${prev:.2f}")
+                    
+                # 4. 价格变动 (%)
+                with row_cols[3]:
+                    color_txt = "🟢" if pct >= 0 else "🔴"
+                    st.write(f"{color_txt} {pct:+.2f}%")
+                    
+                # 5. 变动点数 ($)
+                with row_cols[4]:
+                    st.write(f"{change:+.2f}")
+                    
+                # 6. 20日均价
+                with row_cols[5]:
+                    st.write(f"${ma20:.2f}" if not pd.isna(ma20) else "N/A")
+                    
+                # 7. 50日均价
+                with row_cols[6]:
+                    st.write(f"${ma50:.2f}" if not pd.isna(ma50) else "N/A")
+                    
+                # 8. 200日均价
+                with row_cols[7]:
+                    st.write(f"${ma200:.2f}" if not pd.isna(ma200) else "N/A")
+                    
+                # 9. 年内最高
+                with row_cols[8]:
+                    st.write(f"${high_52w:.2f}" if not pd.isna(high_52w) else "N/A")
+                    
+                # 10. 年内最低
+                with row_cols[9]:
+                    st.write(f"${low_52w:.2f}" if not pd.isna(low_52w) else "N/A")
+                    
+                # 11. 购买指数 (RSI 14)
+                with row_cols[10]:
+                    badge_color = "green" if rsi < 70 else "red"
+                    st.markdown(f":{badge_color}[**{rsi:.1f}**]")
+                    
+                # 12. 删除操作
+                with row_cols[11]:
+                    if st.button("🗑️", key=f"del_{symbol}"):
+                        st.session_state.watchlist.remove(symbol)
+                        st.rerun()
+                        
+        except Exception as e:
             continue
             
-    if table_data:
-        df_display = pd.DataFrame(table_data)
-        
-        for idx, row in df_display.iterrows():
-            c_sym, c_p, c_y, c_chg, c_pct, c_ma20, c_ma50, c_high, c_low, c_rsi, c_act = st.columns([1.2, 1.2, 1.2, 1.2, 1.2, 1.2, 1.2, 1.2, 1.2, 1, 1])
-            
-            with c_sym:
-                if st.button(f"🚀 {row['Symbol']}", key=f"nav_{row['Symbol']}"):
-                    st.session_state.selected_stock = row['Symbol']
-                    st.rerun()
-            with c_p:
-                st.write(row['Today Price'])
-            with c_y:
-                st.write(row['Yesterday'])
-            with c_chg:
-                color_txt = "🟢" if row['raw_pct'] >= 0 else "🔴"
-                st.write(f"{color_txt} {row['Change']}")
-            with c_pct:
-                st.write(row['Change %'])
-            with c_ma20:
-                st.write(row['MA20'])
-            with c_ma50:
-                st.write(row['MA50'])
-            with c_high:
-                st.write(row['Yearly High'])
-            with c_low:
-                st.write(row['Yearly Low'])
-            with c_rsi:
-                rsi_val = float(row['RSI (14)'])
-                badge_color = "green" if rsi_val < 70 else "red"
-                st.markdown(f":{badge_color}[**{row['RSI (14)']}**]")
-            with c_act:
-                if st.button("🗑️", key=f"del_{row['Symbol']}"):
-                    st.session_state.watchlist.remove(row['Symbol'])
-                    st.rerun()
-        
-        st.markdown("---")
-        s1, s2, s3 = st.columns(3)
-        s1.success(f"🟢 Gainers: {gainers_count}")
-        s2.error(f"🔴 Losers: {losers_count}")
-        s3.info(f"📊 Total Symbols: {len(st.session_state.watchlist)}")
+    st.markdown("---")
+    s1, s2, s3 = st.columns(3)
+    s1.success(f"🟢 Gainers: {gainers_count}")
+    s2.error(f"🔴 Losers: {losers_count}")
+    s3.info(f"📊 Total Symbols: {len(st.session_state.watchlist)}")
+
 
 # ==========================================
-# 视图二：个股专属分析面板（包含 GEX 墙与期权链明细）
+# 视图二：个股专属分析面板
 # ==========================================
 else:
     symbol = st.session_state.selected_stock
