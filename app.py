@@ -11,64 +11,6 @@ st.set_page_config(
     layout="wide"
 )
 
-# 注入极简高级的全局 CSS 样式，彻底防止折行和错位
-st.markdown("""
-<style>
-    html, body, [class*="css"] {
-        font-size: 15px !important;
-        background-color: #060913;
-        color: #f3f4f6;
-    }
-    .big-price {
-        font-size: 20px !important;
-        font-weight: 700 !important;
-    }
-    /* 价格阶梯卡片样式 */
-    .price-level-item {
-        background-color: #111827;
-        border: 1px solid #1f2937;
-        padding: 4px 10px;
-        border-radius: 4px;
-        margin-bottom: 3px;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        font-size: 13px;
-    }
-    .price-level-current {
-        background-color: #1e3a8a;
-        border: 1px solid #3b82f6;
-        padding: 5px 10px;
-        border-radius: 4px;
-        margin-bottom: 3px;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        font-size: 13px;
-        font-weight: bold;
-        color: #facc15;
-    }
-    /* KEY DATA 矩阵卡片 */
-    .key-data-card {
-        background-color: #111827;
-        border: 1px solid #1f2937;
-        border-radius: 8px;
-        padding: 12px 16px;
-        margin-top: 10px;
-    }
-    .kd-row {
-        display: flex;
-        justify-content: space-between;
-        padding: 6px 0;
-        border-bottom: 1px solid #1f2937;
-        font-size: 14px;
-    }
-    .kd-row:last-child {
-        border-bottom: none;
-    }
-</style>
-""", unsafe_allow_html=True)
-
 # 2. 初始化全局状态
 if "watchlist" not in st.session_state:
     st.session_state.watchlist = ["NVDA", "GOOGL", "TSM", "AMD", "MSFT", "META", "AMZN", "AAPL", "ASML", "TSLA", "VUAG.L", "EQQQ.L"]
@@ -155,7 +97,7 @@ if st.session_state.nav_mode == "Market Watch":
     
     for i, h in enumerate(headers):
         with h_cols[i]:
-            st.markdown(f"<span style='font-size:15px; font-weight:bold;'>{h}</span>", unsafe_allow_html=True)
+            st.markdown(f"**{h}**")
             
     st.markdown("<hr style='margin: 5px 0px 10px 0px;'>", unsafe_allow_html=True)
     
@@ -191,9 +133,9 @@ if st.session_state.nav_mode == "Market Watch":
                         st.session_state.nav_mode = "Stock Analysis & Options Chain"
                         st.rerun()
                 with row_cols[1]:
-                    st.markdown(f"**${curr:.2f}**")
+                    st.markdown(f"${curr:.2f}")
                 with row_cols[2]:
-                    st.markdown(f"**${prev:.2f}**")
+                    st.markdown(f"${prev:.2f}")
                 with row_cols[3]:
                     color_txt = "🟢" if pct >= 0 else "🔴"
                     st.markdown(f"{color_txt} {pct:+.2f}%")
@@ -245,13 +187,13 @@ else:
     if spot is None or hist_df is None:
         st.error(f"Failed to load market data for {selected_analysis_stock}.")
     else:
-        # 严格锁定的左右两栏布局
+        # 左右两栏布局
         col_chart, col_price_level = st.columns([2.8, 1.2])
         
         with col_chart:
             st.markdown(f"#### 📈 **{selected_analysis_stock} — Price Trend**")
             
-            fig_p, ax_p = plt.subplots(figsize=(8, 3.6))
+            fig_p, ax_p = plt.subplots(figsize=(8, 3.5))
             ax_p.plot(hist_df.index, hist_df['Close'], label='Close Price', color='#00d2ff', linewidth=2.0)
             ax_p.fill_between(hist_df.index, hist_df['Close'], hist_df['Close'].min() * 0.95, color='#0284c7', alpha=0.15)
             
@@ -275,33 +217,22 @@ else:
 
         with col_price_level:
             st.markdown("#### 📊 **PRICE LEVEL**")
-            st.markdown("<hr style='margin: 0px 0px 4px 0px; border-color: #1f2937;'>", unsafe_allow_html=True)
+            st.markdown("---")
             
-            # 使用精美的 HTML 卡片渲染挂单列表，保证高度紧凑、绝不溢出错位
+            # 严格控制间距的 PRICE LEVEL 列表
             percentages = [20, 15, 12, 10, 8, 6, 0, -6, -8, -10, -12, -15, -20]
             for p in percentages:
                 target_price = spot * (1 + p / 100.0)
                 if p == 0:
-                    st.markdown(f"""
-                    <div class="price-level-current">
-                        <span>CURRENT</span>
-                        <span>${target_price:.2f}</span>
-                    </div>
-                    """, unsafe_allow_html=True)
+                    st.info(f"**CURRENT: ${target_price:.2f}**")
                 else:
                     label_str = f"{p:+d}%"
-                    color_code = "#34d399" if p > 0 else "#f87171"
-                    st.markdown(f"""
-                    <div class="price-level-item">
-                        <span style="color: {color_code}; font-weight: bold;">{label_str}</span>
-                        <span style="color: #ffffff;">${target_price:.2f}</span>
-                    </div>
-                    """, unsafe_allow_html=True)
+                    st.write(`{label_str}  ➔  ${target_price:.2f}`)
 
-        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown("---")
         
         # ==========================================
-        # KEY DATA 关键数据面板（分为 4 个部分，整洁紧凑）
+        # KEY DATA 关键数据面板（严格分成 4 个部分，使用原生安全组件）
         # ==========================================
         st.markdown("#### 📌 **KEY DATA**")
         
@@ -322,43 +253,35 @@ else:
         loss_s = (-delta_s.where(delta_s < 0, 0)).rolling(14).mean().iloc[-1]
         rsi_v = 100 - (100 / (1 + (gain_s / loss_s))) if loss_s != 0 else 50.0
 
-        # 用一套干净整洁的 HTML 表格卡片展示 4 个部分，防止原生 metric 造成的大面积空白和乱行
-        st.markdown(f"""
-        <div class="key-data-card">
-            <!-- 第一部分：价格与变动摘要 (4个指标) -->
-            <div style="color: #38bdf8; font-weight: bold; font-size: 14px; margin-bottom: 6px;">1. 价格与变动摘要</div>
-            <div style="display: flex; justify-content: space-between; margin-bottom: 12px; font-size: 14px;">
-                <div>今天价格: <strong style="color: #38bdf8; font-size: 16px;">${curr_price:.2f}</strong></div>
-                <div>昨天价格: <strong>${prev_price:.2f}</strong></div>
-                <div>变动参数: <strong style="color: {'#34d399' if chg_val >= 0 else '#f87171'};">{chg_val:+.2f}</strong></div>
-                <div>变动指数: <strong style="color: {'#34d399' if chg_pct >= 0 else '#f87171'};">{chg_pct:+.2f}%</strong></div>
-            </div>
+        with st.container():
+            # 第一部分：价格与变动摘要 (4个指标)
+            st.markdown("**1. 价格与变动摘要**")
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("今天价格", f"${curr_price:.2f}")
+            c2.metric("昨天价格", f"${prev_price:.2f}")
+            c3.metric("变动参数", f"{chg_val:+.2f}")
+            c4.metric("变动指数", f"{chg_pct:+.2f}%")
             
-            <hr style="border-color: #1f2937; margin: 8px 0;">
+            st.markdown("---")
             
-            <!-- 第二部分：均线数据 (3个指标) -->
-            <div style="color: #38bdf8; font-weight: bold; font-size: 14px; margin-bottom: 6px;">2. 均线数据 (Moving Averages)</div>
-            <div style="display: flex; justify-content: space-between; margin-bottom: 12px; font-size: 14px;">
-                <div>20日均价: <strong>${ma20_val:.2f}</strong></div>
-                <div>50日均价: <strong>${ma50_val:.2f}</strong></div>
-                <div>200日均价: <strong>${ma200_val:.2f}</strong></div>
-            </div>
+            # 第二部分：均线数据 (3个指标)
+            st.markdown("**2. 均线数据 (Moving Averages)**")
+            m1, m2, m3 = st.columns(3)
+            m1.metric("20日均价", f"${ma20_val:.2f}")
+            m2.metric("50日均价", f"${ma50_val:.2f}")
+            m3.metric("200日均价", f"${ma200_val:.2f}")
             
-            <hr style="border-color: #1f2937; margin: 8px 0;">
+            st.markdown("---")
             
-            <!-- 第三部分：年内高低 (2个指标) -->
-            <div style="color: #38bdf8; font-weight: bold; font-size: 14px; margin-bottom: 6px;">3. 年内高低 (52-Week Range)</div>
-            <div style="display: flex; justify-content: space-between; margin-bottom: 12px; font-size: 14px;">
-                <div>年内最高: <strong style="color: #34d399;">${high_year:.2f}</strong></div>
-                <div>年内最低: <strong style="color: #f87171;">${low_year:.2f}</strong></div>
-            </div>
+            # 第三部分：年内高低 (2个指标)
+            st.markdown("**3. 年内高低 (52-Week Range)**")
+            r1, r2 = st.columns(2)
+            r1.metric("年内最高", f"${high_year:.2f}")
+            r2.metric("年内最低", f"${low_year:.2f}")
             
-            <hr style="border-color: #1f2937; margin: 8px 0;">
+            st.markdown("---")
             
-            <!-- 第四部分：购买指数 (1个指标) -->
-            <div style="color: #38bdf8; font-weight: bold; font-size: 14px; margin-bottom: 6px;">4. 购买指数 (Buying Index)</div>
-            <div style="font-size: 14px;">
-                购买指数 (RSI 14): <span style="background-color: {'#065f46' if rsi_v < 70 else '#991b1b'}; color: white; padding: 2px 10px; border-radius: 4px; font-weight: bold;">{rsi_v:.1f}</span>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+            # 第四部分：购买指数 (1个指标)
+            st.markdown("**4. 购买指数 (Buying Index)**")
+            b1, _ = st.columns([1, 3])
+            b1.metric("购买指数 (RSI 14)", f"{rsi_v:.1f}")
