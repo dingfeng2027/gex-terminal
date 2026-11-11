@@ -7,36 +7,41 @@ import matplotlib.pyplot as plt
 
 # 1. 页面基本配置
 st.set_page_config(
-    page_title="Market Watch & GEX Terminal",
+    page_title="CAPITAL QUANT v2 - Pro Terminal",
     page_icon="📈",
     layout="wide"
 )
 
-# 2. 初始化自选股列表
+# 2. 初始化全局状态
 if "watchlist" not in st.session_state:
-    st.session_state.watchlist = ["NVDA", "AMD", "AMZN", "TSLA", "GOOGL"]
+    st.session_state.watchlist = ["NVDA", "GOOGL", "TSM", "AMD", "MSFT", "META", "AMZN", "AAPL", "ASML", "TSLA", "VUAG.L", "EQQQ.L"]
 
 if "selected_stock" not in st.session_state:
     st.session_state.selected_stock = None
 
+# --- 辅助计算函数：Black-Scholes Gamma ---
 def get_bs_gamma(S, K, T, r, sigma):
     if T <= 0 or sigma <= 0:
         return 0.0
     d1 = (np.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
     return norm.pdf(d1) / (S * sigma * np.sqrt(T))
 
+# --- 期权 GEX 分析核心函数 ---
 @st.cache_data(ttl=600)
-def fetch_gex_data(ticker_symbol):
+def fetch_gex_and_chain(ticker_symbol):
     ticker = yf.Ticker(ticker_symbol)
     history = ticker.history(period="1d")
     if history.empty:
-        return None, None, None, None, None, None
+        return None, None, None, None, None, None, None, None
         
     spot_price = history['Close'].iloc[-1]
     expirations = ticker.options
     if not expirations:
-        return spot_price, None, None, None, None, None
+        return spot_price, None, None, None, None, None, None, None
         
+    nearest_exp = expirations[0]
+    opt_chain = ticker.option_chain(nearest_exp)
+    
     all_options = []
     today = pd.Timestamp.today()
     r = 0.045
@@ -58,7 +63,7 @@ def fetch_gex_data(ticker_symbol):
         all_options.append(puts)
         
     if not all_options:
-        return spot_price, None, None, None, None, None
+        return spot_price, None, None, None, None, None, nearest_exp, opt_chain
         
     df = pd.concat(all_options, ignore_index=True)
     df = df[df['openInterest'] > 0].copy()
@@ -92,96 +97,200 @@ def fetch_gex_data(ticker_symbol):
     zero_crossings = np.where(np.diff(np.sign(gex_by_strike['cum_gex'])))[0]
     gamma_flip = gex_by_strike.iloc[zero_crossings[0]]['strike'] if len(zero_crossings) > 0 else spot_price
     
-    return spot_price, call_wall, put_wall, gamma_flip, gex_by_strike, gex_by_strike['gex'].sum()
+    return spot_price, call_wall, put_wall, gamma_flip, gex_by_strike, gex_by_strike['gex'].sum(), nearest_exp, opt_chain
 
-# --- 视图一：Market Watch 看板 ---
+# ==========================================
+# 视图一：CAPITAL QUANT v2 — Market Watch 看板
+# ==========================================
 if st.session_state.selected_stock is None:
-    st.title("📊 Market Watch & Options Radar")
-    st.markdown("点击下方任意个股名称，进入该资产的专属期权对冲与 Gamma 深度看板。")
-    
-    st.sidebar.header("⚙️ 自选股管理")
-    new_ticker = st.sidebar.text_input("添加新股票代码 (例如: AAPL, MSFT)").upper()
-    if st.sidebar.button("➕ 添加到 Watchlist"):
-        if new_ticker and new_ticker not in st.session_state.watchlist:
-            st.session_state.watchlist.append(new_ticker)
-            st.success(f"已成功添加 {new_ticker}")
-            st.rerun()
-            
-    if st.sidebar.button("🗑️ 重置默认自选股"):
-        st.session_state.watchlist = ["NVDA", "AMD", "AMZN", "TSLA", "GOOGL"]
-        st.rerun()
-
+    c_title, c_live = st.columns([6, 2])
+    with c_title:
+        st.markdown("### 📊 CAPITAL QUANT v2 &nbsp; | &nbsp; **Market Watch**")
+    with c_live:
+        st.markdown("🟢 **Live Terminal** &nbsp; | &nbsp; ⚡ Ready")
+        
     st.markdown("---")
-    st.subheader("📌 我的自选股列表")
     
-    cols = st.columns(3)
-    for idx, symbol in enumerate(st.session_state.watchlist):
-        with cols[idx % 3]:
-            with st.container(border=True):
-                st.markdown(f"### 🚀 {symbol}")
-                try:
-                    t_obj = yf.Ticker(symbol)
-                    hist = t_obj.history(period="2d")
-                    if not hist.empty:
-                        curr_p = hist['Close'].iloc[-1]
-                        prev_p = hist['Close'].iloc[-2]
-                        chg = ((curr_p - prev_p) / prev_p) * 100
-                        st.metric(label="当前价格", value=f"${curr_p:.2f}", delta=f"{chg:+.2f}%")
-                    else:
-                        st.write("数据加载中...")
-                except:
-                    st.write("无法获取实时行情")
-                
-                if st.button(f"进入 {symbol} 专属面板 ➔", key=f"btn_{symbol}"):
-                    st.session_state.selected_stock = symbol
-                    st.rerun()
+    col_input, col_add, col_update = st.columns([4, 1.5, 1.5])
+    with col_input:
+        new_ticker = st.text_input("Add Ticker", placeholder="e.g. NVDA, AAPL", label_visibility="collapsed").upper()
+    with col_add:
+        if st.button("➕ ADD TICKER", use_container_width=True):
+            if new_ticker and new_ticker not in st.session_state.watchlist:
+                st.session_state.watchlist.append(new_ticker)
+                st.rerun()
+    with col_update:
+        if st.button("🔄 UPDATE ALL", use_container_width=True):
+            st.cache_data.clear()
+            st.rerun()
 
-# --- 视图二：个股专属分析面板 ---
+    st.markdown("#### 📌 Portfolio & Watchlist Matrix")
+    
+    table_data = []
+    gainers_count = 0
+    losers_count = 0
+    
+    for symbol in st.session_state.watchlist:
+        try:
+            t = yf.Ticker(symbol)
+            hist = t.history(period="1y")
+            if not hist.empty:
+                curr = hist['Close'].iloc[-1]
+                prev = hist['Close'].iloc[-2] if len(hist) > 1 else curr
+                change = curr - prev
+                pct = (change / prev) * 100
+                
+                ma20 = hist['Close'].rolling(20).mean().iloc[-1] if len(hist) >= 20 else curr
+                ma50 = hist['Close'].rolling(50).mean().iloc[-1] if len(hist) >= 50 else curr
+                ma200 = hist['Close'].rolling(200).mean().iloc[-1] if len(hist) >= 200 else curr
+                
+                high_52w = hist['High'].max()
+                low_52w = hist['Low'].min()
+                
+                delta_series = hist['Close'].diff()
+                gain = (delta_series.where(delta_series > 0, 0)).rolling(14).mean().iloc[-1]
+                loss = (-delta_series.where(delta_series < 0, 0)).rolling(14).mean().iloc[-1]
+                rs = gain / loss if loss != 0 else 1
+                rsi = 100 - (100 / (1 + rs))
+                
+                info = t.info
+                pe = info.get('trailingPE', 'None')
+                pe_str = f"{pe:.2f}" if isinstance(pe, (int, float)) else "None"
+                
+                if pct >= 0:
+                    gainers_count += 1
+                else:
+                    losers_count += 1
+                    
+                table_data.append({
+                    "Symbol": symbol,
+                    "Today Price": f"${curr:.2f}",
+                    "Yesterday": f"${prev:.2f}",
+                    "Change": f"{change:+.2f}",
+                    "Change %": f"{pct:+.2f}%",
+                    "MA20": f"${ma20:.2f}",
+                    "MA50": f"${ma50:.2f}",
+                    "MA200": f"${ma200:.2f}",
+                    "PE Rate": pe_str,
+                    "Yearly High": f"${high_52w:.2f}",
+                    "Yearly Low": f"${low_52w:.2f}",
+                    "RSI (14)": f"{rsi:.1f}",
+                    "raw_pct": pct
+                })
+        except:
+            continue
+            
+    if table_data:
+        df_display = pd.DataFrame(table_data)
+        
+        for idx, row in df_display.iterrows():
+            c_sym, c_p, c_y, c_chg, c_pct, c_ma20, c_ma50, c_high, c_low, c_rsi, c_act = st.columns([1.2, 1.2, 1.2, 1.2, 1.2, 1.2, 1.2, 1.2, 1.2, 1, 1])
+            
+            with c_sym:
+                if st.button(f"🚀 {row['Symbol']}", key=f"nav_{row['Symbol']}"):
+                    st.session_state.selected_stock = row['Symbol']
+                    st.rerun()
+            with c_p:
+                st.write(row['Today Price'])
+            with c_y:
+                st.write(row['Yesterday'])
+            with c_chg:
+                color_txt = "🟢" if row['raw_pct'] >= 0 else "🔴"
+                st.write(f"{color_txt} {row['Change']}")
+            with c_pct:
+                st.write(row['Change %'])
+            with c_ma20:
+                st.write(row['MA20'])
+            with c_ma50:
+                st.write(row['MA50'])
+            with c_high:
+                st.write(row['Yearly High'])
+            with c_low:
+                st.write(row['Yearly Low'])
+            with c_rsi:
+                rsi_val = float(row['RSI (14)'])
+                badge_color = "green" if rsi_val < 70 else "red"
+                st.markdown(f":{badge_color}[**{row['RSI (14)']}**]")
+            with c_act:
+                if st.button("🗑️", key=f"del_{row['Symbol']}"):
+                    st.session_state.watchlist.remove(row['Symbol'])
+                    st.rerun()
+        
+        st.markdown("---")
+        s1, s2, s3 = st.columns(3)
+        s1.success(f"🟢 Gainers: {gainers_count}")
+        s2.error(f"🔴 Losers: {losers_count}")
+        s3.info(f"📊 Total Symbols: {len(st.session_state.watchlist)}")
+
+# ==========================================
+# 视图二：个股专属分析面板（包含 GEX 墙与期权链明细）
+# ==========================================
 else:
     symbol = st.session_state.selected_stock
     
-    if st.button("⬅ 返回 Market Watch 看板"):
+    if st.button("⬅ Return to Market Watch"):
         st.session_state.selected_stock = None
         st.rerun()
         
-    st.title(f"🎯 {symbol} — 专属期权对冲与力场分析面板")
+    st.title(f"🎯 {symbol} — Professional Options GEX & Chain Terminal")
     
-    with st.spinner(f"正在深度计算 {symbol} 的期权 Gamma 结构，请稍候..."):
-        spot, c_wall, p_wall, g_flip, df_gex, net_gex = fetch_gex_data(symbol)
+    with st.spinner(f"Computing Options Microstructure & Chains for {symbol}..."):
+        spot, c_wall, p_wall, g_flip, df_gex, net_gex, nearest_exp, opt_chain = fetch_gex_and_chain(symbol)
         
     if spot is None:
-        st.error(f"未能成功获取 {symbol} 的行情数据。")
+        st.error(f"Failed to fetch market data for {symbol}.")
     else:
         m1, m2, m3, m4 = st.columns(4)
-        m1.metric("当前正股价格 (Spot)", f"${spot:.2f}")
-        m2.metric("上方最大阻力 (Call Wall)", f"${c_wall}" if c_wall else "暂无")
-        m3.metric("下方最大支撑 (Put Wall)", f"${p_wall}" if p_wall else "暂无")
-        m4.metric("变盘转折线 (Gamma Flip)", f"${g_flip:.2f}" if g_flip else "暂无")
+        m1.metric("Spot Price", f"${spot:.2f}")
+        m2.metric("Call Wall (Resistance)", f"${c_wall}" if c_wall else "N/A")
+        m3.metric("Put Wall (Support)", f"${p_wall}" if p_wall else "N/A")
+        m4.metric("Gamma Flip Line", f"${g_flip:.2f}" if g_flip else "N/A")
         
         st.markdown("---")
-        net_mil = net_gex / 1e6 if net_gex else 0
-        st.markdown(f"### 💡 做市商对冲体制诊断：`{net_mil:+.2f} M$ / 1% 波动`")
-        if net_mil > 0:
-            st.success("【正 Gamma 体制】：做市商高抛低吸，震荡防守，下跌有强支撑。")
-        else:
-            st.warning("【负 Gamma 体制】：做市商追涨杀跌，波动放大，谨防加速。")
-            
-        if df_gex is not None and not df_gex.empty:
-            st.markdown("### 📊 Dealer Gamma 暴露分布直方图 (GEX Profile)")
-            fig, ax = plt.subplots(figsize=(10, 4))
-            colors = ['green' if x >= 0 else 'red' for x in df_gex['gex']]
-            ax.bar(df_gex['strike'], df_gex['gex'] / 1e6, color=colors, width=1.0, alpha=0.7)
-            
-            ax.axvline(spot, color='blue', linestyle='--', linewidth=2, label=f'Spot: ${spot:.2f}')
-            if c_wall:
-                ax.axvline(c_wall, color='darkgreen', linestyle=':', linewidth=2, label=f'Call Wall: ${c_wall}')
-            if p_wall:
-                ax.axvline(p_wall, color='darkred', linestyle=':', linewidth=2, label=f'Put Wall: ${p_wall}')
-            if g_flip:
-                ax.axvline(g_flip, color='orange', linestyle='-', linewidth=2, label=f'Gamma Flip: ${g_flip:.2f}')
+        
+        tab_gex, tab_chain = st.tabs(["📊 Gamma & Walls Analysis", f"📋 Options Chain Details ({nearest_exp})"])
+        
+        with tab_gex:
+            net_mil = net_gex / 1e6 if net_gex else 0
+            st.markdown(f"### 💡 Market Regime Diagnosis: `{net_mil:+.2f} M$ / 1% Move`")
+            if net_mil > 0:
+                st.success("【Positive Gamma Regime】：Dealers trade mean-reversion. Low volatility and range-bound defensive structure.")
+            else:
+                st.warning("【Negative Gamma Regime】：Dealers chase momentum. High volatility breakout or acceleration risk.")
                 
-            ax.set_xlabel("Strike Price ($)")
-            ax.set_ylabel("Net GEX ($ Millions)")
-            ax.legend(loc='upper right')
-            ax.grid(True, alpha=0.3)
-            st.pyplot(fig)
+            if df_gex is not None and not df_gex.empty:
+                st.markdown("### 📊 Dealer Net Gamma Exposure Profile (GEX by Strike)")
+                fig, ax = plt.subplots(figsize=(10, 4))
+                colors = ['green' if x >= 0 else 'red' for x in df_gex['gex']]
+                ax.bar(df_gex['strike'], df_gex['gex'] / 1e6, color=colors, width=1.0, alpha=0.7)
+                
+                ax.axvline(spot, color='blue', linestyle='--', linewidth=2, label=f'Spot: ${spot:.2f}')
+                if c_wall:
+                    ax.axvline(c_wall, color='darkgreen', linestyle=':', linewidth=2, label=f'Call Wall: ${c_wall}')
+                if p_wall:
+                    ax.axvline(p_wall, color='darkred', linestyle=':', linewidth=2, label=f'Put Wall: ${p_wall}')
+                if g_flip:
+                    ax.axvline(g_flip, color='orange', linestyle='-', linewidth=2, label=f'Gamma Flip: ${g_flip:.2f}')
+                    
+                ax.set_xlabel("Strike Price ($)")
+                ax.set_ylabel("Net GEX ($ Millions)")
+                ax.legend(loc='upper right')
+                ax.grid(True, alpha=0.3)
+                st.pyplot(fig)
+                
+        with tab_chain:
+            st.markdown(f"### 🟢 Call Options (Calls) — Expiry: {nearest_exp}")
+            if opt_chain is not None and not opt_chain.calls.empty:
+                calls_df = opt_chain.calls[['strike', 'lastPrice', 'bid', 'ask', 'impliedVolatility', 'volume', 'openInterest']]
+                calls_df.columns = ['Strike ($)', 'Last ($)', 'Bid ($)', 'Ask ($)', 'IV', 'Volume', 'Open Interest']
+                st.dataframe(calls_df, use_container_width=True)
+            else:
+                st.info("No Call options available.")
+                
+            st.markdown(f"### 🔴 Put Options (Puts) — Expiry: {nearest_exp}")
+            if opt_chain is not None and not opt_chain.puts.empty:
+                puts_df = opt_chain.puts[['strike', 'lastPrice', 'bid', 'ask', 'impliedVolatility', 'volume', 'openInterest']]
+                puts_df.columns = ['Strike ($)', 'Last ($)', 'Bid ($)', 'Ask ($)', 'IV', 'Volume', 'Open Interest']
+                st.dataframe(puts_df, use_container_width=True)
+            else:
+                st.info("No Put options available.")
