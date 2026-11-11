@@ -1,3 +1,4 @@
+
 import streamlit as st
 import numpy as np
 import pandas as pd
@@ -5,19 +6,27 @@ import yfinance as yf
 from scipy.stats import norm
 import matplotlib.pyplot as plt
 
-# 1. 页面基本配置
+# 1. 页面基本配置与全局 CSS 样式
 st.set_page_config(
     page_title="CAPITAL QUANT v2 - Pro Terminal",
     page_icon="📈",
     layout="wide"
 )
 
+st.markdown("""
+<style>
+    html, body, [class*="css"] {
+        font-size: 16px !important;
+    }
+    div.stVerticalBlock > div.stElementContainer {
+        margin-bottom: -10px !important;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 # 2. 初始化全局状态
 if "watchlist" not in st.session_state:
     st.session_state.watchlist = ["NVDA", "GOOGL", "TSM", "AMD", "MSFT", "META", "AMZN", "AAPL", "ASML", "TSLA", "VUAG.L", "EQQQ.L"]
-
-if "selected_stock" not in st.session_state:
-    st.session_state.selected_stock = None
 
 # --- 辅助计算函数：Black-Scholes Gamma ---
 def get_bs_gamma(S, K, T, r, sigma):
@@ -26,18 +35,18 @@ def get_bs_gamma(S, K, T, r, sigma):
     d1 = (np.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
     return norm.pdf(d1) / (S * sigma * np.sqrt(T))
 
-# --- 期权 GEX 分析核心函数 ---
+# --- 期权 GEX 与期权链核心函数 ---
 @st.cache_data(ttl=600)
 def fetch_gex_and_chain(ticker_symbol):
     ticker = yf.Ticker(ticker_symbol)
-    history = ticker.history(period="1d")
+    history = ticker.history(period="1y")
     if history.empty:
-        return None, None, None, None, None, None, None, None
+        return None, None, None, None, None, None, None, None, None
         
     spot_price = history['Close'].iloc[-1]
     expirations = ticker.options
     if not expirations:
-        return spot_price, None, None, None, None, None, None, None
+        return spot_price, None, None, None, None, None, None, None, history
         
     nearest_exp = expirations[0]
     opt_chain = ticker.option_chain(nearest_exp)
@@ -63,7 +72,7 @@ def fetch_gex_and_chain(ticker_symbol):
         all_options.append(puts)
         
     if not all_options:
-        return spot_price, None, None, None, None, None, nearest_exp, opt_chain
+        return spot_price, None, None, None, None, None, nearest_exp, opt_chain, history
         
     df = pd.concat(all_options, ignore_index=True)
     df = df[df['openInterest'] > 0].copy()
@@ -97,21 +106,27 @@ def fetch_gex_and_chain(ticker_symbol):
     zero_crossings = np.where(np.diff(np.sign(gex_by_strike['cum_gex'])))[0]
     gamma_flip = gex_by_strike.iloc[zero_crossings[0]]['strike'] if len(zero_crossings) > 0 else spot_price
     
-    return spot_price, call_wall, put_wall, gamma_flip, gex_by_strike, gex_by_strike['gex'].sum(), nearest_exp, opt_chain
+    return spot_price, call_wall, put_wall, gamma_flip, gex_by_strike, gex_by_strike['gex'].sum(), nearest_exp, opt_chain, history
 
 
 # ==========================================
-# 视图一：CAPITAL QUANT v2 — Market Watch 看板
+# 顶部导航栏选择器（Market Watch vs Stock Analysis）
 # ==========================================
-if st.session_state.selected_stock is None:
-    c_title, c_live = st.columns([6, 2])
-    with c_title:
-        st.markdown("### 📊 CAPITAL QUANT v2 &nbsp; | &nbsp; **Market Watch**")
-    with c_live:
-        st.markdown("🟢 **Live Terminal** &nbsp; | &nbsp; ⚡ Ready")
-        
-    st.markdown("---")
-    
+st.markdown("### 📊 CAPITAL QUANT v2 &nbsp; | &nbsp; **Pro Trading Terminal**")
+
+nav_tab = st.radio(
+    "Navigation", 
+    ["Market Watch", "Stock Analysis & Options Chain"], 
+    horizontal=True,
+    label_visibility="collapsed"
+)
+
+st.markdown("---")
+
+# ==========================================
+# 视图一：Market Watch 看板
+# ==========================================
+if nav_tab == "Market Watch":
     col_input, col_add, col_update = st.columns([4, 1.5, 1.5])
     with col_input:
         new_ticker = st.text_input("Add Ticker", placeholder="e.g. NVDA, AAPL", label_visibility="collapsed").upper()
@@ -126,12 +141,9 @@ if st.session_state.selected_stock is None:
             st.rerun()
 
     st.markdown("#### 📌 Portfolio & Watchlist Matrix")
-    st.markdown("<br>", unsafe_allow_html=True)
     
-    # 明确设置列宽及表头结构
     cols_width = [1.3, 1.1, 1.1, 1.1, 1.1, 1.1, 1.1, 1.1, 1.1, 1.1, 1.1, 0.8]
     
-    # 渲染带清晰标题的表头（Header Row）
     h_cols = st.columns(cols_width)
     headers = [
         "公司名称", "今天价格", "昨天价格", "价格变动", "变动点数", 
@@ -141,9 +153,9 @@ if st.session_state.selected_stock is None:
     
     for i, h in enumerate(headers):
         with h_cols[i]:
-            st.markdown(f"**{h}**")
+            st.markdown(f"<span style='font-size:15px; font-weight:bold;'>{h}</span>", unsafe_allow_html=True)
             
-    st.markdown("---")
+    st.markdown("<hr style='margin: 5px 0px 10px 0px;'>", unsafe_allow_html=True)
     
     gainers_count = 0
     losers_count = 0
@@ -182,56 +194,31 @@ if st.session_state.selected_stock is None:
                     
                 row_cols = st.columns(cols_width)
                 
-                # 1. 公司名称（Trading 212 风格 Logo 按钮）
                 with row_cols[0]:
                     clean_sym = symbol.split('.')[0]
-                    if st.button(f"🟡 {clean_sym}", key=f"nav_{symbol}", help=f"进入 {symbol} 专属面板"):
-                        st.session_state.selected_stock = symbol
-                        st.rerun()
-                
-                # 2. 今天价格
+                    st.markdown(f"🟡 **{clean_sym}**")
                 with row_cols[1]:
-                    st.write(f"${curr:.2f}")
-                    
-                # 3. 昨天价格
+                    st.markdown(f"<span style='font-size:15px;'>${curr:.2f}</span>", unsafe_allow_html=True)
                 with row_cols[2]:
-                    st.write(f"${prev:.2f}")
-                    
-                # 4. 价格变动 (%)
+                    st.markdown(f"<span style='font-size:15px;'>${prev:.2f}</span>", unsafe_allow_html=True)
                 with row_cols[3]:
                     color_txt = "🟢" if pct >= 0 else "🔴"
-                    st.write(f"{color_txt} {pct:+.2f}%")
-                    
-                # 5. 变动点数 ($)
+                    st.markdown(f"<span style='font-size:15px;'>{color_txt} {pct:+.2f}%</span>", unsafe_allow_html=True)
                 with row_cols[4]:
-                    st.write(f"{change:+.2f}")
-                    
-                # 6. 20日均价
+                    st.markdown(f"<span style='font-size:15px;'>{change:+.2f}</span>", unsafe_allow_html=True)
                 with row_cols[5]:
-                    st.write(f"${ma20:.2f}" if not pd.isna(ma20) else "N/A")
-                    
-                # 7. 50日均价
+                    st.markdown(f"<span style='font-size:15px;'>${ma20:.2f}</span>", unsafe_allow_html=True)
                 with row_cols[6]:
-                    st.write(f"${ma50:.2f}" if not pd.isna(ma50) else "N/A")
-                    
-                # 8. 200日均价
+                    st.markdown(f"<span style='font-size:15px;'>${ma50:.2f}</span>", unsafe_allow_html=True)
                 with row_cols[7]:
-                    st.write(f"${ma200:.2f}" if not pd.isna(ma200) else "N/A")
-                    
-                # 9. 年内最高
+                    st.markdown(f"<span style='font-size:15px;'>${ma200:.2f}</span>", unsafe_allow_html=True)
                 with row_cols[8]:
-                    st.write(f"${high_52w:.2f}" if not pd.isna(high_52w) else "N/A")
-                    
-                # 10. 年内最低
+                    st.markdown(f"<span style='font-size:15px;'>${high_52w:.2f}</span>", unsafe_allow_html=True)
                 with row_cols[9]:
-                    st.write(f"${low_52w:.2f}" if not pd.isna(low_52w) else "N/A")
-                    
-                # 11. 购买指数 (RSI 14)
+                    st.markdown(f"<span style='font-size:15px;'>${low_52w:.2f}</span>", unsafe_allow_html=True)
                 with row_cols[10]:
                     badge_color = "green" if rsi < 70 else "red"
-                    st.markdown(f":{badge_color}[**{rsi:.1f}**]")
-                    
-                # 12. 删除操作
+                    st.markdown(f":{badge_color}[<span style='font-size:15px; font-weight:bold;'>{rsi:.1f}</span>]", unsafe_allow_html=True)
                 with row_cols[11]:
                     if st.button("🗑️", key=f"del_{symbol}"):
                         st.session_state.watchlist.remove(symbol)
@@ -248,33 +235,55 @@ if st.session_state.selected_stock is None:
 
 
 # ==========================================
-# 视图二：个股专属分析面板
+# 视图二：Stock Analysis & Options Chain 深度终端
 # ==========================================
 else:
-    symbol = st.session_state.selected_stock
+    st.markdown("### 🎯 **Stock Analysis & Options Microstructure Terminal**")
     
-    if st.button("⬅ Return to Market Watch"):
-        st.session_state.selected_stock = None
-        st.rerun()
-        
-    st.title(f"🎯 {symbol} — Professional Options GEX & Chain Terminal")
+    # 顶部个股选择器
+    selected_analysis_stock = st.selectbox(
+        "Select Stock for Deep Analysis", 
+        st.session_state.watchlist,
+        index=0
+    )
     
-    with st.spinner(f"Computing Options Microstructure & Chains for {symbol}..."):
-        spot, c_wall, p_wall, g_flip, df_gex, net_gex, nearest_exp, opt_chain = fetch_gex_and_chain(symbol)
+    with st.spinner(f"Loading data and options chain for {selected_analysis_stock}..."):
+        spot, c_wall, p_wall, g_flip, df_gex, net_gex, nearest_exp, opt_chain, hist_df = fetch_gex_and_chain(selected_analysis_stock)
         
     if spot is None:
-        st.error(f"Failed to fetch market data for {symbol}.")
+        st.error(f"Failed to load data for {selected_analysis_stock}.")
     else:
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Spot Price", f"${spot:.2f}")
-        m2.metric("Call Wall (Resistance)", f"${c_wall}" if c_wall else "N/A")
-        m3.metric("Put Wall (Support)", f"${p_wall}" if p_wall else "N/A")
-        m4.metric("Gamma Flip Line", f"${g_flip:.2f}" if g_flip else "N/A")
+        # 顶部三大标签页：(1) Price & MA Chart, (2) Gamma & Walls Analysis, (3) Options Chain Details (Calls & Puts)
+        tab_chart, tab_gex, tab_chain = st.tabs([
+            "📈 Price Chart & MA", 
+            "📊 Gamma & Walls Analysis", 
+            f"📋 Options Chain Details ({nearest_exp})"
+        ])
         
-        st.markdown("---")
-        
-        tab_gex, tab_chain = st.tabs(["📊 Gamma & Walls Analysis", f"📋 Options Chain Details ({nearest_exp})"])
-        
+        with tab_chart:
+            st.markdown(f"#### 📉 {selected_analysis_stock} — Daily Price & Moving Averages")
+            fig_p, ax_p = plt.subplots(figsize=(10, 4))
+            ax_p.plot(hist_df.index, hist_df['Close'], label='Close Price', color='cyan', linewidth=1.5)
+            if len(hist_df) >= 20:
+                ax_p.plot(hist_df.index, hist_df['Close'].rolling(20).mean(), label='MA20', color='yellow', linestyle='--')
+            if len(hist_df) >= 50:
+                ax_p.plot(hist_df.index, hist_df['Close'].rolling(50).mean(), label='MA50', color='orange', linestyle='--')
+            if len(hist_df) >= 200:
+                ax_p.plot(hist_df.index, hist_df['Close'].rolling(200).mean(), label='MA200', color='magenta', linestyle='--')
+            ax_p.set_ylabel("Price ($)")
+            ax_p.legend(loc='upper left')
+            ax_p.grid(True, alpha=0.3)
+            st.pyplot(fig_p)
+            
+            # 价格层级阶梯展示
+            st.markdown("#### 📊 Price Level Percentage Ladders")
+            ladder_cols = st.columns(6)
+            percentages = [30, 20, 10, 5, -5, -10]
+            for i, p in enumerate(percentages):
+                val = spot * (1 + p / 100.0)
+                with ladder_cols[i]:
+                    st.metric(f"{p:+d}%", f"${val:.2f}")
+
         with tab_gex:
             net_mil = net_gex / 1e6 if net_gex else 0
             st.markdown(f"### 💡 Market Regime Diagnosis: `{net_mil:+.2f} M$ / 1% Move`")
@@ -282,6 +291,12 @@ else:
                 st.success("【Positive Gamma Regime】：Dealers trade mean-reversion. Low volatility and range-bound defensive structure.")
             else:
                 st.warning("【Negative Gamma Regime】：Dealers chase momentum. High volatility breakout or acceleration risk.")
+                
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Spot Price", f"${spot:.2f}")
+            m2.metric("Call Wall (Resistance)", f"${c_wall}" if c_wall else "N/A")
+            m3.metric("Put Wall (Support)", f"${p_wall}" if p_wall else "N/A")
+            m4.metric("Gamma Flip Line", f"${g_flip:.2f}" if g_flip else "N/A")
                 
             if df_gex is not None and not df_gex.empty:
                 st.markdown("### 📊 Dealer Net Gamma Exposure Profile (GEX by Strike)")
