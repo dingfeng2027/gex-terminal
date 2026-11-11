@@ -39,89 +39,40 @@ if "nav_mode" not in st.session_state:
 if "selected_stock" not in st.session_state:
     st.session_state.selected_stock = "NVDA"
 
-# --- 辅助计算函数：Black-Scholes Gamma ---
-def get_bs_gamma(S, K, T, r, sigma):
-    if T <= 0 or sigma <= 0:
-        return 0.0
-    d1 = (np.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
-    return norm.pdf(d1) / (S * sigma * np.sqrt(T))
+if "timeframe" not in st.session_state:
+    st.session_state.timeframe = "1年"
 
 # --- 数据抓取核心函数 ---
-def fetch_gex_and_chain(ticker_symbol):
+@st.cache_data(ttl=300)
+def fetch_stock_data(ticker_symbol, period_str):
     try:
         ticker = yf.Ticker(ticker_symbol)
-        history = ticker.history(period="1y")
-        if history.empty:
-            return None, None, None, None, None, None, None, None, None, None
+        
+        # 映射时间周期
+        p_map = {
+            "1天": "1d",
+            "1个星期": "5d",
+            "1个月": "1mo",
+            "3个月": "3mo",
+            "1年": "1y",
+            "全部": "max"
+        }
+        yf_period = p_map.get(period_str, "1y")
+        
+        hist = ticker.history(period=yf_period)
+        if hist.empty:
+            return None, None, None
             
-        spot_price = history['Close'].iloc[-1]
-        info = ticker.info
+        spot_price = hist['Close'].iloc[-1]
         
-        expirations = ticker.options
-        if not expirations:
-            return spot_price, None, None, None, None, None, None, None, history, info
+        # 获取完整1年历史用于计算均线和高低点
+        hist_1y = ticker.history(period="1y")
+        if hist_1y.empty:
+            hist_1y = hist
             
-        nearest_exp = expirations[0]
-        opt_chain = ticker.option_chain(nearest_exp)
-        
-        all_options = []
-        today = pd.Timestamp.today()
-        r = 0.045
-        
-        for exp in expirations[:5]:
-            t_days = (pd.to_datetime(exp) - today).days
-            if t_days <= 0:
-                continue
-            T = t_days / 365.0
-            opt = ticker.option_chain(exp)
-            
-            calls = opt.calls.copy()
-            calls['is_call'] = True
-            calls['T'] = T
-            puts = opt.puts.copy()
-            puts['is_call'] = False
-            puts['T'] = T
-            all_options.append(calls)
-            all_options.append(puts)
-            
-        if not all_options:
-            return spot_price, None, None, None, None, None, nearest_exp, opt_chain, history, info
-            
-        df = pd.concat(all_options, ignore_index=True)
-        df = df[df['openInterest'] > 0].copy()
-        df = df[(df['strike'] >= spot_price * 0.7) & (df['strike'] <= spot_price * 1.3)]
-        
-        gex_records = []
-        for _, row in df.iterrows():
-            iv = row['impliedVolatility']
-            K = row['strike']
-            T = row['T']
-            oi = row['openInterest']
-            is_call = row['is_call']
-            
-            gamma = get_bs_gamma(spot_price, K, T, r, iv)
-            dollar_gamma = gamma * oi * 100 * (spot_price ** 2) * 0.01
-            if not is_call:
-                dollar_gamma = -dollar_gamma
-                
-            gex_records.append({'strike': K, 'gex': dollar_gamma})
-            
-        df_gex = pd.DataFrame(gex_records)
-        gex_by_strike = df_gex.groupby('strike')['gex'].sum().reset_index().sort_values('strike')
-        
-        calls_above = gex_by_strike[gex_by_strike['strike'] >= spot_price]
-        call_wall = calls_above.loc[calls_above['gex'].idxmax()]['strike'] if not calls_above.empty else None
-        
-        puts_below = gex_by_strike[gex_by_strike['strike'] <= spot_price]
-        put_wall = puts_below.loc[puts_below['gex'].idxmin()]['strike'] if not puts_below.empty else None
-        
-        gex_by_strike['cum_gex'] = gex_by_strike['gex'].cumsum()
-        zero_crossings = np.where(np.diff(np.sign(gex_by_strike['cum_gex'])))[0]
-        gamma_flip = gex_by_strike.iloc[zero_crossings[0]]['strike'] if len(zero_crossings) > 0 else spot_price
-        
-        return spot_price, call_wall, put_wall, gamma_flip, gex_by_strike, gex_by_strike['gex'].sum(), nearest_exp, opt_chain, history, info
+        return spot_price, hist, hist_1y
     except Exception as e:
-        return None, None, None, None, None, None, None, None, None, None
+        return None, None, None
 
 
 # ==========================================
@@ -211,6 +162,7 @@ if st.session_state.nav_mode == "Market Watch":
                     
                 row_cols = st.columns(cols_width)
                 
+                # 点击公司名称，无缝跳转到第二页分析该股票
                 with row_cols[0]:
                     clean_sym = symbol.split('.')[0]
                     if st.button(f"🟡 {clean_sym}", key=f"nav_{symbol}"):
@@ -255,12 +207,12 @@ if st.session_state.nav_mode == "Market Watch":
 
 
 # ==========================================
-# 视图二：Stock Analysis 终端（完美等高 & Trading 212 风格）
+# 视图二：Stock Analysis 终端（完全重新编写的现代化布局）
 # ==========================================
 else:
     c_head1, c_head2 = st.columns([3, 1])
     with c_head1:
-        st.markdown("### 🎯 **Stock Analysis & Options Microstructure Terminal**")
+        st.markdown("### 🎯 **Stock Analysis & Limit Orders Terminal**")
     with c_head2:
         if st.session_state.selected_stock not in st.session_state.watchlist:
             st.session_state.selected_stock = st.session_state.watchlist[0]
@@ -273,168 +225,143 @@ else:
         )
         st.session_state.selected_stock = selected_analysis_stock
         
-    with st.spinner(f"Loading data for {selected_analysis_stock}..."):
-        spot, c_wall, p_wall, g_flip, df_gex, net_gex, nearest_exp, opt_chain, hist_df, info_dict = fetch_gex_and_chain(selected_analysis_stock)
-        
-    if spot is None:
-        st.error(f"Failed to load data for {selected_analysis_stock}.")
+    st.markdown("---")
+    
+    # 获取当前选中股票的数据
+    spot, hist_df, hist_1y = fetch_stock_data(selected_analysis_stock, st.session_state.timeframe)
+    
+    if spot is None or hist_df is None:
+        st.error(f"Failed to load market data for {selected_analysis_stock}.")
     else:
-        sub_tab = st.radio(
-            "Analysis View", 
-            ["📈 Price Chart & Limit Orders", "📊 Gamma & Walls Analysis", f"📋 Options Chain ({nearest_exp})"],
-            horizontal=True,
-            label_visibility="collapsed"
-        )
-        st.markdown("---")
+        # 黄金比例左右两栏：左侧 Trading 212 图表与时间周期按钮，右侧 PRICE LEVEL 阶梯挂单面板
+        col_chart, col_price_level = st.columns([2.7, 1.2])
         
-        if sub_tab == "📈 Price Chart & Limit Orders":
-            # 严格等高左右分栏：左侧 Trading 212 风格图表，右侧 PRICE LEVEL 阶梯面板
-            col_chart, col_price_level = st.columns([2.7, 1.2])
+        with col_chart:
+            st.markdown(f"#### 📈 **{selected_analysis_stock} — Price Trend & Trading 212 Chart**")
             
-            with col_chart:
-                st.markdown(f"#### 📈 **{selected_analysis_stock} — Trading 212 Style Chart**")
+            # 绘制 Trading 212 风格的单根青色走势线+半透明渐变面积图
+            fig_p, ax_p = plt.subplots(figsize=(8, 4.2))
+            
+            ax_p.plot(hist_df.index, hist_df['Close'], label='Close Price', color='#00d2ff', linewidth=2.2)
+            ax_p.fill_between(hist_df.index, hist_df['Close'], hist_df['Close'].min() * 0.95, color='#0284c7', alpha=0.18)
+            
+            ax_p.set_facecolor('#0d111a')
+            fig_p.patch.set_facecolor('#060913')
+            ax_p.tick_params(colors='#9ca3af', labelsize=10)
+            ax_p.xaxis.label.set_color('#9ca3af')
+            ax_p.yaxis.label.set_color('#9ca3af')
+            ax_p.grid(True, color='#1f2937', alpha=0.6, linestyle=':')
+            
+            for spine in ax_p.spines.values():
+                spine.set_color('#374151')
                 
-                fig_p, ax_p = plt.subplots(figsize=(8, 4.4))
-                
-                # Trading 212 经典的青色曲线与半透明面积填充
-                ax_p.plot(hist_df.index, hist_df['Close'], label='Close Price', color='#00d2ff', linewidth=2.0)
-                ax_p.fill_between(hist_df.index, hist_df['Close'], hist_df['Close'].min() * 0.95, color='#0284c7', alpha=0.18)
-                
-                # 均线虚线
-                if len(hist_df) >= 20:
-                    ax_p.plot(hist_df.index, hist_df['Close'].rolling(20).mean(), label='MA20', color='#facc15', linestyle='--', linewidth=1.4)
-                if len(hist_df) >= 50:
-                    ax_p.plot(hist_df.index, hist_df['Close'].rolling(50).mean(), label='MA50', color='#fb923c', linestyle='--', linewidth=1.4)
-                if len(hist_df) >= 200:
-                    ax_p.plot(hist_df.index, hist_df['Close'].rolling(200).mean(), label='MA200', color='#e879f9', linestyle='--', linewidth=1.4)
-                
-                ax_p.set_facecolor('#0d111a')
-                fig_p.patch.set_facecolor('#060913')
-                ax_p.tick_params(colors='#9ca3af', labelsize=10)
-                ax_p.xaxis.label.set_color('#9ca3af')
-                ax_p.yaxis.label.set_color('#9ca3af')
-                ax_p.legend(loc='upper left', fontsize='small', facecolor='#111827', edgecolor='#1f2937', labelcolor='#f3f4f6')
-                ax_p.grid(True, color='#1f2937', alpha=0.6, linestyle=':')
-                
-                for spine in ax_p.spines.values():
-                    spine.set_color('#374151')
-                
-                st.pyplot(fig_p)
+            st.pyplot(fig_p)
+            
+            # 图表下方可点击的时间周期按钮
+            st.markdown("<div style='font-size: 14px; color: #9ca3af; margin-bottom: 4px;'>Timeframe Selection:</div>", unsafe_allow_html=True)
+            tf_cols = st.columns(6)
+            tf_list = ["1天", "1个星期", "1个月", "3个月", "1年", "全部"]
+            
+            for i, tf in enumerate(tf_list):
+                with tf_cols[i]:
+                    btn_type = "primary" if st.session_state.timeframe == tf else "secondary"
+                    if st.button(tf, key=f"tf_{tf}", use_container_width=True):
+                        st.session_state.timeframe = tf
+                        st.rerun()
 
-            with col_price_level:
-                st.markdown("#### 📊 **PRICE LEVEL** (Limit Orders)")
-                st.markdown("<hr style='margin: 0px 0px 8px 0px; border-color: #1f2937;'>", unsafe_allow_html=True)
-                
-                # 精确的上下波动挂单百分比
-                percentages = [20, 15, 12, 10, 8, 6, 0, -6, -8, -10, -12, -15, -20]
-                
-                for p in percentages:
-                    target_price = spot * (1 + p / 100.0)
-                    if p == 0:
-                        st.markdown(f"""
-                        <div style="background-color: #1e3a8a; padding: 7px 12px; border-radius: 5px; margin-bottom: 4px; display: flex; justify-content: space-between; align-items: center; border: 1px solid #3b82f6;">
-                            <span style="color: #facc15; font-weight: bold; font-size: 14px;">CURRENT</span>
-                            <span style="color: #facc15; font-weight: bold; font-size: 15px;">${target_price:.2f}</span>
-                        </div>
-                        """, unsafe_allow_html=True)
-                    else:
-                        label_str = f"{p:+d}%"
-                        st.markdown(f"""
-                        <div style="background-color: #111827; border: 1px solid #1f2937; padding: 5px 12px; border-radius: 4px; margin-bottom: 3px; display: flex; justify-content: space-between; align-items: center;">
-                            <span style="color: {'#34d399' if p > 0 else '#f87171'}; font-weight: bold; font-size: 13px;">{label_str}</span>
-                            <span style="color: #ffffff; font-weight: 500; font-size: 14px;">${target_price:.2f}</span>
-                        </div>
-                        """, unsafe_allow_html=True)
+        with col_price_level:
+            st.markdown("#### 📊 **PRICE LEVEL** (Limit Orders)")
+            st.markdown("<hr style='margin: 0px 0px 8px 0px; border-color: #1f2937;'>", unsafe_allow_html=True)
+            
+            # 要求的上下波动挂单百分比：20%, 15%, 12%, 10%, 8%, 6%, CURRENT, 以及负向
+            percentages = [20, 15, 12, 10, 8, 6, 0, -6, -8, -10, -12, -15, -20]
+            
+            for p in percentages:
+                target_price = spot * (1 + p / 100.0)
+                if p == 0:
+                    st.markdown(f"""
+                    <div style="background-color: #1e3a8a; padding: 7px 12px; border-radius: 5px; margin-bottom: 4px; display: flex; justify-content: space-between; align-items: center; border: 1px solid #3b82f6;">
+                        <span style="color: #facc15; font-weight: bold; font-size: 14px;">CURRENT</span>
+                        <span style="color: #facc15; font-weight: bold; font-size: 15px;">${target_price:.2f}</span>
+                    </div>
+                    """, unsafe_allow_html=True)
+                else:
+                    label_str = f"{p:+d}%"
+                    st.markdown(f"""
+                    <div style="background-color: #111827; border: 1px solid #1f2937; padding: 5px 12px; border-radius: 4px; margin-bottom: 3px; display: flex; justify-content: space-between; align-items: center;">
+                        <span style="color: {'#34d399' if p > 0 else '#f87171'}; font-weight: bold; font-size: 13px;">{label_str}</span>
+                        <span style="color: #ffffff; font-weight: 500; font-size: 14px;">${target_price:.2f}</span>
+                    </div>
+                    """, unsafe_allow_html=True)
 
-            st.markdown("<br>", unsafe_allow_html=True)
-            
-            # ==========================================
-            # 5. KEY DATA 关键数据面板（完整包含你要的所有指标）
-            # ==========================================
-            st.markdown("#### 📌 **KEY DATA**")
-            
-            curr_price = spot
-            prev_price = hist_df['Close'].iloc[-2] if len(hist_df) > 1 else spot
-            chg_val = curr_price - prev_price
-            chg_pct = (chg_val / prev_price) * 100 if prev_price != 0 else 0
-            
-            ma20_val = hist_df['Close'].rolling(20).mean().iloc[-1] if len(hist_df) >= 20 else curr_price
-            ma50_val = hist_df['Close'].rolling(50).mean().iloc[-1] if len(hist_df) >= 50 else curr_price
-            ma200_val = hist_df['Close'].rolling(200).mean().iloc[-1] if len(hist_df) >= 200 else curr_price
-            
-            high_year = hist_df['High'].max()
-            low_year = hist_df['Low'].min()
-            
-            delta_s = hist_df['Close'].diff()
-            gain_s = (delta_s.where(delta_s > 0, 0)).rolling(14).mean().iloc[-1]
-            loss_s = (-delta_s.where(delta_s < 0, 0)).rolling(14).mean().iloc[-1]
-            rsi_v = 100 - (100 / (1 + (gain_s / loss_s))) if loss_s != 0 else 50.0
+        st.markdown("<br>", unsafe_allow_html=True)
+        
+        # ==========================================
+        # 3. KEY DATA 关键数据面板（严格分成 4 个部分纵向排列）
+        # ==========================================
+        st.markdown("#### 📌 **KEY DATA**")
+        
+        curr_price = spot
+        prev_price = hist_1y['Close'].iloc[-2] if len(hist_1y) > 1 else spot
+        chg_val = curr_price - prev_price
+        chg_pct = (chg_val / prev_price) * 100 if prev_price != 0 else 0
+        
+        ma20_val = hist_1y['Close'].rolling(20).mean().iloc[-1] if len(hist_1y) >= 20 else curr_price
+        ma50_val = hist_1y['Close'].rolling(50).mean().iloc[-1] if len(hist_1y) >= 50 else curr_price
+        ma200_val = hist_1y['Close'].rolling(200).mean().iloc[-1] if len(hist_1y) >= 200 else curr_price
+        
+        high_year = hist_1y['High'].max()
+        low_year = hist_1y['Low'].min()
+        
+        delta_s = hist_1y['Close'].diff()
+        gain_s = (delta_s.where(delta_s > 0, 0)).rolling(14).mean().iloc[-1]
+        loss_s = (-delta_s.where(delta_s < 0, 0)).rolling(14).mean().iloc[-1]
+        rsi_v = 100 - (100 / (1 + (gain_s / loss_s))) if loss_s != 0 else 50.0
 
-            st.markdown(f"""
-            <div style="background-color: #111827; border: 1px solid #1f2937; border-radius: 8px; padding: 16px 20px;">
-                <table style="width: 100%; color: #f3f4f6; font-size: 15px; border-collapse: collapse;">
-                    <tr>
-                        <td style="padding: 8px 0; width: 33%;"><strong>今天价格:</strong> &nbsp;<span style="color: #38bdf8; font-weight: bold; font-size: 17px;">${curr_price:.2f}</span></td>
-                        <td style="padding: 8px 0; width: 33%;"><strong>昨天价格:</strong> &nbsp;<span style="font-weight: 600;">${prev_price:.2f}</span></td>
-                        <td style="padding: 8px 0; width: 33%;"><strong>变动幅度:</strong> &nbsp;<span style="color: {'#34d399' if chg_pct >= 0 else '#f87171'}; font-weight: bold;">{chg_pct:+.2f}%</span></td>
-                    </tr>
-                    <tr style="border-top: 1px solid #1f2937;">
-                        <td style="padding: 8px 0;"><strong>变动数值:</strong> &nbsp;<span style="color: {'#34d399' if chg_val >= 0 else '#f87171'}; font-weight: bold;">{chg_val:+.2f}</span></td>
-                        <td style="padding: 8px 0;"><strong>20日均价:</strong> &nbsp;<span style="font-weight: 600;">${ma20_val:.2f}</span></td>
-                        <td style="padding: 8px 0;"><strong>50日均价:</strong> &nbsp;<span style="font-weight: 600;">${ma50_val:.2f}</span></td>
-                    </tr>
-                    <tr style="border-top: 1px solid #1f2937;">
-                        <td style="padding: 8px 0;"><strong>200日均价:</strong> &nbsp;<span style="font-weight: 600;">${ma200_val:.2f}</span></td>
-                        <td style="padding: 8px 0;"><strong>年内最高:</strong> &nbsp;<span style="font-weight: 600;">${high_year:.2f}</span></td>
-                        <td style="padding: 8px 0;"><strong>年内最低:</strong> &nbsp;<span style="font-weight: 600;">${low_year:.2f}</span></td>
-                    </tr>
-                    <tr style="border-top: 1px solid #1f2937;">
-                        <td style="padding: 8px 0;" colspan="3"><strong>购买指数 (RSI 14):</strong> &nbsp;<span style="background-color: {'#065f46' if rsi_v < 70 else '#991b1b'}; color: white; padding: 2px 10px; border-radius: 4px; font-weight: bold;">{rsi_v:.1f}</span></td>
-                    </tr>
-                </table>
-            </div>
-            """, unsafe_allow_html=True)
-
-        elif sub_tab == "📊 Gamma & Walls Analysis":
-            net_mil = net_gex / 1e6 if net_gex else 0
-            st.markdown(f"### 💡 Market Regime: `{net_mil:+.2f} M$ / 1% Move`")
-            if net_mil > 0:
-                st.success("【Positive Gamma Regime】：Dealers trade mean-reversion. Defensive range-bound structure.")
-            else:
-                st.warning("【Negative Gamma Regime】：Dealers chase momentum. High volatility breakout risk.")
-                
-            gm1, gm2, gm3, gm4 = st.columns(4)
-            gm1.metric("Spot", f"${spot:.2f}")
-            gm2.metric("Call Wall", f"${c_wall}" if c_wall else "N/A")
-            gm3.metric("Put Wall", f"${p_wall}" if p_wall else "N/A")
-            gm4.metric("Gamma Flip", f"${g_flip:.2f}" if g_flip else "N/A")
-                
-            if df_gex is not None and not df_gex.empty:
-                fig, ax = plt.subplots(figsize=(10, 4))
-                colors = ['green' if x >= 0 else 'red' for x in df_gex['gex']]
-                ax.bar(df_gex['strike'], df_gex['gex'] / 1e6, color=colors, width=1.0, alpha=0.7)
-                ax.axvline(spot, color='blue', linestyle='--', label=f'Spot: ${spot:.2f}')
-                if c_wall: ax.axvline(c_wall, color='darkgreen', linestyle=':', label=f'Call Wall: ${c_wall}')
-                if p_wall: ax.axvline(p_wall, color='darkred', linestyle=':', label=f'Put Wall: ${p_wall}')
-                ax.set_xlabel("Strike ($)")
-                ax.set_ylabel("Net GEX ($M)")
-                ax.legend(loc='upper right')
-                ax.grid(True, alpha=0.3)
-                st.pyplot(fig)
-                
-        else:
-            st.markdown(f"#### 🟢 Call Options — Expiry: {nearest_exp}")
-            if opt_chain is not None and not opt_chain.calls.empty:
-                calls_df = opt_chain.calls[['strike', 'lastPrice', 'bid', 'ask', 'impliedVolatility', 'volume', 'openInterest']]
-                calls_df.columns = ['Strike', 'Last', 'Bid', 'Ask', 'IV', 'Vol', 'OI']
-                st.dataframe(calls_df, use_container_width=True)
-            else:
-                st.info("No Call options available.")
-                
-            st.markdown(f"#### 🔴 Put Options — Expiry: {nearest_exp}")
-            if opt_chain is not None and not opt_chain.puts.empty:
-                puts_df = opt_chain.puts[['strike', 'lastPrice', 'bid', 'ask', 'impliedVolatility', 'volume', 'openInterest']]
-                puts_df.columns = ['Strike', 'Last', 'Bid', 'Ask', 'IV', 'Vol', 'OI']
-                st.dataframe(puts_df, use_container_width=True)
-            else:
-                st.info("No Put options available.")
+        st.markdown(f"""
+        <div style="background-color: #111827; border: 1px solid #1f2937; border-radius: 8px; padding: 16px 20px;">
+            <!-- 第一部分：4个指标 -->
+            <div style="font-weight: bold; color: #38bdf8; font-size: 14px; margin-bottom: 6px;">1. Price & Change Summary</div>
+            <table style="width: 100%; color: #f3f4f6; font-size: 15px; border-collapse: collapse; margin-bottom: 12px;">
+                <tr>
+                    <td style="padding: 6px 0; width: 25%;"><strong>今天价格:</strong> <span style="color: #38bdf8; font-weight: bold;">${curr_price:.2f}</span></td>
+                    <td style="padding: 6px 0; width: 25%;"><strong>昨天价格:</strong> <span>${prev_price:.2f}</span></td>
+                    <td style="padding: 6px 0; width: 25%;"><strong>变动参数:</strong> <span style="color: {'#34d399' if chg_val >= 0 else '#f87171'}; font-weight: bold;">{chg_val:+.2f}</span></td>
+                    <td style="padding: 6px 0; width: 25%;"><strong>变动指数:</strong> <span style="color: {'#34d399' if chg_pct >= 0 else '#f87171'}; font-weight: bold;">{chg_pct:+.2f}%</span></td>
+                </tr>
+            </table>
+            
+            <hr style="border-color: #1f2937; margin: 8px 0;">
+            
+            <!-- 第二部分：3个指标 (均价) -->
+            <div style="font-weight: bold; color: #38bdf8; font-size: 14px; margin-bottom: 6px;">2. Moving Averages</div>
+            <table style="width: 100%; color: #f3f4f6; font-size: 15px; border-collapse: collapse; margin-bottom: 12px;">
+                <tr>
+                    <td style="padding: 6px 0; width: 33%;"><strong>20日均价:</strong> <span>${ma20_val:.2f}</span></td>
+                    <td style="padding: 6px 0; width: 33%;"><strong>50日均价:</strong> <span>${ma50_val:.2f}</span></td>
+                    <td style="padding: 6px 0; width: 33%;"><strong>200日均价:</strong> <span>${ma200_val:.2f}</span></td>
+                </tr>
+            </table>
+            
+            <hr style="border-color: #1f2937; margin: 8px 0;">
+            
+            <!-- 第三部分：2个指标 (年内高低) -->
+            <div style="font-weight: bold; color: #38bdf8; font-size: 14px; margin-bottom: 6px;">3. 52-Week Range</div>
+            <table style="width: 100%; color: #f3f4f6; font-size: 15px; border-collapse: collapse; margin-bottom: 12px;">
+                <tr>
+                    <td style="padding: 6px 0; width: 50%;"><strong>年内最高:</strong> <span style="color: #34d399; font-weight: bold;">${high_year:.2f}</span></td>
+                    <td style="padding: 6px 0; width: 50%;"><strong>年内最低:</strong> <span style="color: #f87171; font-weight: bold;">${low_year:.2f}</span></td>
+                </tr>
+            </table>
+            
+            <hr style="border-color: #1f2937; margin: 8px 0;">
+            
+            <!-- 第四部分：1个指标 (购买指数) -->
+            <div style="font-weight: bold; color: #38bdf8; font-size: 14px; margin-bottom: 6px;">4. Buying Index</div>
+            <table style="width: 100%; color: #f3f4f6; font-size: 15px; border-collapse: collapse;">
+                <tr>
+                    <td style="padding: 6px 0;"><strong>购买指数 (RSI 14):</strong> &nbsp;<span style="background-color: {'#065f46' if rsi_v < 70 else '#991b1b'}; color: white; padding: 3px 12px; border-radius: 4px; font-weight: bold;">{rsi_v:.1f}</span></td>
+                </tr>
+            </table>
+        </div>
+        """, unsafe_allow_html=True)
