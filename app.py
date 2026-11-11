@@ -227,7 +227,7 @@ else:
                     st.info(f"**CURRENT: ${target_price:.2f}**")
                 else:
                     label_str = f"{p:+d}%"
-                    st.write(`{label_str}  ➔  ${target_price:.2f}`)
+                    st.write(f"{label_str}  ->  ${target_price:.2f}")
 
         st.markdown("---")
         
