@@ -189,4 +189,29 @@ nav1, nav2, nav3, nav4 = st.columns([1.3, 1.3, 1.6, 2.2])
 with nav1:
     if st.button("1. Market Watch", use_container_width=True): st.session_state.page = "Market Watch"; st.rerun()
 with nav2:
-    if st.button("2. Stock
+    if st.button("2. Stock Analysis", use_container_width=True): st.session_state.page = "Stock Analysis"; st.rerun()
+with nav3:
+    if st.button("3. Put & Call Options", use_container_width=True): st.session_state.page = "Options Data"; st.rerun()
+with nav4:
+    st.session_state.use_live_api = st.toggle("启用实时 Yahoo Finance 行情接口", value=st.session_state.use_live_api)
+
+st.markdown("---")
+
+if st.session_state.page == "Market Watch":
+    c_title, c_input, c_add, c_refresh = st.columns([2.0, 2.2, 1.2, 1.3])
+    with c_title: st.markdown("### Market Watch")
+    with c_input: new_ticker = st.text_input("Add Ticker", placeholder="输入代码 (如 SMCI, MRVL)", label_visibility="collapsed").strip().upper()
+    with c_add:
+        if st.button("ADD TICKER", use_container_width=True):
+            if new_ticker and new_ticker not in st.session_state.tickers:
+                st.session_state.tickers.append(new_ticker); st.rerun()
+    with c_refresh:
+        if st.button("UPDATE ALL", use_container_width=True): st.cache_data.clear(); st.rerun()
+
+    st.markdown("💡 **操作提示**：点击表格左侧勾选框或任意一行公司，即可自动进入第 2 页 **Stock Analysis** 查看详细技术面与阶梯价位。")
+
+    rows, gainers, losers = [], 0, 0
+    for sym in st.session_state.tickers:
+        d = fetch_stock_metrics(sym, live=st.session_state.use_live_api)
+        chg = round(d["price"] - d["prev"], 2)
+        pct = round((chg / d["prev
