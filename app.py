@@ -340,7 +340,7 @@ elif st.session_state.page == "Stock Analysis":
         curr = metrics["price"]
         pct_list = [20, 15, 12, 10, 8, 6, 0, -6, -8, -10, -12, -15, -18, -20]
         
-        # 使用完全可控的 HTML 表格来渲染阶梯价位，高度锁定 455 像素，实现像素级完美对齐
+        # 构建完整的 HTML 表格字符串
         html_table = """
         <div style="background-color: #061430; border: 1px solid #2563eb; border-radius: 8px; height: 455px; overflow-y: auto; padding: 4px;">
             <table style="width: 100%; border-collapse: collapse; font-family: 'Segoe UI', sans-serif;">
@@ -385,7 +385,8 @@ elif st.session_state.page == "Stock Analysis":
             </table>
         </div>
         """
-        st.markdown(html_table, unsafe_allow_html=True)
+        # 使用专用的组件正确渲染 HTML，避免标签外露
+        st.components.v1.html(html_table, height=470)
 
     chg = round(metrics["price"] - metrics["prev"], 2)
     pct_chg = round((chg / metrics["prev"]) * 100, 2) if metrics["prev"] else 0.0
