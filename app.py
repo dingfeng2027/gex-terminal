@@ -152,48 +152,4 @@ def fetch_history_df(symbol, period_str, current_price):
     if yf_period == "1d":
         n_days = 2
     elif yf_period == "5d":
-        n_days = 7
-    elif yf_period == "1mo":
-        n_days = 21
-    elif yf_period == "6mo":
-        n_days = 120
-    else:
-        n_days = 250
-        
-    np.random.seed(abs(hash(symbol + period_str)) % 10000)
-    dates = pd.date_range(end=datetime.today(), periods=n_days, freq="B")
-    prices = current_price * np.exp(np.cumsum(np.random.normal(0.0005, 0.015, size=len(dates))))
-    prices = prices * (current_price / prices[-1])
-    df = pd.DataFrame({"Date": dates, "Close": prices})
-    return df
-
-@st.cache_data(ttl=300, show_spinner=False)
-def fetch_options_chain(symbol, spot_price):
-    exps = [(datetime.today() + timedelta(days=7 * i)).strftime("%Y-%m-%d") for i in range(1, 7)]
-    step = 5.0 if spot_price > 100 else 2.5
-    base_strike = round(spot_price / step) * step
-    strikes = [round(base_strike + i * step, 2) for i in range(-8, 9)]
-    calls_rows, puts_rows = [], []
-    for k in strikes:
-        moneyness = (spot_price - k) / spot_price
-        iv = round(0.32 + abs(moneyness) * 0.45, 4)
-        c_p = round(max(0.15, (spot_price - k) + spot_price * iv * 0.08), 2)
-        p_p = round(max(0.15, (k - spot_price) + spot_price * iv * 0.08), 2)
-        c_v = int(max(50, 4500 * np.exp(-12 * moneyness**2)))
-        p_v = int(max(50, 4100 * np.exp(-12 * moneyness**2)))
-        calls_rows.append({"strike": k, "lastPrice": c_p, "bid": round(c_p*0.98, 2), "ask": round(c_p*1.02, 2), "volume": c_v, "openInterest": c_v * 4, "impliedVolatility": iv})
-        puts_rows.append({"strike": k, "lastPrice": p_p, "bid": round(p_p*0.98, 2), "ask": round(p_p*1.02, 2), "volume": p_v, "openInterest": p_v * 4, "impliedVolatility": iv})
-    return exps, exps[0], pd.DataFrame(calls_rows), pd.DataFrame(puts_rows), False
-
-# ---------------------------------------------------------
-# 4. 顶部导航栏
-# ---------------------------------------------------------
-now_str = datetime.now().strftime("%b %d, %Y %H:%M:%S")
-st.markdown(f"""
-<div class="top-bar">
-    <div class="brand-title">📈 CAPITAL QUANT v2</div>
-    <div class="live-badge">● Live &nbsp;|&nbsp; {now_str} &nbsp;|&nbsp; UK Institutional Terminal</div>
-</div>
-""", unsafe_allow_html=True)
-
-nav1, nav2, nav3, nav4
+        n_
