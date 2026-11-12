@@ -324,13 +324,13 @@ elif st.session_state.page == "Stock Analysis":
         # 当前价格右侧带标签的横线
         fig.add_hline(y=metrics["price"], line_dash="dash", line_color="#64748b", line_width=1.5, annotation_text=f"  {metrics['price']:.2f}  ", annotation_position="right", annotation_font=dict(color="#ffffff", size=15), annotation_bgcolor="#334155")
 
-        # 调整图表高度至 540 像素，与右侧梯形价格表格完美对齐
+        # 调整图表高度至 480 像素，与右侧阶梯价位表格底部完美对齐
         fig.update_layout(
             template="plotly_white",
             paper_bgcolor="#ffffff",
             plot_bgcolor="#ffffff",
             xaxis_rangeslider_visible=False,
-            height=540,
+            height=480,
             font=dict(size=18, color="#1e293b"),
             margin=dict(l=10, r=70, t=10, b=10),
             showlegend=False
@@ -351,9 +351,10 @@ elif st.session_state.page == "Stock Analysis":
 
         df_levels = pd.DataFrame(level_rows)
         
-        st.dataframe(df_levels.style.apply(lambda row: ["background-color: #eab308; color: #000000; font-size: 21px; font-weight: 900;"] * 2 if row["LEVEL"] == "CURRENT" else (["background-color: #07193d; color: #4ade80; font-size: 20px; font-weight: 700;"] * 2 if "+" in row["LEVEL"] else ["background-color: #07193d; color: #f87171; font-size: 20px; font-weight: 700;"] * 2), axis=1), use_container_width=True, height=540, row_height=36, hide_index=True)
+        # 将右侧阶梯表格高度精确设置为 480，并调整行高为 32，实现绝对对齐
+        st.dataframe(df_levels.style.apply(lambda row: ["background-color: #eab308; color: #000000; font-size: 21px; font-weight: 900;"] * 2 if row["LEVEL"] == "CURRENT" else (["background-color: #07193d; color: #4ade80; font-size: 20px; font-weight: 700;"] * 2 if "+" in row["LEVEL"] else ["background-color: #07193d; color: #f87171; font-size: 20px; font-weight: 700;"] * 2), axis=1), use_container_width=True, height=480, row_height=32, hide_index=True)
 
-    # 去除了 KEY DATA SUMMARY 英文标题，紧凑上移下方卡片
+    # 紧凑上移下方卡片
     chg = round(metrics["price"] - metrics["prev"], 2)
     pct_chg = round((chg / metrics["prev"]) * 100, 2) if metrics["prev"] else 0.0
     c_col = "#4ade80" if chg >= 0 else "#f87171"
