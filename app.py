@@ -289,30 +289,57 @@ elif st.session_state.page == "Stock Analysis":
     with col_chart:
         st.markdown(f"<div class='card-header'>{sym} — {metrics['name']} | Price & Moving Averages</div>", unsafe_allow_html=True)
         chart_mode = st.radio("图表维度", ["Price Chart (Candles + MA)", "Volume", "RSI (14)"], horizontal=True, label_visibility="collapsed")
+        
         fig = go.Figure()
         if chart_mode == "Price Chart (Candles + MA)":
             fig.add_trace(go.Candlestick(x=hist_df["Date"], open=hist_df["Open"], high=hist_df["High"], low=hist_df["Low"], close=hist_df["Close"], name="Price", increasing_line_color="#22c55e", decreasing_line_color="#ef4444"))
-            fig.add_trace(go.Scatter(x=hist_df["Date"], y=hist_df["MA20"], line=dict(color="#facc15", width=3), name="MA20"))
-            fig.add_trace(go.Scatter(x=hist_df["Date"], y=hist_df["MA50"], line=dict(color="#38bdf8", width=3), name="MA50"))
-            fig.add_trace(go.Scatter(x=hist_df["Date"], y=hist_df["MA200"], line=dict(color="#e879f9", width=3), name="MA200"))
+            fig.add_trace(go.Scatter(x=hist_df["Date"], y=hist_df["MA20"], line=dict(color="#d97706", width=3), name="MA20"))
+            fig.add_trace(go.Scatter(x=hist_df["Date"], y=hist_df["MA50"], line=dict(color="#0284c7", width=3), name="MA50"))
+            fig.add_trace(go.Scatter(x=hist_df["Date"], y=hist_df["MA200"], line=dict(color="#9333ea", width=3), name="MA200"))
+            
+            # 纯白色背景下单条精准水平线标出当前价格
+            fig.add_hline(y=metrics["price"], line_dash="solid", line_color="#dc2626", line_width=2, annotation_text=f"Current: {metrics['price']:.2f}", annotation_position="top right", annotation_font=dict(color="#dc2626", size=16))
+            
         elif chart_mode == "Volume":
-            fig.add_trace(go.Bar(x=hist_df["Date"], y=hist_df["Volume"], marker_color="#3b82f6", name="Volume"))
+            fig.add_trace(go.Bar(x=hist_df["Date"], y=hist_df["Volume"], marker_color="#2563eb", name="Volume"))
         else:
             delta = hist_df["Close"].diff()
             gain = delta.clip(lower=0).rolling(14).mean()
             loss = -delta.clip(upper=0).rolling(14).mean()
             rsi_s = 100 - (100 / (1 + gain / loss))
-            fig.add_trace(go.Scatter(x=hist_df["Date"], y=rsi_s, line=dict(color="#38bdf8", width=3.5), name="RSI (14)"))
-            fig.add_hline(y=70, line_dash="dash", line_color="#ef4444")
-            fig.add_hline(y=30, line_dash="dash", line_color="#22c55e")
-        fig.update_layout(template="plotly_dark", paper_bgcolor="rgba(6, 20, 48, 0.95)", plot_bgcolor="rgba(4, 14, 34, 0.98)", xaxis_rangeslider_visible=False, height=410, font=dict(size=20, color="#ffffff"), margin=dict(l=10, r=10, t=20, b=10), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0))
+            fig.add_trace(go.Scatter(x=hist_df["Date"], y=rsi_s, line=dict(color="#0284c7", width=3.5), name="RSI (14)"))
+            fig.add_hline(y=70, line_dash="dash", line_color="#dc2626")
+            fig.add_hline(y=30, line_dash="dash", line_color="#16a34a")
+
+        # 白色背景设计：纸张和绘图区全白，网格淡灰，文字深色
+        fig.update_layout(
+            template="plotly_white",
+            paper_bgcolor="#ffffff",
+            plot_bgcolor="#ffffff",
+            xaxis_rangeslider_visible=False,
+            height=410,
+            font=dict(size=18, color="#1e293b"),
+            margin=dict(l=10, r=10, t=20, b=10),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(color="#1e293b"))
+        )
+        fig.update_xaxes(gridcolor="#e2e8f0", zerolinecolor="#e2e8f0")
+        fig.update_yaxes(gridcolor="#e2e8f0", zerolinecolor="#e2e8f0")
         st.plotly_chart(fig, use_container_width=True)
 
     with col_levels:
         st.markdown("<div class='card-header'>PRICE LEVEL LADDER</div>", unsafe_allow_html=True)
         curr = metrics["price"]
-        df_levels = pd.DataFrame([{"LEVEL": ("CURRENT" if pct == 0 else f"{pct:+d}%"), "TARGET PRICE": f"{round(curr * (1 + pct / 100.0), 2):.2f}"} for pct in [30, 25, 20, 15, 10, 5, 0, -5, -10, -15, -20, -25, -30]])
-        st.dataframe(df_levels.style.apply(lambda row: ["background-color: #eab308; color: #000000; font-size: 21px; font-weight: 900;"] * 2 if row["LEVEL"] == "CURRENT" else (["background-color: #07193d; color: #4ade80; font-size: 20px; font-weight: 700;"] * 2 if "+" in row["LEVEL"] else ["background-color: #07193d; color: #f87171; font-size: 20px; font-weight: 700;"] * 2), axis=1), use_container_width=True, height=415, row_height=35, hide_index=True)
+        # 按要求设定百分比：20, 15, 12, 10, 8, 6, 0, -6, -8, -10, -12, -15, -20
+        pct_list = [20, 15, 12, 10, 8, 6, 0, -6, -8, -10, -12, -15, -20]
+        level_rows = []
+        for pct in pct_list:
+            label = "CURRENT" if pct == 0 else f"{pct:+d}%"
+            target_p = round(curr * (1 + pct / 100.0), 2)
+            level_rows.append({"LEVEL": label, "TARGET PRICE": f"{target_p:.2f}"})
+
+        df_levels = pd.DataFrame(level_rows)
+        
+        st.dataframe(df_levels.style.apply(lambda row: ["background-color: #eab308; color: #000000; font-size: 21px; font-weight: 900;"] * 2 if row["LEVEL"] == "CURRENT" else (["background-color: #07193d; color: #4ade80; font-size: 20px; font-weight: 700;"] * 2 if "+" in row["LEVEL"] else ["background-color: #07193d; color: #f87171; font-size: 20px; font-weight: 700;"] * 2), axis=1), use_container_width=True, height=540, row_height=36, hide_index=True)
 
     st.markdown("<div class='card-header'>KEY DATA SUMMARY</div>", unsafe_allow_html=True)
     chg = round(metrics["price"] - metrics["prev"], 2)
