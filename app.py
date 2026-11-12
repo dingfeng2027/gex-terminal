@@ -43,11 +43,12 @@ FALLBACK_DATA = {
     "EQQQ.L": {"name": "Invesco EQQQ", "price": 405.70, "prev": 402.15, "ma20": 416.32, "ma50": 415.87, "ma200": 392.14, "pe": None, "high52": 427.63, "low52": 331.20, "rsi": 54.7, "eps": 0.0, "mcap": "ETF"}
 }
 
-for k, v in [("page", "Market Watch"), ("tickers", DEFAULT_TICKERS.copy()), ("selected_ticker", "NVDA"), ("use_live_api", False), ("chart_period", "6个月")]:
+# 默认开启实时接口 (use_live_api 设为 True)，每次打开自动更新
+for k, v in [("page", "Market Watch"), ("tickers", DEFAULT_TICKERS.copy()), ("selected_ticker", "NVDA"), ("use_live_api", True), ("chart_period", "6个月")]:
     if k not in st.session_state:
         st.session_state[k] = v
 
-def fetch_stock_metrics(symbol, live=False):
+def fetch_stock_metrics(symbol, live=True):
     fb = FALLBACK_DATA.get(symbol, {"name": symbol + " Holdings", "price": 150.0, "prev": 148.0, "ma20": 145.0, "ma50": 140.0, "ma200": 130.0, "pe": 25.0, "high52": 180.0, "low52": 100.0, "rsi": 55.0, "eps": 6.0, "mcap": "120B"})
     if not live:
         return fb
@@ -110,7 +111,7 @@ def fetch_options_chain(symbol, spot):
         p_rows.append({"strike": k, "lastPrice": pp, "bid": round(pp*0.98, 2), "ask": round(pp*1.02, 2), "volume": pv, "openInterest": pv*4, "impliedVolatility": iv})
     return exps, pd.DataFrame(c_rows), pd.DataFrame(p_rows)
 
-top_bar_html = "<div class='top-bar'><div class='brand-title'>CAPITAL QUANT v2</div><div class='live-badge'>Live | " + datetime.now().strftime('%b %d, %Y %H:%M:%S') + " | UK Institutional Terminal</div></div>"
+top_bar_html = "<div class='top-bar'><div class='brand-title'>CAPITAL QUANT v2</div><div class='live-badge'>Live (Auto) | " + datetime.now().strftime('%b %d, %Y %H:%M:%S') + " | UK Institutional Terminal</div></div>"
 st.markdown(top_bar_html, unsafe_allow_html=True)
 
 n1, n2, n3, n4 = st.columns([1.3, 1.3, 1.6, 2.2])
@@ -194,7 +195,6 @@ elif st.session_state.page == "Stock Analysis":
                 st.session_state.chart_period = p; st.rerun()
         hdf = fetch_history_df(sym, st.session_state.chart_period, m["price"])
         
-        # 强制计算并锁定 Y 轴上下边界，确保现价虚线和右侧价格标签 100% 精准对齐
         y_min = min(hdf["Close"].min(), m["price"]) * 0.98
         y_max = max(hdf["Close"].max(), m["price"]) * 1.02
 
