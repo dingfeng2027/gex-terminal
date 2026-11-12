@@ -110,7 +110,7 @@ st.markdown("""
         width: 100% !important;
     }
 
-    /* 关键指标小卡片（放大字体） */
+    /* 关键指标小卡片 */
     .metric-box {
         background: #061430;
         border: 1px solid #2563eb;
@@ -387,117 +387,4 @@ if st.session_state.page == "Market Watch":
         if col_name == "COMPANY CODE":
             return f"{base} color: #60a5fa; font-weight: 900;"
         if col_name == "TODAY PRICE":
-            return f"{base} color: #facc15; font-weight: 800;"
-        return f"{base} color: #ffffff;"
-
-    styled_df = df_watch.style.apply(
-        lambda col: [style_watch_table(v, col.name) for v in col], axis=0
-    ).format({
-        "TODAY PRICE": "{:.2f}",
-        "YESTERDAY PRICE": "{:.2f}",
-        "CHANGE": "{:+.2f}",
-        "% CHANGE": "{:+.2f}%",
-        "MA20": "{:.2f}",
-        "MA50": "{:.2f}",
-        "MA200": "{:.2f}",
-        "YEARLY HIGH": "{:.2f}",
-        "YEARLY LOW": "{:.2f}",
-        "RSI (14)": "{:.1f}"
-    })
-
-    event = st.dataframe(
-        styled_df,
-        use_container_width=True,
-        height=500,
-        row_height=40,
-        hide_index=True,
-        on_select="rerun",
-        selection_mode="single-row"
-    )
-
-    if event and event.selection and len(event.selection.rows) > 0:
-        clicked_idx = event.selection.rows[0]
-        clicked_symbol = df_watch.iloc[clicked_idx]["COMPANY CODE"]
-        st.session_state.selected_ticker = clicked_symbol
-        st.session_state.page = "Stock Analysis"
-        st.rerun()
-
-    b_left, b_mid, b_right = st.columns([2.4, 2.2, 2.4])
-    with b_left:
-        if st.button(f"🏛️ OPEN COMPANY ANALYSIS ({st.session_state.selected_ticker}) >", use_container_width=True):
-            st.session_state.page = "Stock Analysis"
-            st.rerun()
-    with b_mid:
-        del_sym = st.selectbox("移除自选股", ["选择要删除的代码..."] + st.session_state.tickers, label_visibility="collapsed")
-        if del_sym != "选择要删除的代码...":
-            st.session_state.tickers.remove(del_sym)
-            st.rerun()
-    with b_right:
-        st.markdown(
-            f"<div style='text-align:right; padding-top:6px; font-size:18px; font-weight:800;'>"
-            f"<span style='color:#4ade80;'>▲ {gainers} Gainers</span> &nbsp;|&nbsp; "
-            f"<span style='color:#f87171;'>● {losers} Losers</span> &nbsp;|&nbsp; "
-            f"Total: {len(df_watch)}</div>",
-            unsafe_allow_html=True
-        )
-
-# =========================================================
-# 页面 2：STOCK ANALYSIS
-# =========================================================
-elif st.session_state.page == "Stock Analysis":
-    top_l, top_sel, top_opt, top_back = st.columns([2.0, 2.4, 2.2, 1.2])
-    with top_l:
-        st.markdown("### 📈 Stock Analysis")
-    with top_sel:
-        current_idx = st.session_state.tickers.index(st.session_state.selected_ticker) if st.session_state.selected_ticker in st.session_state.tickers else 0
-        chosen = st.selectbox("选择分析标的", st.session_state.tickers, index=current_idx, label_visibility="collapsed")
-        if chosen != st.session_state.selected_ticker:
-            st.session_state.selected_ticker = chosen
-            st.rerun()
-    with top_opt:
-        if st.button("⚡ PUT & CALL OPTIONS DATA >", use_container_width=True):
-            st.session_state.page = "Options Data"
-            st.rerun()
-    with top_back:
-        if st.button("← BACK", use_container_width=True):
-            st.session_state.page = "Market Watch"
-            st.rerun()
-
-    sym = st.session_state.selected_ticker
-    metrics = fetch_stock_metrics(sym, live=st.session_state.use_live_api)
-    hist_df = fetch_history_df(sym, metrics["price"])
-
-    col_chart, col_levels = st.columns([2.5, 1.1])
-
-    with col_chart:
-        st.markdown(f"<div class='card-header'>{sym} — {metrics['name']} | Price & Moving Averages</div>", unsafe_allow_html=True)
-        chart_mode = st.radio("图表维度", ["Price Chart (Candles + MA)", "Volume", "RSI (14)"], horizontal=True, label_visibility="collapsed")
-
-        fig = go.Figure()
-        if chart_mode == "Price Chart (Candles + MA)":
-            fig.add_trace(go.Candlestick(
-                x=hist_df["Date"], open=hist_df["Open"], high=hist_df["High"],
-                low=hist_df["Low"], close=hist_df["Close"], name="Price",
-                increasing_line_color="#22c55e", decreasing_line_color="#ef4444"
-            ))
-            fig.add_trace(go.Scatter(x=hist_df["Date"], y=hist_df["MA20"], line=dict(color="#facc15", width=2), name="MA20"))
-            fig.add_trace(go.Scatter(x=hist_df["Date"], y=hist_df["MA50"], line=dict(color="#38bdf8", width=2), name="MA50"))
-            fig.add_trace(go.Scatter(x=hist_df["Date"], y=hist_df["MA200"], line=dict(color="#e879f9", width=2), name="MA200"))
-        elif chart_mode == "Volume":
-            fig.add_trace(go.Bar(x=hist_df["Date"], y=hist_df["Volume"], marker_color="#3b82f6", name="Volume"))
-        else:
-            delta = hist_df["Close"].diff()
-            gain = delta.clip(lower=0).rolling(14).mean()
-            loss = -delta.clip(upper=0).rolling(14).mean()
-            rsi_series = 100 - (100 / (1 + gain / loss))
-            fig.add_trace(go.Scatter(x=hist_df["Date"], y=rsi_series, line=dict(color="#38bdf8", width=2.5), name="RSI (14)"))
-            fig.add_hline(y=70, line_dash="dash", line_color="#ef4444")
-            fig.add_hline(y=30, line_dash="dash", line_color="#22c55e")
-
-        fig.update_layout(
-            template="plotly_dark",
-            paper_bgcolor="rgba(6, 20, 48, 0.95)",
-            plot_bgcolor="rgba(4, 14, 34, 0.98)",
-            xaxis_rangeslider_visible=False,
-            height=410,
-            font=dict(size=16, color="#
+            return f"{base} color: #facc15; font-weight: 8
