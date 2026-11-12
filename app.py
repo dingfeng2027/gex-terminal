@@ -9,15 +9,15 @@ st.set_page_config(page_title="CAPITAL QUANT v2", layout="wide", initial_sidebar
 
 st.markdown("""
 <style>
-    .block-container { padding: 0.6rem 1.1rem 1.2rem 1.1rem !important; max-width: 100% !important; }
+    .block-container { padding: 0.4rem 1rem 1rem 1rem !important; max-width: 100% !important; }
     html, body, [class*="css"] { font-size: 20px !important; }
     .stApp { background: radial-gradient(circle at top center, #0a2558 0%, #040d21 65%, #020712 100%) !important; color: #fff !important; }
     header, footer, #MainMenu {visibility: hidden;}
-    .top-bar { background: linear-gradient(90deg, #061533, #0c275e, #061533); border: 1px solid #2563eb; border-radius: 8px; padding: 12px 20px; display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+    .top-bar { background: linear-gradient(90deg, #061533, #0c275e, #061533); border: 1px solid #2563eb; border-radius: 8px; padding: 10px 18px; display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
     .brand-title { font-size: 28px !important; font-weight: 800; color: #fff; }
     .live-badge { color: #4ade80; font-weight: 700; font-size: 19px !important; }
     .card-header { font-size: 21px !important; font-weight: 800; color: #93c5fd; border-bottom: 1px solid #1e3a8a; padding-bottom: 5px; margin-bottom: 8px; text-transform: uppercase; }
-    div.stButton > button { background: linear-gradient(180deg, #2563eb, #1d4ed8) !important; color: #fff !important; border: 1px solid #60a5fa !important; border-radius: 6px !important; font-size: 19px !important; font-weight: 700 !important; padding: 9px 15px !important; }
+    div.stButton > button { background: linear-gradient(180deg, #2563eb, #1d4ed8) !important; color: #fff !important; border: 1px solid #60a5fa !important; border-radius: 6px !important; font-size: 19px !important; font-weight: 700 !important; padding: 8px 14px !important; }
     .stTextInput input, div[data-baseweb="select"] > div { background-color: #07193d !important; color: #fff !important; border: 1px solid #3b82f6 !important; font-size: 19px !important; }
     div[data-testid="stDataFrame"] { border: 1px solid #2563eb !important; border-radius: 8px !important; background-color: #061430 !important; }
     .metric-box { background: #061430; border: 1px solid #2563eb; border-radius: 8px; padding: 11px 15px; text-align: center; }
@@ -49,7 +49,6 @@ FALLBACK_DATA = {
     "EQQQ.L": {"name": "Invesco EQQQ", "price": 405.70, "prev": 402.15, "ma20": 416.32, "ma50": 415.87, "ma200": 392.14, "pe": None, "high52": 427.63, "low52": 331.20, "rsi": 54.7, "eps": 0.0, "mcap": "ETF"}
 }
 
-# 独立分行初始化 session_state，防止被平板剪贴板截断
 if "page" not in st.session_state:
     st.session_state["page"] = "Market Watch"
 
@@ -136,7 +135,9 @@ if n1.button("1. Market Watch", use_container_width=True): st.session_state.page
 if n2.button("2. Stock Analysis", use_container_width=True): st.session_state.page = "Stock Analysis"; st.rerun()
 if n3.button("3. Put & Call Options", use_container_width=True): st.session_state.page = "Options Data"; st.rerun()
 st.session_state.use_live_api = n4.toggle("启用实时 Yahoo Finance 行情接口", value=st.session_state.use_live_api)
-st.markdown("---")
+
+# 用精细的 HTML 分割线替代带有巨大默认间距的 st.markdown("---")
+st.markdown("<div style='border-bottom: 1px solid #1e3a8a; margin: 6px 0 8px 0;'></div>", unsafe_allow_html=True)
 
 if st.session_state.page == "Market Watch":
     c1, c2, c3, c4 = st.columns([2.0, 2.2, 1.2, 1.3])
@@ -231,82 +232,4 @@ elif st.session_state.page == "Stock Analysis":
         fig.update_yaxes(side="right", gridcolor="#e2e8f0", range=[y_min, y_max])
         st.plotly_chart(fig, use_container_width=True)
 
-    with col_l:
-        st.markdown("<div class='card-header'>PRICE LEVEL LADDER</div>", unsafe_allow_html=True)
-        rows_html = ""
-        for pct in [20, 15, 12, 10, 8, 6, 0, -6, -8, -10, -12, -15, -18, -20]:
-            lbl = "CURRENT" if pct == 0 else (("+" + str(pct)) if pct > 0 else str(pct)) + "%"
-            tp = round(m["price"] * (1 + pct / 100.0), 2)
-            bg = "#eab308" if pct == 0 else "#07193d"
-            fg = "#000" if pct == 0 else ("#4ade80" if pct > 0 else "#f87171")
-            fw = "900" if pct == 0 else "700"
-            rows_html += "<tr style='background:" + bg + ";border-bottom:1px solid #1e3a8a;'><td style='padding:7px 10px;color:" + fg + ";font-weight:" + fw + ";font-size:14px;'>" + lbl + "</td><td style='padding:7px 10px;color:" + fg + ";font-weight:" + fw + ";font-size:14px;text-align:right;'>" + f"{tp:.2f}" + "</td></tr>"
-        html_box = "<div style='background:#061430;border:1px solid #2563eb;border-radius:8px;height:510px;overflow-y:auto;padding:2px;'><table style='width:100%;border-collapse:collapse;font-family:sans-serif;'><thead><tr style='border-bottom:2px solid #1e3a8a;color:#93c5fd;font-size:14px;position:sticky;top:0;background:#061430;'><th style='padding:7px 10px;text-align:left;'>LEVEL</th><th style='padding:7px 10px;text-align:right;'>TARGET PRICE</th></tr></thead><tbody>" + rows_html + "</tbody></table></div>"
-        st.components.v1.html(html_box, height=525)
-
-    chg = round(m["price"] - m["prev"], 2)
-    pct_c = round((chg / m["prev"]) * 100, 2) if m["prev"] else 0.0
-    cc = "#4ade80" if chg >= 0 else "#f87171"
-    k1, k2, k3, k4, k5, k6 = st.columns(6)
-    
-    k1.markdown("<div class='metric-box'><div class='metric-label'>Current Price</div><div class='metric-val'>" + f"{m['price']:.2f}" + " <span style='font-size:19px;color:" + cc + ";'>(" + f"{pct_c:+.2f}" + "%)</span></div></div>", unsafe_allow_html=True)
-    k2.markdown("<div class='metric-box'><div class='metric-label'>52W High</div><div class='metric-val'>" + f"{m['high52']:.2f}" + "</div></div>", unsafe_allow_html=True)
-    k3.markdown("<div class='metric-box'><div class='metric-label'>52W Low</div><div class='metric-val'>" + f"{m['low52']:.2f}" + "</div></div>", unsafe_allow_html=True)
-    k4.markdown("<div class='metric-box'><div class='metric-label'>Market Cap</div><div class='metric-val'>" + str(m['mcap']) + "</div></div>", unsafe_allow_html=True)
-    k5.markdown("<div class='metric-box'><div class='metric-label'>P/E / EPS</div><div class='metric-val'>" + (str(m['pe']) if m['pe'] else 'N/A') + " / " + str(m['eps']) + "</div></div>", unsafe_allow_html=True)
-    k6.markdown("<div class='metric-box'><div class='metric-label'>RSI (14)</div><div class='metric-val' style='color:#38bdf8;'>" + f"{m['rsi']:.1f}" + "</div></div>", unsafe_allow_html=True)
-
-elif st.session_state.page == "Options Data":
-    o1, o2, o3, o4 = st.columns([2.3, 2.1, 1.5, 1.5])
-    o1.markdown("### Put & Call Option Data")
-    idx = st.session_state.tickers.index(st.session_state.selected_ticker) if st.session_state.selected_ticker in st.session_state.tickers else 0
-    chosen_o = o2.selectbox("期权标的", st.session_state.tickers, index=idx, label_visibility="collapsed")
-    if chosen_o != st.session_state.selected_ticker:
-        st.session_state.selected_ticker = chosen_o; st.rerun()
-    if o3.button("← Stock Analysis", use_container_width=True): st.session_state.page = "Stock Analysis"; st.rerun()
-    if o4.button("Market Watch", use_container_width=True): st.session_state.page = "Market Watch"; st.rerun()
-
-    sym = st.session_state.selected_ticker
-    spot = fetch_stock_metrics(sym, live=st.session_state.use_live_api)["price"]
-    exps, cdf, pdf = fetch_options_chain(sym, spot)
-    ec, ic = st.columns([1.6, 3.4])
-    ec.selectbox("到期日 (Expiration)", exps, index=0)
-    ic.markdown("<div style='padding-top:26px;font-size:19px;font-weight:700;color:#93c5fd;'>标的现价: <span style='color:#facc15;font-size:28px;'>$" + f"{spot:.2f}" + "</span> | 🟡 量化仿真期权链</div>", unsafe_allow_html=True)
-
-    cdf["dist"] = (cdf["strike"] - spot).abs()
-    strikes = cdf.nsmallest(15, "dist")["strike"].sort_values().tolist()
-    cf, pf = cdf[cdf["strike"].isin(strikes)].set_index("strike"), pdf[pdf["strike"].isin(strikes)].set_index("strike")
-    coi, poi = int(cf["openInterest"].sum()), int(pf["openInterest"].sum())
-    pcr = round(poi / coi, 2) if coi > 0 else 1.0
-    iv_avg = round(float(cf["impliedVolatility"].mean()) * 100, 1)
-    mp_strike = min(strikes, key=lambda k: sum(max(0, k-s)*cf.loc[s,"openInterest"] + max(0, s-k)*pf.loc[s,"openInterest"] for s in strikes))
-
-    m1, m2, m3, m4 = st.columns(4)
-    m1.markdown("<div class='metric-box'><div class='metric-label'>Put / Call OI Ratio</div><div class='metric-val'>" + f"{pcr:.2f}" + "</div></div>", unsafe_allow_html=True)
-    m2.markdown("<div class='metric-box'><div class='metric-label'>Avg IV</div><div class='metric-val' style='color:#38bdf8;'>" + f"{iv_avg:.1f}" + "%</div></div>", unsafe_allow_html=True)
-    m3.markdown("<div class='metric-box'><div class='metric-label'>Max Pain Strike</div><div class='metric-val' style='color:#facc15;'>$" + f"{mp_strike:.2f}" + "</div></div>", unsafe_allow_html=True)
-    m4.markdown("<div class='metric-box'><div class='metric-label'>Total OI (Call / Put)</div><div class='metric-val'>" + f"{coi:,}" + " / " + f"{poi:,}" + "</div></div>", unsafe_allow_html=True)
-
-    atm = min(strikes, key=lambda x: abs(x - spot))
-    s_rows = []
-    for k in strikes:
-        cr, pr = cf.loc[k], pf.loc[k]
-        s_rows.append({"CALL OI": int(cr["openInterest"]), "CALL VOL": int(cr["volume"]), "CALL IV": f"{cr['impliedVolatility']*100:.1f}%", "CALL BID": float(cr["bid"]), "CALL ASK": float(cr["ask"]), "CALL LAST": float(cr["lastPrice"]), "STRIKE": float(k), "PUT LAST": float(pr["lastPrice"]), "PUT BID": float(pr["bid"]), "PUT ASK": float(pr["ask"]), "PUT IV": f"{pr['impliedVolatility']*100:.1f}%", "PUT VOL": int(pr["volume"]), "PUT OI": int(pr["openInterest"])})
-    dfs = pd.DataFrame(s_rows)
-
-    def style_opt(row):
-        is_atm = (row["STRIKE"] == atm)
-        res = []
-        for col in row.index:
-            if col == "STRIKE": res.append("background:#eab308;color:#000;font-size:19px;font-weight:900;" if is_atm else "background:#1e3a8a;color:#fff;font-size:19px;font-weight:800;")
-            elif col.startswith("CALL"): res.append("background:" + ("#0c2b1e" if row["STRIKE"] < spot else "#07193d") + ";color:#86efac;font-size:18px;font-weight:700;")
-            else: res.append("background:" + ("#2d1218" if row["STRIKE"] > spot else "#07193d") + ";color:#fca5a5;font-size:18px;font-weight:700;")
-        return res
-
-    st.markdown("<div class='card-header'>T-SHAPED STRADDLE OPTIONS CHAIN</div>", unsafe_allow_html=True)
-    st.dataframe(dfs.style.apply(style_opt, axis=1).format({"CALL BID": "{:.2f}", "CALL ASK": "{:.2f}", "CALL LAST": "{:.2f}", "STRIKE": "{:.2f}", "PUT LAST": "{:.2f}", "PUT BID": "{:.2f}", "PUT ASK": "{:.2f}"}), use_container_width=True, height=490, row_height=44, hide_index=True)
-
-    fig_oi = go.Figure([go.Bar(x=dfs["STRIKE"], y=dfs["CALL OI"], name="Call OI", marker_color="#22c55e"), go.Bar(x=dfs["STRIKE"], y=dfs["PUT OI"], name="Put OI", marker_color="#ef4444")])
-    fig_oi.add_vline(x=spot, line_dash="dash", line_color="#facc15", annotation_text="Spot: " + f"{spot:.2f}")
-    fig_oi.update_layout(barmode="group", template="plotly_dark", paper_bgcolor="rgba(6,20,48,0.95)", plot_bgcolor="rgba(4,14,34,0.98)", height=310, font=dict(size=16, color="#fff"), margin=dict(l=10, r=10, t=20, b=10))
-    st.plotly_chart(fig_oi, use_container_width=True)
+    with col_
