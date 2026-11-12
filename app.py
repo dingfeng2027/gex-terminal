@@ -242,7 +242,6 @@ elif st.session_state.page == "Stock Analysis":
                 st.rerun()
         hdf = fetch_history_df(sym, st.session_state.chart_period, m["price"])
         
-        # 紧凑型自适应 Y 轴：严格贴合曲线实际最低点与最高点，不留多余空白
         c_min = hdf["Close"].min()
         c_max = hdf["Close"].max()
         margin = (c_max - c_min) * 0.05 if c_max != c_min else c_min * 0.01
@@ -270,8 +269,9 @@ elif st.session_state.page == "Stock Analysis":
             bg = "#eab308" if pct == 0 else "#07193d"
             fg = "#000" if pct == 0 else ("#4ade80" if pct > 0 else "#f87171")
             fw = "900" if pct == 0 else "700"
-            rows_html += "<tr style='background:" + bg + ";border-bottom:1px solid #1e3a8a;'><td style='padding:7px 10px;color:" + fg + ";font-weight:" + fw + ";font-size:14px;'>" + lbl + "</td><td style='padding:7px 10px;color:" + fg + ";font-weight:" + fw + ";font-size:14px;text-align:right;'>" + f"{tp:.2f}" + "</td></tr>"
-        html_box = "<div style='background:#061430;border:1px solid #2563eb;border-radius:8px;height:510px;overflow-y:auto;padding:2px;'><table style='width:100%;border-collapse:collapse;font-family:sans-serif;'><thead><tr style='border-bottom:2px solid #1e3a8a;color:#93c5fd;font-size:14px;position:sticky;top:0;background:#061430;'><th style='padding:7px 10px;text-align:left;'>LEVEL</th><th style='padding:7px 10px;text-align:right;'>TARGET PRICE</th></tr></thead><tbody>" + rows_html + "</tbody></table></div>"
+            rows_html += "<tr style='background:" + bg + ";border-bottom:1px solid #1e3a8a;'><td style='padding:9px 10px;color:" + fg + ";font-weight:" + fw + ";font-size:14px;'>" + lbl + "</td><td style='padding:9px 10px;color:" + fg + ";font-weight:" + fw + ";font-size:14px;text-align:right;'>" + f"{tp:.2f}" + "</td></tr>"
+        # 增加 padding-top 让整个表格阶梯列表在视觉上往下移一些，居中对齐
+        html_box = "<div style='background:#061430;border:1px solid #2563eb;border-radius:8px;height:510px;overflow-y:auto;padding:12px 2px 2px 2px;'><table style='width:100%;border-collapse:collapse;font-family:sans-serif;'><thead><tr style='border-bottom:2px solid #1e3a8a;color:#93c5fd;font-size:14px;position:sticky;top:0;background:#061430;'><th style='padding:8px 10px;text-align:left;'>LEVEL</th><th style='padding:8px 10px;text-align:right;'>TARGET PRICE</th></tr></thead><tbody>" + rows_html + "</tbody></table></div>"
         st.components.v1.html(html_box, height=525)
 
     chg = round(m["price"] - m["prev"], 2)
@@ -344,7 +344,7 @@ elif st.session_state.page == "Options Data":
                 res.append("background:" + ("#2d1218" if row["STRIKE"] > spot else "#07193d") + ";color:#fca5a5;font-size:18px;font-weight:700;")
         return res
 
-    st.markdown("<div class='card-header'>T-SHAPPDF STRADDLE OPTIONS CHAIN</div>", unsafe_allow_html=True)
+    st.markdown("<div class='card-header'>T-SHAPED STRADDLE OPTIONS CHAIN</div>", unsafe_allow_html=True)
     st.dataframe(dfs.style.apply(style_opt, axis=1).format({"CALL BID": "{:.2f}", "CALL ASK": "{:.2f}", "CALL LAST": "{:.2f}", "STRIKE": "{:.2f}", "PUT LAST": "{:.2f}", "PUT BID": "{:.2f}", "PUT ASK": "{:.2f}"}), use_container_width=True, height=490, row_height=44, hide_index=True)
 
     fig_oi = go.Figure([go.Bar(x=dfs["STRIKE"], y=dfs["CALL OI"], name="Call OI", marker_color="#22c55e"), go.Bar(x=dfs["STRIKE"], y=dfs["PUT OI"], name="Put OI", marker_color="#ef4444")])
