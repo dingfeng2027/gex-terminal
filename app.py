@@ -29,7 +29,7 @@ st.markdown("""
         background: linear-gradient(90deg, #061533 0%, #0c275e 50%, #061533 100%);
         border: 1px solid #2563eb; border-radius: 8px; padding: 14px 22px;
         display: flex; justify-content: space-between; align-items: center;
-        margin-bottom: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.6); width: 100%;
+        margin-bottom: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.6); width: 100%;
     }
     .brand-title { font-size: 30px !important; font-weight: 800; letter-spacing: 1px; color: #ffffff; }
     .live-badge { color: #4ade80; font-weight: 700; font-size: 20px !important; }
@@ -58,7 +58,7 @@ st.markdown("""
     }
     .metric-box {
         background: #061430; border: 1px solid #2563eb; border-radius: 8px;
-        padding: 14px 18px; text-align: center;
+        padding: 12px 16px; text-align: center;
     }
     .metric-label { font-size: 19px !important; color: #93c5fd; margin-bottom: 4px; font-weight: 700; }
     .metric-val { font-size: 30px !important; font-weight: 900; color: #ffffff; }
@@ -148,7 +148,6 @@ def fetch_history_df(symbol, period_str, current_price):
             return hist
     except Exception:
         pass
-    # 仿真降级数据
     n_days = 2 if yf_period == "1d" else (7 if yf_period == "5d" else (21 if yf_period == "1mo" else (120 if yf_period == "6mo" else 250)))
     np.random.seed(abs(hash(symbol + period_str)) % 10000)
     dates = pd.date_range(end=datetime.today(), periods=n_days, freq="B")
@@ -325,18 +324,19 @@ elif st.session_state.page == "Stock Analysis":
         # 当前价格右侧带标签的横线
         fig.add_hline(y=metrics["price"], line_dash="dash", line_color="#64748b", line_width=1.5, annotation_text=f"  {metrics['price']:.2f}  ", annotation_position="right", annotation_font=dict(color="#ffffff", size=15), annotation_bgcolor="#334155")
 
+        # 调整图表高度至 540 像素，与右侧梯形价格表格完美对齐
         fig.update_layout(
             template="plotly_white",
             paper_bgcolor="#ffffff",
             plot_bgcolor="#ffffff",
             xaxis_rangeslider_visible=False,
-            height=390,
+            height=540,
             font=dict(size=18, color="#1e293b"),
             margin=dict(l=10, r=70, t=10, b=10),
             showlegend=False
         )
         fig.update_xaxes(gridcolor="#e2e8f0", zerolinecolor="#e2e8f0")
-        fig.update_yaxes(gridcolor="#e2e8f0", zerolinecolor="#e2e8f0", side="right") # 右侧显示真实价格坐标
+        fig.update_yaxes(gridcolor="#e2e8f0", zerolinecolor="#e2e8f0", side="right")
         st.plotly_chart(fig, use_container_width=True)
 
     with col_levels:
@@ -353,7 +353,7 @@ elif st.session_state.page == "Stock Analysis":
         
         st.dataframe(df_levels.style.apply(lambda row: ["background-color: #eab308; color: #000000; font-size: 21px; font-weight: 900;"] * 2 if row["LEVEL"] == "CURRENT" else (["background-color: #07193d; color: #4ade80; font-size: 20px; font-weight: 700;"] * 2 if "+" in row["LEVEL"] else ["background-color: #07193d; color: #f87171; font-size: 20px; font-weight: 700;"] * 2), axis=1), use_container_width=True, height=540, row_height=36, hide_index=True)
 
-    st.markdown("<div class='card-header'>KEY DATA SUMMARY</div>", unsafe_allow_html=True)
+    # 去除了 KEY DATA SUMMARY 英文标题，紧凑上移下方卡片
     chg = round(metrics["price"] - metrics["prev"], 2)
     pct_chg = round((chg / metrics["prev"]) * 100, 2) if metrics["prev"] else 0.0
     c_col = "#4ade80" if chg >= 0 else "#f87171"
