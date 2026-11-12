@@ -121,4 +121,144 @@ def fetch_stock_metrics(symbol, live=False):
             return fb
         close = hist["Close"]
         price, prev = round(float(close.iloc[-1]), 2), round(float(close.iloc[-2]), 2)
-        ma20, ma
+        ma20, ma50, ma200 = round(float(close.tail(20).mean()), 2), round(float(close.tail(50).mean()), 2), round(float(close.tail(200).mean()), 2)
+        high52, low52 = round(float(hist["High"].max()), 2), round(float(hist["Low"].min()), 2)
+        rsi = compute_rsi(close, 14)
+        info = t.info or {}
+        pe = info.get("trailingPE")
+        pe = round(float(pe), 2) if (pe and pd.notna(pe)) else fb["pe"]
+        eps = info.get("trailingEps")
+        eps = round(float(eps), 2) if (eps and pd.notna(eps)) else fb["eps"]
+        name = info.get("shortName") or fb["name"]
+        mcap_raw = info.get("marketCap")
+        mcap = f"{mcap_raw/1e12:.2f}T" if (mcap_raw and mcap_raw >= 1e12) else (f"{mcap_raw/1e9:.1f}B" if mcap_raw else fb["mcap"])
+        return {"name": name, "price": price, "prev": prev, "ma20": ma20, "ma50": ma50, "ma200": ma200, "pe": pe, "high52": high52, "low52": low52, "rsi": rsi, "eps": eps, "mcap": mcap}
+    except Exception:
+        return fb
+
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_history_df(symbol, period_str, current_price):
+    period_map = {"1日": "1d", "1星期": "5d", "3星期": "1mo", "1个月": "1mo", "6个月": "6mo", "1年": "1y", "全部": "max"}
+    yf_period = period_map.get(period_str, "6mo")
+    try:
+        t = yf.Ticker(symbol)
+        hist = t.history(period=yf_period)
+        if not hist.empty:
+            hist = hist.reset_index()
+            return hist
+    except Exception:
+        pass
+    
+    if yf_period == "1d":
+        n_days = 2
+    elif yf_period == "5d":
+        n_days = 7
+    elif yf_period == "1mo":
+        n_days = 21
+    elif yf_period == "6mo":
+        n_days = 120
+    else:
+        n_days = 250
+        
+    np.random.seed(abs(hash(symbol + period_str)) % 10000)
+    dates = pd.date_range(end=datetime.today(), periods=n_days, freq="B")
+    prices = current_price * np.exp(np.cumsum(np.random.normal(0.0005, 0.015, size=len(dates))))
+    prices = prices * (current_price / prices[-1])
+    df = pd.DataFrame({"Date": dates, "Close": prices})
+    return df
+
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_options_chain(symbol, spot_price):
+    exps = [(datetime.today() + timedelta(days=7 * i)).strftime("%Y-%m-%d") for i in range(1, 7)]
+    step = 5.0 if spot_price > 100 else 2.5
+    base_strike = round(spot_price / step) * step
+    strikes = [round(base_strike + i * step, 2) for i in range(-8, 9)]
+    calls_rows, puts_rows = [], []
+    for k in strikes:
+        moneyness = (spot_price - k) / spot_price
+        iv = round(0.32 + abs(moneyness) * 0.45, 4)
+        c_p = round(max(0.15, (spot_price - k) + spot_price * iv * 0.08), 2)
+        p_p = round(max(0.15, (k - spot_price) + spot_price * iv * 0.08), 2)
+        c_v = int(max(50, 4500 * np.exp(-12 * moneyness**2)))
+        p_v = int(max(50, 4100 * np.exp(-12 * moneyness**2)))
+        calls_rows.append({"strike": k, "lastPrice": c_p, "bid": round(c_p*0.98, 2), "ask": round(c_p*1.02, 2), "volume": c_v, "openInterest": c_v * 4, "impliedVolatility": iv})
+        puts_rows.append({"strike": k, "lastPrice": p_p, "bid": round(p_p*0.98, 2), "ask": round(p_p*1.02, 2), "volume": p_v, "openInterest": p_v * 4, "impliedVolatility": iv})
+    return exps, exps[0], pd.DataFrame(calls_rows), pd.DataFrame(puts_rows), False
+
+# ---------------------------------------------------------
+# 4. 顶部导航栏
+# ---------------------------------------------------------
+now_str = datetime.now().strftime("%b %d, %Y %H:%M:%S")
+st.markdown(f"""
+<div class="top-bar">
+    <div class="brand-title">📈 CAPITAL QUANT v2</div>
+    <div class="live-badge">● Live &nbsp;|&nbsp; {now_str} &nbsp;|&nbsp; UK Institutional Terminal</div>
+</div>
+""", unsafe_allow_html=True)
+
+nav1, nav2, nav3, nav4 = st.columns([1.3, 1.3, 1.6, 2.2])
+with nav1:
+    if st.button("📊 1. Market Watch", use_container_width=True): st.session_state.page = "Market Watch"; st.rerun()
+with nav2:
+    if st.button("📈 2. Stock Analysis", use_container_width=True): st.session_state.page = "Stock Analysis"; st.rerun()
+with nav3:
+    if st.button("⚡ 3. Put & Call Options", use_container_width=True): st.session_state.page = "Options Data"; st.rerun()
+with nav4:
+    st.session_state.use_live_api = st.toggle("启用实时 Yahoo Finance 行情接口", value=st.session_state.use_live_api)
+
+st.markdown("---")
+
+# =========================================================
+# 页面 1：MARKET WATCH
+# =========================================================
+if st.session_state.page == "Market Watch":
+    c_title, c_input, c_add, c_refresh = st.columns([2.0, 2.2, 1.2, 1.3])
+    with c_title: st.markdown("### 🖥️ Market Watch")
+    with c_input: new_ticker = st.text_input("Add Ticker", placeholder="输入代码 (如 SMCI, MRVL)", label_visibility="collapsed").strip().upper()
+    with c_add:
+        if st.button("➕ ADD TICKER", use_container_width=True):
+            if new_ticker and new_ticker not in st.session_state.tickers:
+                st.session_state.tickers.append(new_ticker); st.rerun()
+    with c_refresh:
+        if st.button("🔄 UPDATE ALL", use_container_width=True): st.cache_data.clear(); st.rerun()
+
+    st.markdown("💡 **操作提示**：点击表格左侧勾选框或任意一行公司，即可自动进入第 2 页 **Stock Analysis** 查看详细技术面与阶梯价位。")
+
+    rows, gainers, losers = [], 0, 0
+    for sym in st.session_state.tickers:
+        d = fetch_stock_metrics(sym, live=st.session_state.use_live_api)
+        chg = round(d["price"] - d["prev"], 2)
+        pct = round((chg / d["prev"]) * 100, 2) if d["prev"] else 0.0
+        if chg > 0: gainers += 1
+        elif chg < 0: losers += 1
+        rows.append({
+            "COMPANY CODE": sym,
+            "TODAY PRICE": d["price"],
+            "YESTERDAY PRICE": d["prev"],
+            "CHANGE": chg,
+            "% CHANGE": pct,
+            "MA20": d["ma20"],
+            "MA50": d["ma50"],
+            "MA200": d["ma200"],
+            "PE RATE": f"{d['pe']:.2f}" if d["pe"] else "None",
+            "YEARLY HIGH": d["high52"],
+            "YEARLY LOW": d["low52"],
+            "RSI (14)": d["rsi"]
+        })
+
+    df_watch = pd.DataFrame(rows)
+
+    def style_watch_table(val, col_name):
+        base = "background-color: #07193d; font-size: 22px; font-weight: 700;"
+        if col_name in ["CHANGE", "% CHANGE"]:
+            color = "#4ade80" if val > 0 else ("#f87171" if val < 0 else "#ffffff")
+            return base + " color: " + color + ";"
+        if col_name == "RSI (14)":
+            if val >= 70: return "background-color: #dc2626; color: #ffffff; font-size: 22px; font-weight: 800;"
+            elif val <= 40: return "background-color: #eab308; color: #000000; font-size: 22px; font-weight: 800;"
+            else: return "background-color: #16a34a; color: #ffffff; font-size: 22px; font-weight: 800;"
+        if col_name == "COMPANY CODE": return base + " color: #60a5fa; font-weight: 900;"
+        if col_name == "TODAY PRICE": return base + " color: #facc15; font-weight: 800;"
+        return base + " color: #ffffff;"
+
+    styled_df = df_
