@@ -137,29 +137,24 @@ def fetch_stock_metrics(symbol, live=False):
         return fb
 
 @st.cache_data(ttl=300, show_spinner=False)
-def fetch_history_df(symbol, current_price):
+def fetch_history_df(symbol, period_str, current_price):
+    period_map = {"1日": "1d", "1星期": "5d", "3星期": "1mo", "1个月": "1mo", "6个月": "6mo", "1年": "1y", "全部": "max"}
+    yf_period = period_map.get(period_str, "6mo")
     try:
         t = yf.Ticker(symbol)
-        hist = t.history(period="6mo")
-        if not hist.empty and len(hist) > 20:
+        hist = t.history(period=yf_period)
+        if not hist.empty:
             hist = hist.reset_index()
-            hist["MA20"] = hist["Close"].rolling(20, min_periods=1).mean()
-            hist["MA50"] = hist["Close"].rolling(50, min_periods=1).mean()
-            hist["MA200"] = hist["Close"].rolling(200, min_periods=1).mean()
             return hist
     except Exception:
         pass
-    np.random.seed(abs(hash(symbol)) % 10000)
-    dates = pd.date_range(end=datetime.today(), periods=120, freq="B")
-    prices = current_price * np.exp(np.cumsum(np.random.normal(0.001, 0.02, size=len(dates))))
+    # 仿真降级数据
+    n_days = 2 if yf_period == "1d" else (7 if yf_period == "5d" else (21 if yf_period == "1mo" else (120 if yf_period == "6mo" else 250)))
+    np.random.seed(abs(hash(symbol + period_str)) % 10000)
+    dates = pd.date_range(end=datetime.today(), periods=n_days, freq="B")
+    prices = current_price * np.exp(np.cumsum(np.random.normal(0.0005, 0.015, size=len(dates))))
     prices = prices * (current_price / prices[-1])
-    df = pd.DataFrame({
-        "Date": dates, "Open": prices * 0.99, "High": prices * 1.01,
-        "Low": prices * 0.98, "Close": prices, "Volume": np.random.randint(15_000_000, 65_000_000, len(dates))
-    })
-    df["MA20"] = df["Close"].rolling(20, min_periods=1).mean()
-    df["MA50"] = df["Close"].rolling(50, min_periods=1).mean()
-    df["MA200"] = df["Close"].rolling(100, min_periods=1).mean()
+    df = pd.DataFrame({"Date": dates, "Close": prices})
     return df
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -297,47 +292,51 @@ elif st.session_state.page == "Stock Analysis":
 
     sym = st.session_state.selected_ticker
     metrics = fetch_stock_metrics(sym, live=st.session_state.use_live_api)
-    hist_df = fetch_history_df(sym, metrics["price"])
 
     col_chart, col_levels = st.columns([2.5, 1.1])
     with col_chart:
-        st.markdown(f"<div class='card-header'>{sym} — {metrics['name']} | Price & Moving Averages</div>", unsafe_allow_html=True)
-        chart_mode = st.radio("图表维度", ["Price Chart (Candles + MA)", "Volume", "RSI (14)"], horizontal=True, label_visibility="collapsed")
+        st.markdown(f"<div class='card-header'>{sym} — {metrics['name']} | Price Chart & Historical Range</div>", unsafe_allow_html=True)
+        
+        # 时间周期选择按钮
+        p1, p2, p3, p4, p5, p6, p7 = st.columns(7)
+        if "chart_period" not in st.session_state: st.session_state.chart_period = "6个月"
+        
+        with p1: 
+            if st.button("1日", use_container_width=True): st.session_state.chart_period = "1日"; st.rerun()
+        with p2: 
+            if st.button("1星期", use_container_width=True): st.session_state.chart_period = "1星期"; st.rerun()
+        with p3: 
+            if st.button("3星期", use_container_width=True): st.session_state.chart_period = "3星期"; st.rerun()
+        with p4: 
+            if st.button("1个月", use_container_width=True): st.session_state.chart_period = "1个月"; st.rerun()
+        with p5: 
+            if st.button("6个月", use_container_width=True): st.session_state.chart_period = "6个月"; st.rerun()
+        with p6: 
+            if st.button("1年", use_container_width=True): st.session_state.chart_period = "1年"; st.rerun()
+        with p7: 
+            if st.button("全部", use_container_width=True): st.session_state.chart_period = "全部"; st.rerun()
+
+        hist_df = fetch_history_df(sym, st.session_state.chart_period, metrics["price"])
         
         fig = go.Figure()
-        if chart_mode == "Price Chart (Candles + MA)":
-            fig.add_trace(go.Candlestick(x=hist_df["Date"], open=hist_df["Open"], high=hist_df["High"], low=hist_df["Low"], close=hist_df["Close"], name="Price", increasing_line_color="#22c55e", decreasing_line_color="#ef4444"))
-            fig.add_trace(go.Scatter(x=hist_df["Date"], y=hist_df["MA20"], line=dict(color="#d97706", width=3), name="MA20"))
-            fig.add_trace(go.Scatter(x=hist_df["Date"], y=hist_df["MA50"], line=dict(color="#0284c7", width=3), name="MA50"))
-            fig.add_trace(go.Scatter(x=hist_df["Date"], y=hist_df["MA200"], line=dict(color="#9333ea", width=3), name="MA200"))
-            
-            # 白色背景下右侧带价格标签的当前价格横线
-            fig.add_hline(y=metrics["price"], line_dash="dash", line_color="#64748b", line_width=1.5, annotation_text=f"  {metrics['price']:.2f}  ", annotation_position="right", annotation_font=dict(color="#ffffff", size=15), annotation_bgcolor="#334155")
-            
-        elif chart_mode == "Volume":
-            fig.add_trace(go.Bar(x=hist_df["Date"], y=hist_df["Volume"], marker_color="#2563eb", name="Volume"))
-        else:
-            delta = hist_df["Close"].diff()
-            gain = delta.clip(lower=0).rolling(14).mean()
-            loss = -delta.clip(upper=0).rolling(14).mean()
-            rsi_s = 100 - (100 / (1 + gain / loss))
-            fig.add_trace(go.Scatter(x=hist_df["Date"], y=rsi_s, line=dict(color="#0284c7", width=3.5), name="RSI (14)"))
-            fig.add_hline(y=70, line_dash="dash", line_color="#dc2626")
-            fig.add_hline(y=30, line_dash="dash", line_color="#16a34a")
+        # 纯净蓝色股价折线图
+        fig.add_trace(go.Scatter(x=hist_df["Date"], y=hist_df["Close"], mode="lines", line=dict(color="#0284c7", width=2.5), name="Price"))
+        
+        # 当前价格右侧带标签的横线
+        fig.add_hline(y=metrics["price"], line_dash="dash", line_color="#64748b", line_width=1.5, annotation_text=f"  {metrics['price']:.2f}  ", annotation_position="right", annotation_font=dict(color="#ffffff", size=15), annotation_bgcolor="#334155")
 
-        # 完美模拟标准证券软件的白底价格坐标显示
         fig.update_layout(
             template="plotly_white",
             paper_bgcolor="#ffffff",
             plot_bgcolor="#ffffff",
             xaxis_rangeslider_visible=False,
-            height=410,
+            height=390,
             font=dict(size=18, color="#1e293b"),
-            margin=dict(l=10, r=70, t=20, b=10),
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(color="#1e293b"))
+            margin=dict(l=10, r=70, t=10, b=10),
+            showlegend=False
         )
         fig.update_xaxes(gridcolor="#e2e8f0", zerolinecolor="#e2e8f0")
-        fig.update_yaxes(gridcolor="#e2e8f0", zerolinecolor="#e2e8f0", side="right")
+        fig.update_yaxes(gridcolor="#e2e8f0", zerolinecolor="#e2e8f0", side="right") # 右侧显示真实价格坐标
         st.plotly_chart(fig, use_container_width=True)
 
     with col_levels:
