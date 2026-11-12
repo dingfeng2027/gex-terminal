@@ -227,4 +227,24 @@ if st.session_state.page == "Market Watch":
         if chg > 0: gainers += 1
         elif chg < 0: losers += 1
         rows.append({
-            "COMPANY CODE":
+            "COMPANY CODE": sym,
+            "TODAY PRICE": d["price"],
+            "YESTERDAY PRICE": d["prev"],
+            "CHANGE": chg,
+            "% CHANGE": pct,
+            "MA20": d["ma20"],
+            "MA50": d["ma50"],
+            "MA200": d["ma200"],
+            "PE RATE": f"{d['pe']:.2f}" if d["pe"] else "None",
+            "YEARLY HIGH": d["high52"],
+            "YEARLY LOW": d["low52"],
+            "RSI (14)": d["rsi"]
+        })
+
+    df_watch = pd.DataFrame(rows)
+
+    def style_watch_table(val, col_name):
+        base = "background-color: #07193d; font-size: 22px; font-weight: 700;"
+        if col_name in ["CHANGE", "% CHANGE"]:
+            color = "#4ade80" if val > 0 else ("#f87171" if val < 0 else "#ffffff")
+            return f"{base} color: {
