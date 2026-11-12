@@ -121,29 +121,4 @@ def fetch_stock_metrics(symbol, live=False):
             return fb
         close = hist["Close"]
         price, prev = round(float(close.iloc[-1]), 2), round(float(close.iloc[-2]), 2)
-        ma20, ma50, ma200 = round(float(close.tail(20).mean()), 2), round(float(close.tail(50).mean()), 2), round(float(close.tail(200).mean()), 2)
-        high52, low52 = round(float(hist["High"].max()), 2), round(float(hist["Low"].min()), 2)
-        rsi = compute_rsi(close, 14)
-        info = t.info or {}
-        pe = info.get("trailingPE")
-        pe = round(float(pe), 2) if (pe and pd.notna(pe)) else fb["pe"]
-        eps = info.get("trailingEps")
-        eps = round(float(eps), 2) if (eps and pd.notna(eps)) else fb["eps"]
-        name = info.get("shortName") or fb["name"]
-        mcap_raw = info.get("marketCap")
-        mcap = f"{mcap_raw/1e12:.2f}T" if (mcap_raw and mcap_raw >= 1e12) else (f"{mcap_raw/1e9:.1f}B" if mcap_raw else fb["mcap"])
-        return {"name": name, "price": price, "prev": prev, "ma20": ma20, "ma50": ma50, "ma200": ma200, "pe": pe, "high52": high52, "low52": low52, "rsi": rsi, "eps": eps, "mcap": mcap}
-    except Exception:
-        return fb
-
-@st.cache_data(ttl=300, show_spinner=False)
-def fetch_history_df(symbol, period_str, current_price):
-    period_map = {"1日": "1d", "1星期": "5d", "3星期": "1mo", "1个月": "1mo", "6个月": "6mo", "1年": "1y", "全部": "max"}
-    yf_period = period_map.get(period_str, "6mo")
-    try:
-        t = yf.Ticker(symbol)
-        hist = t.history(period=yf_period)
-        if not hist.empty:
-            hist = hist.reset_index()
-            return hist
-    except Exception
+        ma20, ma
