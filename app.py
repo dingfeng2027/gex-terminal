@@ -17,7 +17,6 @@ st.markdown("""
         padding-left: 1.2rem !important; padding-right: 1.2rem !important;
         max-width: 100% !important;
     }
-    /* 全局基础字体和数字放大至 22px */
     html, body, [class*="css"] { font-size: 22px !important; }
     .stApp {
         background: radial-gradient(circle at top center, #0a2558 0%, #040d21 65%, #020712 100%) !important;
@@ -214,4 +213,52 @@ if st.session_state.page == "Market Watch":
     with c_refresh:
         if st.button("🔄 UPDATE ALL", use_container_width=True): st.cache_data.clear(); st.rerun()
 
-    st.markdown("<div style='font-size
+    st.markdown("💡 **操作提示**：点击表格左侧勾选框或任意一行公司，即可自动进入第 2 页 **Stock Analysis** 查看详细技术面与阶梯价位。")
+
+    rows, gainers, losers = [], 0, 0
+    for sym in st.session_state.tickers:
+        d = fetch_stock_metrics(sym, live=st.session_state.use_live_api)
+        chg = round(d["price"] - d["prev"], 2)
+        pct = round((chg / d["prev"]) * 100, 2) if d["prev"] else 0.0
+        if chg > 0: gainers += 1
+        elif chg < 0: losers += 1
+        rows.append({
+            "COMPANY CODE": sym, "TODAY PRICE": d["price"], "YESTERDAY PRICE": d["prev"],
+            "CHANGE": chg, "% CHANGE": pct, "MA20": d["ma20"], "MA50": d["ma50"], "MA200": d["ma200"],
+            "PE RATE": f"{d['pe']:.2f}" if d["pe"] else "None", "YEARLY HIGH": d["high52"], "YEARLY LOW": d["low52"], "RSI (14)": d["rsi"]
+        })
+
+    df_watch = pd.DataFrame(rows)
+
+    def style_watch_table(val, col_name):
+        base = "background-color: #07193d; font-size: 22px; font-weight: 700;"
+        if col_name in ["CHANGE", "% CHANGE"]:
+            color = "#4ade80" if val > 0 else ("#f87171" if val < 0 else "#ffffff")
+            return f"{base} color: {color};"
+        if col_name == "RSI (14)":
+            if val >= 70: return "background-color: #dc2626; color: #ffffff; font-size: 22px; font-weight: 800;"
+            elif val <= 40: return "background-color: #eab308; color: #000000; font-size: 22px; font-weight: 800;"
+            else: return "background-color: #16a34a; color: #ffffff; font-size: 22px; font-weight: 800;"
+        if col_name == "COMPANY CODE": return f"{base} color: #60a5fa; font-weight: 900;"
+        if col_name == "TODAY PRICE": return f"{base} color: #facc15; font-weight: 800;"
+        return f"{base} color: #ffffff;"
+
+    styled_df = df_watch.style.apply(lambda col: [style_watch_table(v, col.name) for v in col], axis=0).format({
+        "TODAY PRICE": "{:.2f}", "YESTERDAY PRICE": "{:.2f}", "CHANGE": "{:+.2f}", "% CHANGE": "{:+.2f}%",
+        "MA20": "{:.2f}", "MA50": "{:.2f}", "MA200": "{:.2f}", "YEARLY HIGH": "{:.2f}", "YEARLY LOW": "{:.2f}", "RSI (14)": "{:.1f}"
+    })
+
+    event = st.dataframe(styled_df, use_container_width=True, height=500, row_height=48, hide_index=True, on_select="rerun", selection_mode="single-row")
+
+    if event and event.selection and len(event.selection.rows) > 0:
+        st.session_state.selected_ticker = df_watch.iloc[event.selection.rows[0]]["COMPANY CODE"]
+        st.session_state.page = "Stock Analysis"
+        st.rerun()
+
+    b_left, b_mid, b_right = st.columns([2.4, 2.2, 2.4])
+    with b_left:
+        if st.button(f"🏛️ OPEN COMPANY ANALYSIS ({st.session_state.selected_ticker}) >", use_container_width=True):
+            st.session_state.page = "Stock Analysis"; st.rerun()
+    with b_mid:
+        del_sym = st.selectbox("移除自选股", ["选择要删除的代码..."] + st.session_state.tickers, label_visibility="collapsed")
+        if del_
