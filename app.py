@@ -29,17 +29,69 @@ st.markdown("""
 DEFAULT_TICKERS = ["NVDA", "GOOGL", "TSM", "AMD", "MSFT", "META", "AMZN", "AAPL", "ASML", "TSLA", "CEG", "SMCI", "MPWR", "MRVL", "NFLX", "QQQ", "VUAG.L", "EQQQ.L"]
 
 FALLBACK_DATA = {}
-FALLBACK_DATA["NVDA"] = {"name": "NVIDIA Corp", "price": 177.34, "prev": 186.64, "ma20": 209.10, "ma50": 219.01, "ma200": 204.62, "pe": 22.43, "high52": 195.95, "low52": 86.62, "rsi": 38.7, "eps": 8.31, "mcap": "4.60T"}
-FALLBACK_DATA["GOOGL"] = {"name": "Alphabet Inc", "price": 288.93, "prev": 284.78, "ma20": 314.25, "ma50": 331.77, "ma200": 339.32, "pe": 15.09, "high52": 303.14, "low52": 142.66, "rsi": 55.9, "eps": 19.14, "mcap": "3.54T"}
-FALLBACK_DATA["TSM"] = {"name": "TSMC", "price": 391.23, "prev": 375.44, "ma20": 413.78, "ma50": 431.12, "ma200": 401.76, "pe": 25.36, "high52": 475.59, "low52": 260.50, "rsi": 62.3, "eps": 15.42, "mcap": "2.02T"}
-FALLBACK_DATA["AMD"] = {"name": "Advanced Micro Devices", "price": 509.52, "prev": 449.04, "ma20": 523.06, "ma50": 547.69, "ma200": 417.23, "pe": 108.81, "high52": 607.31, "low52": 128.20, "rsi": 72.5, "eps": 4.68, "mcap": "825B"}
-FALLBACK_DATA["MSFT"] = {"name": "Microsoft", "price": 546.89, "prev": 530.61, "ma20": 531.69, "ma50": 517.31, "ma200": 440.25, "pe": 28.55, "high52": 567.20, "low52": 349.70, "rsi": 64.1, "eps": 19.15, "mcap": "4.06T"}
-FALLBACK_DATA["META"] = {"name": "Meta Platforms", "price": 644.30, "prev": 610.15, "ma20": 657.74, "ma50": 676.24, "ma200": 631.87, "pe": 21.99, "high52": 740.91, "low52": 476.50, "rsi": 59.4, "eps": 29.30, "mcap": "1.63T"}
-FALLBACK_DATA["AMZN"] = {"name": "Amazon.com", "price": 268.44, "prev": 259.30, "ma20": 254.72, "ma50": 253.99, "ma200": 244.09, "pe": 21.70, "high52": 287.38, "low52": 161.67, "rsi": 57.8, "eps": 12.37, "mcap": "2.81T"}
-FALLBACK_DATA["AAPL"] = {"name": "Apple Inc", "price": 351.39, "prev": 342.37, "ma20": 343.91, "ma50": 336.65, "ma200": 299.32, "pe": 39.13, "high52": 377.41, "low52": 169.21, "rsi": 61.6, "eps": 8.98, "mcap": "5.31T"}
-FALLBACK_DATA["ASML"] = {"name": "ASML Holding", "price": 1517.98, "prev": 1424.75, "ma20": 1587.93, "ma50": 1673.69, "ma200": 1600.79, "pe": 37.34, "high52": 1823.54, "low52": 946.11, "rsi": 66.2, "eps": 40.65, "mcap": "605B"}
-FALLBACK_DATA["TSLA"] = {"name": "Tesla Inc", "price": 381.01, "prev": 358.22, "ma20": 380.57, "ma50": 372.78, "ma200": 383.52, "pe": 418.73, "high52": 488.54, "low52": 217.20, "rsi": 58.5, "eps": 0.91, "mcap": "1.21T"}
-FALLBACK_DATA["CEG"] = {"name": "Constellation Energy", "price": 265.50, "prev": 258.00, "ma20": 260.00, "ma50": 250.00, "ma200": 220.00, "pe": 32.5, "high52": 290.00, "low52": 150.00, "rsi": 58.0, "eps": 8.15, "mcap": "85B"}
-FALLBACK_DATA["SMCI"] = {"name": "Super Micro Computer", "price": 28.88, "prev": 27.50, "ma20": 30.10, "ma50": 35.20, "ma200": 45.00, "pe": 14.2, "high52": 118.81, "low52": 17.25, "rsi": 46.5, "eps": 2.03, "mcap": "16B"}
-FALLBACK_DATA["MPWR"] = {"name": "Monolithic Power Systems", "price": 1190.46, "prev": 1160.00, "ma20": 1150.00, "ma50": 1100.00, "ma200": 950.00, "pe": 78.4, "high52": 1300.00, "low52": 650.00, "rsi": 60.1, "eps": 15.20, "mcap": "57B"}
-FALLBACK_DATA["MRVL"] = {"name": "Marvell Technology", "price": 141.99, "prev": 136.50, "ma20": 138.00, "ma50": 130.00, "ma200": 110.00, "pe": 65.2, "high52": 155.00, "low52": 62.00, "rsi": 59.8, "eps": 2.18, "mcap": "
+
+FALLBACK_DATA["NVDA"] = {
+    "name": "NVIDIA Corp", "price": 177.34, "prev": 186.64,
+    "ma20": 209.10, "ma50": 219.01, "ma200": 204.62,
+    "pe": 22.43, "high52": 195.95, "low52": 86.62,
+    "rsi": 38.7, "eps": 8.31, "mcap": "4.60T"
+}
+
+FALLBACK_DATA["GOOGL"] = {
+    "name": "Alphabet Inc", "price": 288.93, "prev": 284.78,
+    "ma20": 314.25, "ma50": 331.77, "ma200": 339.32,
+    "pe": 15.09, "high52": 303.14, "low52": 142.66,
+    "rsi": 55.9, "eps": 19.14, "mcap": "3.54T"
+}
+
+FALLBACK_DATA["TSM"] = {
+    "name": "TSMC", "price": 391.23, "prev": 375.44,
+    "ma20": 413.78, "ma50": 431.12, "ma200": 401.76,
+    "pe": 25.36, "high52": 475.59, "low52": 260.50,
+    "rsi": 62.3, "eps": 15.42, "mcap": "2.02T"
+}
+
+FALLBACK_DATA["AMD"] = {
+    "name": "Advanced Micro Devices", "price": 509.52, "prev": 449.04,
+    "ma20": 523.06, "ma50": 547.69, "ma200": 417.23,
+    "pe": 108.81, "high52": 607.31, "low52": 128.20,
+    "rsi": 72.5, "eps": 4.68, "mcap": "825B"
+}
+
+FALLBACK_DATA["MSFT"] = {
+    "name": "Microsoft", "price": 546.89, "prev": 530.61,
+    "ma20": 531.69, "ma50": 517.31, "ma200": 440.25,
+    "pe": 28.55, "high52": 567.20, "low52": 349.70,
+    "rsi": 64.1, "eps": 19.15, "mcap": "4.06T"
+}
+
+FALLBACK_DATA["META"] = {
+    "name": "Meta Platforms", "price": 644.30, "prev": 610.15,
+    "ma20": 657.74, "ma50": 676.24, "ma200": 631.87,
+    "pe": 21.99, "high52": 740.91, "low52": 476.50,
+    "rsi": 59.4, "eps": 29.30, "mcap": "1.63T"
+}
+
+FALLBACK_DATA["AMZN"] = {
+    "name": "Amazon.com", "price": 268.44, "prev": 259.30,
+    "ma20": 254.72, "ma50": 253.99, "ma200": 244.09,
+    "pe": 21.70, "high52": 287.38, "low52": 161.67,
+    "rsi": 57.8, "eps": 12.37, "mcap": "2.81T"
+}
+
+FALLBACK_DATA["AAPL"] = {
+    "name": "Apple Inc", "price": 351.39, "prev": 342.37,
+    "ma20": 343.91, "ma50": 336.65, "ma200": 299.32,
+    "pe": 39.13, "high52": 377.41, "low52": 169.21,
+    "rsi": 61.6, "eps": 8.98, "mcap": "5.31T"
+}
+
+FALLBACK_DATA["ASML"] = {
+    "name": "ASML Holding", "price": 1517.98, "prev": 1424.75,
+    "ma20": 1587.93, "ma50": 1673.69, "ma200": 1600.79,
+    "pe": 37.34, "high52": 1823.54, "low52": 946.11,
+    "rsi": 66.2, "eps": 40.65, "mcap": "605B"
+}
+
+FALLBACK_DATA["TSLA"] = {
+    "name": "Tesla Inc", "price": 381.01, "prev": 358.22,
