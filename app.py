@@ -320,13 +320,13 @@ elif st.session_state.page == "Stock Analysis":
         fig.add_trace(go.Scatter(x=hist_df["Date"], y=hist_df["Close"], mode="lines", line=dict(color="#0284c7", width=2.5), name="Price"))
         fig.add_hline(y=metrics["price"], line_dash="dash", line_color="#64748b", line_width=1.5, annotation_text=f"  {metrics['price']:.2f}  ", annotation_position="right", annotation_font=dict(color="#ffffff", size=15), annotation_bgcolor="#334155")
 
-        # 将高度加大并精确锁定为 535 像素，与加大后的右侧表格完美匹配
+        # 将高度加大并精确锁定为 630 像素，与加大的右侧表格完美匹配
         fig.update_layout(
             template="plotly_white",
             paper_bgcolor="#ffffff",
             plot_bgcolor="#ffffff",
             xaxis_rangeslider_visible=False,
-            height=535,
+            height=630,
             font=dict(size=18, color="#1e293b"),
             margin=dict(l=10, r=70, t=10, b=10),
             showlegend=False
@@ -340,14 +340,14 @@ elif st.session_state.page == "Stock Analysis":
         curr = metrics["price"]
         pct_list = [20, 15, 12, 10, 8, 6, 0, -6, -8, -10, -12, -15, -18, -20]
         
-        # 将 HTML 表格容器高度加大到 535 像素，并给予充足舒适的内边距，确保 +20% 到 -20% 全部完美展示、绝不遮挡
+        # 将表格高度放大到 630 像素，带有滚动条，确保所有行 100% 毫无保留地完整展现
         html_table = """
-        <div style="background-color: #061430; border: 1px solid #2563eb; border-radius: 8px; height: 535px; overflow: hidden; padding: 4px;">
+        <div style="background-color: #061430; border: 1px solid #2563eb; border-radius: 8px; height: 630px; overflow-y: auto; padding: 4px;">
             <table style="width: 100%; border-collapse: collapse; font-family: 'Segoe UI', sans-serif;">
                 <thead>
-                    <tr style="border-bottom: 2px solid #1e3a8a; color: #93c5fd; font-size: 18px; text-align: left;">
-                        <th style="padding: 9px 12px; font-weight: 800;">LEVEL</th>
-                        <th style="padding: 9px 12px; font-weight: 800; text-align: right;">TARGET PRICE</th>
+                    <tr style="border-bottom: 2px solid #1e3a8a; color: #93c5fd; font-size: 18px; text-align: left; position: sticky; top: 0; background-color: #061430; z-index: 2;">
+                        <th style="padding: 11px 12px; font-weight: 800;">LEVEL</th>
+                        <th style="padding: 11px 12px; font-weight: 800; text-align: right;">TARGET PRICE</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -375,8 +375,8 @@ elif st.session_state.page == "Stock Analysis":
                 
             html_table += f"""
                     <tr style="background-color: {row_bg}; border-bottom: 1px solid #1e3a8a;">
-                        <td style="padding: 9.2px 12px; color: {text_color}; font-weight: {font_weight}; font-size: {font_size};">{label}</td>
-                        <td style="padding: 9.2px 12px; color: {text_color}; font-weight: {font_weight}; font-size: {font_size}; text-align: right;">{target_p:.2f}</td>
+                        <td style="padding: 11.5px 12px; color: {text_color}; font-weight: {font_weight}; font-size: {font_size};">{label}</td>
+                        <td style="padding: 11.5px 12px; color: {text_color}; font-weight: {font_weight}; font-size: {font_size}; text-align: right;">{target_p:.2f}</td>
                     </tr>
             """
             
@@ -385,13 +385,12 @@ elif st.session_state.page == "Stock Analysis":
             </table>
         </div>
         """
-        st.components.v1.html(html_table, height=550)
+        st.components.v1.html(html_table, height=650)
 
     chg = round(metrics["price"] - metrics["prev"], 2)
     pct_chg = round((chg / metrics["prev"]) * 100, 2) if metrics["prev"] else 0.0
     c_col = "#4ade80" if chg >= 0 else "#f87171"
     
-    # 修复后的无语法错误 f-string
     k1, k2, k3, k4, k5, k6 = st.columns(6)
     k1.markdown(f"<div class='metric-box'><div class='metric-label'>Current Price</div><div class='metric-val'>{metrics['price']:.2f} <span style='font-size:20px;color:{c_col};'>({pct_chg:+.2f}%)</span></div></div>", unsafe_allow_html=True)
     k2.markdown(f"<div class='metric-box'><div class='metric-label'>52 Week High</div><div class='metric-val'>{metrics['high52']:.2f}</div></div>", unsafe_allow_html=True)
