@@ -177,4 +177,70 @@ def fetch_options_chain(symbol, spot_price):
         c_p = round(max(0.15, (spot_price - k) + spot_price * iv * 0.08), 2)
         p_p = round(max(0.15, (k - spot_price) + spot_price * iv * 0.08), 2)
         c_v = int(max(50, 4500 * np.exp(-12 * moneyness**2)))
-        p
+        p_v = int(max(50, 4100 * np.exp(-12 * moneyness**2)))
+        calls_rows.append({"strike": k, "lastPrice": c_p, "bid": round(c_p*0.98, 2), "ask": round(c_p*1.02, 2), "volume": c_v, "openInterest": c_v * 4, "impliedVolatility": iv})
+        puts_rows.append({"strike": k, "lastPrice": p_p, "bid": round(p_p*0.98, 2), "ask": round(p_p*1.02, 2), "volume": p_v, "openInterest": p_v * 4, "impliedVolatility": iv})
+    return exps, exps[0], pd.DataFrame(calls_rows), pd.DataFrame(puts_rows), False
+
+try:
+    now_str = datetime.now().strftime("%b %d, %Y %H:%M:%S")
+    st.markdown(f"""
+    <div class="top-bar">
+        <div class="brand-title">CAPITAL QUANT v2</div>
+        <div class="live-badge">Live | {now_str} | UK Institutional Terminal</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    nav1, nav2, nav3, nav4 = st.columns([1.3, 1.3, 1.6, 2.2])
+    with nav1:
+        if st.button("1. Market Watch", use_container_width=True):
+            st.session_state.page = "Market Watch"
+            st.rerun()
+    with nav2:
+        if st.button("2. Stock Analysis", use_container_width=True):
+            st.session_state.page = "Stock Analysis"
+            st.rerun()
+    with nav3:
+        if st.button("3. Put & Call Options", use_container_width=True):
+            st.session_state.page = "Options Data"
+            st.rerun()
+    with nav4:
+        st.session_state.use_live_api = st.toggle("启用实时 Yahoo Finance 行情接口", value=st.session_state.use_live_api)
+
+    st.markdown("---")
+
+    if st.session_state.page == "Market Watch":
+        c_title, c_input, c_add, c_refresh = st.columns([2.0, 2.2, 1.2, 1.3])
+        with c_title:
+            st.markdown("### Market Watch")
+        with c_input:
+            new_ticker = st.text_input("Add Ticker", placeholder="输入代码 (如 SMCI, MRVL)", label_visibility="collapsed").strip().upper()
+        with c_add:
+            if st.button("ADD TICKER", use_container_width=True):
+                if new_ticker and new_ticker not in st.session_state.tickers:
+                    st.session_state.tickers.append(new_ticker)
+                    st.rerun()
+        with c_refresh:
+            if st.button("UPDATE ALL", use_container_width=True):
+                st.cache_data.clear()
+                st.rerun()
+
+        st.markdown("💡 **操作提示**：点击表格左侧勾选框或任意一行公司，即可自动进入第 2 页 **Stock Analysis** 查看详细技术面与阶梯价位。")
+
+        rows, gainers, losers = [], 0, 0
+        for sym in st.session_state.tickers:
+            d = fetch_stock_metrics(sym, live=st.session_state.use_live_api)
+            chg = round(d["price"] - d["prev"], 2)
+            pct = round((chg / d["prev"]) * 100, 2) if d["prev"] else 0.0
+            if chg > 0:
+                gainers += 1
+            elif chg < 0:
+                losers += 1
+            rows.append({
+                "COMPANY CODE": sym,
+                "TODAY PRICE": d["price"],
+                "YESTERDAY PRICE": d["prev"],
+                "CHANGE": chg,
+                "% CHANGE": pct,
+                "MA20": d["ma20"],
+                "MA50": d["ma50"],
