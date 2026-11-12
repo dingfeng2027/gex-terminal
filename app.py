@@ -320,13 +320,13 @@ elif st.session_state.page == "Stock Analysis":
         fig.add_trace(go.Scatter(x=hist_df["Date"], y=hist_df["Close"], mode="lines", line=dict(color="#0284c7", width=2.5), name="Price"))
         fig.add_hline(y=metrics["price"], line_dash="dash", line_color="#64748b", line_width=1.5, annotation_text=f"  {metrics['price']:.2f}  ", annotation_position="right", annotation_font=dict(color="#ffffff", size=15), annotation_bgcolor="#334155")
 
-        # 将高度精确锁定为 495 像素，完美对齐右侧包含完整百分比的阶梯表格
+        # 将高度精确锁定为 455 像素
         fig.update_layout(
             template="plotly_white",
             paper_bgcolor="#ffffff",
             plot_bgcolor="#ffffff",
             xaxis_rangeslider_visible=False,
-            height=495,
+            height=455,
             font=dict(size=18, color="#1e293b"),
             margin=dict(l=10, r=70, t=10, b=10),
             showlegend=False
@@ -338,18 +338,54 @@ elif st.session_state.page == "Stock Analysis":
     with col_levels:
         st.markdown("<div class='card-header'>PRICE LEVEL LADDER</div>", unsafe_allow_html=True)
         curr = metrics["price"]
-        # 补齐从 +20% 到 -20% 的所有完整阶梯
         pct_list = [20, 15, 12, 10, 8, 6, 0, -6, -8, -10, -12, -15, -18, -20]
-        level_rows = []
+        
+        # 使用完全可控的 HTML 表格来渲染阶梯价位，高度锁定 455 像素，实现像素级完美对齐
+        html_table = """
+        <div style="background-color: #061430; border: 1px solid #2563eb; border-radius: 8px; height: 455px; overflow-y: auto; padding: 4px;">
+            <table style="width: 100%; border-collapse: collapse; font-family: 'Segoe UI', sans-serif;">
+                <thead>
+                    <tr style="border-bottom: 2px solid #1e3a8a; color: #93c5fd; font-size: 18px; text-align: left;">
+                        <th style="padding: 10px 12px; font-weight: 800;">LEVEL</th>
+                        <th style="padding: 10px 12px; font-weight: 800; text-align: right;">TARGET PRICE</th>
+                    </tr>
+                </thead>
+                <tbody>
+        """
+        
         for pct in pct_list:
             label = "CURRENT" if pct == 0 else f"{pct:+d}%"
             target_p = round(curr * (1 + pct / 100.0), 2)
-            level_rows.append({"LEVEL": label, "TARGET PRICE": f"{target_p:.2f}"})
-
-        df_levels = pd.DataFrame(level_rows)
-        
-        # 设定高度为 495 像素，行高 33，确保与左侧图表底部完全对齐
-        st.dataframe(df_levels.style.apply(lambda row: ["background-color: #eab308; color: #000000; font-size: 21px; font-weight: 900; text-align: left;"] * 2 if row["LEVEL"] == "CURRENT" else (["background-color: #07193d; color: #4ade80; font-size: 20px; font-weight: 700; text-align: left;"] * 2 if "+" in row["LEVEL"] else ["background-color: #07193d; color: #f87171; font-size: 20px; font-weight: 700; text-align: left;"] * 2), axis=1), use_container_width=True, height=495, row_height=33, hide_index=True)
+            
+            if pct == 0:
+                row_bg = "#eab308"
+                text_color = "#000000"
+                font_weight = "900"
+                font_size = "21px"
+            elif pct > 0:
+                row_bg = "#07193d"
+                text_color = "#4ade80"
+                font_weight = "700"
+                font_size = "20px"
+            else:
+                row_bg = "#07193d"
+                text_color = "#f87171"
+                font_weight = "700"
+                font_size = "20px"
+                
+            html_table += f"""
+                    <tr style="background-color: {row_bg}; border-bottom: 1px solid #1e3a8a;">
+                        <td style="padding: 8.5px 12px; color: {text_color}; font-weight: {font_weight}; font-size: {font_size};">{label}</td>
+                        <td style="padding: 8.5px 12px; color: {text_color}; font-weight: {font_weight}; font-size: {font_size}; text-align: right;">{target_p:.2f}</td>
+                    </tr>
+            """
+            
+        html_table += """
+                </tbody>
+            </table>
+        </div>
+        """
+        st.markdown(html_table, unsafe_allow_html=True)
 
     chg = round(metrics["price"] - metrics["prev"], 2)
     pct_chg = round((chg / metrics["prev"]) * 100, 2) if metrics["prev"] else 0.0
