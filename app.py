@@ -89,6 +89,7 @@ if "page" not in st.session_state: st.session_state.page = "Market Watch"
 if "tickers" not in st.session_state: st.session_state.tickers = DEFAULT_TICKERS.copy()
 if "selected_ticker" not in st.session_state: st.session_state.selected_ticker = "NVDA"
 if "use_live_api" not in st.session_state: st.session_state.use_live_api = False
+if "chart_period" not in st.session_state: st.session_state.chart_period = "6个月"
 
 # ---------------------------------------------------------
 # 3. 数据计算与获取函数
@@ -307,24 +308,23 @@ elif st.session_state.page == "Stock Analysis":
     with col_chart:
         st.markdown(f"<div class='card-header'>{sym} — {metrics['name']} | Price Chart & Historical Range</div>", unsafe_allow_html=True)
         
-        # 时间周期选择按钮
-        p1, p2, p3, p4, p5, p6, p7 = st.columns(7)
-        if "chart_period" not in st.session_state: st.session_state.chart_period = "6个月"
-        
-        with p1: 
-            if st.button("1日", use_container_width=True): st.session_state.chart_period = "1日"; st.rerun()
-        with p2: 
-            if st.button("1星期", use_container_width=True): st.session_state.chart_period = "1星期"; st.rerun()
-        with p3: 
-            if st.button("3星期", use_container_width=True): st.session_state.chart_period = "3星期"; st.rerun()
-        with p4: 
-            if st.button("1个月", use_container_width=True): st.session_state.chart_period = "1个月"; st.rerun()
-        with p5: 
-            if st.button("6个月", use_container_width=True): st.session_state.chart_period = "6个月"; st.rerun()
-        with p6: 
-            if st.button("1年", use_container_width=True): st.session_state.chart_period = "1年"; st.rerun()
-        with p7: 
-            if st.button("全部", use_container_width=True): st.session_state.chart_period = "全部"; st.rerun()
+        # 动态按钮样式：当前选中的周期显示为白色背景+黑色字号
+        periods = ["1日", "1星期", "3星期", "1个月", "6个月", "1年", "全部"]
+        cols = st.columns(7)
+        for i, p in enumerate(periods):
+            with cols[i]:
+                is_active = (st.session_state.chart_period == p)
+                if is_active:
+                    st.markdown(f"""
+                        <style>
+                        div.stButton > button[data-baseweb="button"]:nth-of-type({i+1}) {{
+                            background: #ffffff !important; color: #000000 !important; font-weight: 900 !important;
+                        }}
+                        </style>
+                    """, unsafe_allow_html=True)
+                if st.button(p, use_container_width=True, key=f"period_{p}"):
+                    st.session_state.chart_period = p
+                    st.rerun()
 
         hist_df = fetch_history_df(sym, st.session_state.chart_period, metrics["price"])
         
@@ -335,13 +335,13 @@ elif st.session_state.page == "Stock Analysis":
         # 当前价格右侧带标签的横线
         fig.add_hline(y=metrics["price"], line_dash="dash", line_color="#64748b", line_width=1.5, annotation_text=f"  {metrics['price']:.2f}  ", annotation_position="right", annotation_font=dict(color="#ffffff", size=15), annotation_bgcolor="#334155")
 
-        # 调整图表高度至 335 像素，完美匹配 330-340 区间
+        # 调整图表高度至 415 像素，完美匹配拉长后的右侧阶梯表格
         fig.update_layout(
             template="plotly_white",
             paper_bgcolor="#ffffff",
             plot_bgcolor="#ffffff",
             xaxis_rangeslider_visible=False,
-            height=335,
+            height=415,
             font=dict(size=18, color="#1e293b"),
             margin=dict(l=10, r=70, t=10, b=10),
             showlegend=False
@@ -362,10 +362,10 @@ elif st.session_state.page == "Stock Analysis":
 
         df_levels = pd.DataFrame(level_rows)
         
-        # 将右侧阶梯表格高度精确设置为 335，与左侧图表完全对齐
-        st.dataframe(df_levels.style.apply(lambda row: ["background-color: #eab308; color: #000000; font-size: 21px; font-weight: 900;"] * 2 if row["LEVEL"] == "CURRENT" else (["background-color: #07193d; color: #4ade80; font-size: 20px; font-weight: 700;"] * 2 if "+" in row["LEVEL"] else ["background-color: #07193d; color: #f87171; font-size: 20px; font-weight: 700;"] * 2), axis=1), use_container_width=True, height=335, row_height=22, hide_index=True)
+        # 将右侧阶梯表格高度拉长至 415，行高恢复为 28 像素
+        st.dataframe(df_levels.style.apply(lambda row: ["background-color: #eab308; color: #000000; font-size: 21px; font-weight: 900;"] * 2 if row["LEVEL"] == "CURRENT" else (["background-color: #07193d; color: #4ade80; font-size: 20px; font-weight: 700;"] * 2 if "+" in row["LEVEL"] else ["background-color: #07193d; color: #f87171; font-size: 20px; font-weight: 700;"] * 2), axis=1), use_container_width=True, height=415, row_height=28, hide_index=True)
 
-    # 紧凑上移下方卡片
+    # 下方指标卡片
     chg = round(metrics["price"] - metrics["prev"], 2)
     pct_chg = round((chg / metrics["prev"]) * 100, 2) if metrics["prev"] else 0.0
     c_col = "#4ade80" if chg >= 0 else "#f87171"
