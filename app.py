@@ -290,7 +290,7 @@ elif st.session_state.page == "Stock Analysis":
     with col_chart:
         st.markdown(f"<div class='card-header'>{sym} — {metrics['name']} | Price Chart & Historical Range</div>", unsafe_allow_html=True)
         
-        # 完美解决换行错位：使用原生水平排列的胶囊按钮组
+        # 水平排列胶囊按钮
         periods = ["1日", "1星期", "3星期", "1个月", "6个月", "1年", "全部"]
         p_cols = st.columns(len(periods))
         for idx, p in enumerate(periods):
@@ -300,7 +300,6 @@ elif st.session_state.page == "Stock Analysis":
                 btn_fg = "#000000" if is_selected else "#ffffff"
                 btn_fw = "900" if is_selected else "700"
                 
-                # 注入当前选中按钮的特定高亮样式
                 st.markdown(f"""
                 <style>
                 div.stButton > button[data-baseweb="button"]:nth-of-type({idx+1}) {{
@@ -321,12 +320,13 @@ elif st.session_state.page == "Stock Analysis":
         fig.add_trace(go.Scatter(x=hist_df["Date"], y=hist_df["Close"], mode="lines", line=dict(color="#0284c7", width=2.5), name="Price"))
         fig.add_hline(y=metrics["price"], line_dash="dash", line_color="#64748b", line_width=1.5, annotation_text=f"  {metrics['price']:.2f}  ", annotation_position="right", annotation_font=dict(color="#ffffff", size=15), annotation_bgcolor="#334155")
 
+        # 将高度精确锁定为 495 像素，完美对齐右侧包含完整百分比的阶梯表格
         fig.update_layout(
             template="plotly_white",
             paper_bgcolor="#ffffff",
             plot_bgcolor="#ffffff",
             xaxis_rangeslider_visible=False,
-            height=470,
+            height=495,
             font=dict(size=18, color="#1e293b"),
             margin=dict(l=10, r=70, t=10, b=10),
             showlegend=False
@@ -338,7 +338,8 @@ elif st.session_state.page == "Stock Analysis":
     with col_levels:
         st.markdown("<div class='card-header'>PRICE LEVEL LADDER</div>", unsafe_allow_html=True)
         curr = metrics["price"]
-        pct_list = [20, 15, 12, 10, 8, 6, 0, -6, -8, -10, -12, -15, -20]
+        # 补齐从 +20% 到 -20% 的所有完整阶梯
+        pct_list = [20, 15, 12, 10, 8, 6, 0, -6, -8, -10, -12, -15, -18, -20]
         level_rows = []
         for pct in pct_list:
             label = "CURRENT" if pct == 0 else f"{pct:+d}%"
@@ -347,7 +348,8 @@ elif st.session_state.page == "Stock Analysis":
 
         df_levels = pd.DataFrame(level_rows)
         
-        st.dataframe(df_levels.style.apply(lambda row: ["background-color: #eab308; color: #000000; font-size: 21px; font-weight: 900; text-align: left;"] * 2 if row["LEVEL"] == "CURRENT" else (["background-color: #07193d; color: #4ade80; font-size: 20px; font-weight: 700; text-align: left;"] * 2 if "+" in row["LEVEL"] else ["background-color: #07193d; color: #f87171; font-size: 20px; font-weight: 700; text-align: left;"] * 2), axis=1), use_container_width=True, height=470, row_height=34, hide_index=True)
+        # 设定高度为 495 像素，行高 33，确保与左侧图表底部完全对齐
+        st.dataframe(df_levels.style.apply(lambda row: ["background-color: #eab308; color: #000000; font-size: 21px; font-weight: 900; text-align: left;"] * 2 if row["LEVEL"] == "CURRENT" else (["background-color: #07193d; color: #4ade80; font-size: 20px; font-weight: 700; text-align: left;"] * 2 if "+" in row["LEVEL"] else ["background-color: #07193d; color: #f87171; font-size: 20px; font-weight: 700; text-align: left;"] * 2), axis=1), use_container_width=True, height=495, row_height=33, hide_index=True)
 
     chg = round(metrics["price"] - metrics["prev"], 2)
     pct_chg = round((chg / metrics["prev"]) * 100, 2) if metrics["prev"] else 0.0
