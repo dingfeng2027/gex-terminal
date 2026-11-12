@@ -236,7 +236,7 @@ if st.session_state.page == "Market Watch":
         elif chg < 0:
             losers += 1
         
-        row_dict = {
+        rows.append({
             "COMPANY CODE": sym,
             "TODAY PRICE": d["price"],
             "YESTERDAY PRICE": d["prev"],
@@ -249,8 +249,7 @@ if st.session_state.page == "Market Watch":
             "YEARLY HIGH": d["high52"],
             "YEARLY LOW": d["low52"],
             "RSI (14)": d["rsi"]
-        }
-        rows.append(row_dict)
+        })
 
     df_watch = pd.DataFrame(rows)
 
@@ -272,6 +271,177 @@ if st.session_state.page == "Market Watch":
             return base + " color: #facc15; font-weight: 800;"
         return base + " color: #ffffff;"
 
-    styled_df = df_watch.style.apply(lambda col: [style_watch_table(v, col.name) for v in col], axis=0).format({
-        "TODAY PRICE": "{:.2f}", "YESTERDAY PRICE": "{:.2f}", "CHANGE": "{:+.2f}", "% CHANGE": "{:+.2f}%",
-        "MA20": "{:.2f}", "MA50": "{:.2f}", "MA200":
+    styled_df = df_watch.style.apply(lambda col: [style_watch_table(v, col.name) for v in col], axis=0).format(
+        {
+            "TODAY PRICE": "{:.2f}",
+            "YESTERDAY PRICE": "{:.2f}",
+            "CHANGE": "{:+.2f}",
+            "% CHANGE": "{:+.2f}%",
+            "MA20": "{:.2f}",
+            "MA50": "{:.2f}",
+            "MA200": "{:.2f}",
+            "YEARLY HIGH": "{:.2f}",
+            "YEARLY LOW": "{:.2f}",
+            "RSI (14)": "{:.1f}"
+        }
+    )
+
+    event = st.dataframe(styled_df, use_container_width=True, height=500, row_height=48, hide_index=True, on_select="rerun", selection_mode="single-row")
+
+    if event and event.selection and len(event.selection.rows) > 0:
+        st.session_state.selected_ticker = df_watch.iloc[event.selection.rows[0]]["COMPANY CODE"]
+        st.session_state.page = "Stock Analysis"
+        st.rerun()
+
+    b_left, b_mid, b_right = st.columns([2.4, 2.2, 2.4])
+    with b_left:
+        if st.button(f"OPEN COMPANY ANALYSIS ({st.session_state.selected_ticker}) >", use_container_width=True):
+            st.session_state.page = "Stock Analysis"
+            st.rerun()
+    with b_mid:
+        del_sym = st.selectbox("移除自选股", ["选择要删除的代码..."] + st.session_state.tickers, label_visibility="collapsed")
+        if del_sym != "选择要删除的代码...":
+            st.session_state.tickers.remove(del_sym)
+            st.rerun()
+    with b_right:
+        st.markdown(f"<div style='text-align:right; padding-top:6px; font-size:21px; font-weight:800;'><span style='color:#4ade80;'>▲ {gainers} Gainers</span> &nbsp;|&nbsp; <span style='color:#f87171;'>● {losers} Losers</span> &nbsp;|&nbsp; Total: {len(df_watch)}</div>", unsafe_allow_html=True)
+
+elif st.session_state.page == "Stock Analysis":
+    top_l, top_sel, top_opt, top_back = st.columns([2.0, 2.4, 2.2, 1.2])
+    with top_l:
+        st.markdown("### Stock Analysis")
+    with top_sel:
+        current_idx = st.session_state.tickers.index(st.session_state.selected_ticker) if st.session_state.selected_ticker in st.session_state.tickers else 0
+        chosen = st.selectbox("选择分析标的", st.session_state.tickers, index=current_idx, label_visibility="collapsed")
+        if chosen != st.session_state.selected_ticker:
+            st.session_state.selected_ticker = chosen
+            st.rerun()
+    with top_opt:
+        if st.button("PUT & CALL OPTIONS DATA >", use_container_width=True):
+            st.session_state.page = "Options Data"
+            st.rerun()
+    with top_back:
+        if st.button("← BACK", use_container_width=True):
+            st.session_state.page = "Market Watch"
+            st.rerun()
+
+    sym = st.session_state.selected_ticker
+    metrics = fetch_stock_metrics(sym, live=st.session_state.use_live_api)
+
+    col_chart, col_levels = st.columns([2.5, 1.1])
+    with col_chart:
+        st.markdown(f"<div class='card-header'>{sym} — {metrics['name']} | Price Chart & Historical Range</div>", unsafe_allow_html=True)
+        
+        periods = ["1日", "1星期", "3星期", "1个月", "6个月", "1年", "全部"]
+        p_cols = st.columns(len(periods))
+        for idx, p in enumerate(periods):
+            with p_cols[idx]:
+                is_selected = (st.session_state.chart_period == p)
+                btn_bg = "#ffffff" if is_selected else "linear-gradient(180deg, #2563eb 0%, #1d4ed8 100%)"
+                btn_fg = "#000000" if is_selected else "#ffffff"
+                btn_fw = "900" if is_selected else "700"
+                
+                st.markdown(f"""
+                <style>
+                div.stButton > button[data-baseweb="button"]:nth-of-type({idx+1}) {{
+                    background: {btn_bg} !important;
+                    color: {btn_fg} !important;
+                    font-weight: {btn_fw} !important;
+                }}
+                </style>
+                """, unsafe_allow_html=True)
+                
+                if st.button(p, use_container_width=True, key=f"period_btn_{p}"):
+                    st.session_state.chart_period = p
+                    st.rerun()
+
+        hist_df = fetch_history_df(sym, st.session_state.chart_period, metrics["price"])
+        
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=hist_df["Date"], y=hist_df["Close"], mode="lines", line=dict(color="#0284c7", width=2.5), name="Price"))
+        fig.add_hline(y=metrics["price"], line_dash="dash", line_color="#64748b", line_width=1.5, annotation_text=f"  {metrics['price']:.2f}  ", annotation_position="right", annotation_font=dict(color="#ffffff", size=15), annotation_bgcolor="#334155")
+
+        fig.update_layout(
+            template="plotly_white",
+            paper_bgcolor="#ffffff",
+            plot_bgcolor="#ffffff",
+            xaxis_rangeslider_visible=False,
+            height=455,
+            font=dict(size=18, color="#1e293b"),
+            margin=dict(l=10, r=70, t=10, b=10),
+            showlegend=False
+        )
+        fig.update_xaxes(gridcolor="#e2e8f0", zerolinecolor="#e2e8f0")
+        fig.update_yaxes(gridcolor="#e2e8f0", zerolinecolor="#e2e8f0", side="right")
+        st.plotly_chart(fig, use_container_width=True)
+
+    with col_levels:
+        st.markdown("<div class='card-header'>PRICE LEVEL LADDER</div>", unsafe_allow_html=True)
+        curr = metrics["price"]
+        pct_list = [20, 15, 12, 10, 8, 6, 0, -6, -8, -10, -12, -15, -18, -20]
+        
+        # 完美锁定为 600 像素高度
+        html_table = """
+        <div style="background-color: #061430; border: 1px solid #2563eb; border-radius: 8px; height: 600px; overflow-y: auto; padding: 4px;">
+            <table style="width: 100%; border-collapse: collapse; font-family: 'Segoe UI', sans-serif;">
+                <thead>
+                    <tr style="border-bottom: 2px solid #1e3a8a; color: #93c5fd; font-size: 16px; text-align: left; position: sticky; top: 0; background-color: #061430; z-index: 2;">
+                        <th style="padding: 10px 12px; font-weight: 800;">LEVEL</th>
+                        <th style="padding: 10px 12px; font-weight: 800; text-align: right;">TARGET PRICE</th>
+                    </tr>
+                </thead>
+                <tbody>
+        """
+        
+        for pct in pct_list:
+            label = "CURRENT" if pct == 0 else f"{pct:+d}%"
+            target_p = round(curr * (1 + pct / 100.0), 2)
+            
+            if pct == 0:
+                row_bg = "#eab308"
+                text_color = "#000000"
+                font_weight = "900"
+                font_size = "19px"
+            elif pct > 0:
+                row_bg = "#07193d"
+                text_color = "#4ade80"
+                font_weight = "700"
+                font_size = "17px"
+            else:
+                row_bg = "#07193d"
+                text_color = "#f87171"
+                font_weight = "700"
+                font_size = "17px"
+                
+            html_table += f"""
+                    <tr style="background-color: {row_bg}; border-bottom: 1px solid #1e3a8a;">
+                        <td style="padding: 10px 12px; color: {text_color}; font-weight: {font_weight}; font-size: {font_size};">{label}</td>
+                        <td style="padding: 10px 12px; color: {text_color}; font-weight: {font_weight}; font-size: {font_size}; text-align: right;">{target_p:.2f}</td>
+                    </tr>
+            """
+            
+        html_table += """
+                </tbody>
+            </table>
+        </div>
+        """
+        st.components.v1.html(html_table, height=620)
+
+    chg = round(metrics["price"] - metrics["prev"], 2)
+    pct_chg = round((chg / metrics["prev"]) * 100, 2) if metrics["prev"] else 0.0
+    c_col = "#4ade80" if chg >= 0 else "#f87171"
+    
+    k1, k2, k3, k4, k5, k6 = st.columns(6)
+    k1.markdown(f"<div class='metric-box'><div class='metric-label'>Current Price</div><div class='metric-val'>{metrics['price']:.2f} <span style='font-size:20px;color:{c_col};'>({pct_chg:+.2f}%)</span></div></div>", unsafe_allow_html=True)
+    k2.markdown(f"<div class='metric-box'><div class='metric-label'>52 Week High</div><div class='metric-val'>{metrics['high52']:.2f}</div></div>", unsafe_allow_html=True)
+    k3.markdown(f"<div class='metric-box'><div class='metric-label'>52 Week Low</div><div class='metric-val'>{metrics['low52']:.2f}</div></div>", unsafe_allow_html=True)
+    k4.markdown(f"<div class='metric-box'><div class='metric-label'>Market Cap</div><div class='metric-val'>{metrics['mcap']}</div></div>", unsafe_allow_html=True)
+    k5.markdown(f"<div class='metric-box'><div class='metric-label'>P/E Ratio / EPS</div><div class='metric-val'>{metrics['pe'] if metrics['pe'] else 'N/A'} / {metrics['eps']}</div></div>", unsafe_allow_html=True)
+    k6.markdown(f"<div class='metric-box'><div class='metric-label'>RSI (14)</div><div class='metric-val' style='color:#38bdf8;'>{metrics['rsi']:.1f}</div></div>", unsafe_allow_html=True)
+
+elif st.session_state.page == "Options Data":
+    o_title, o_sel, o_back2, o_back1 = st.columns([2.3, 2.1, 1.5, 1.5])
+    with o_title:
+        st.markdown("### Put & Call Option Data")
+    with o_sel:
+        current_idx = st.session_state.tickers.index(st.
