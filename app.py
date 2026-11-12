@@ -244,3 +244,36 @@ try:
                 "% CHANGE": pct,
                 "MA20": d["ma20"],
                 "MA50": d["ma50"],
+                "MA200": d["ma200"],
+                "PE RATE": f"{d['pe']:.2f}" if d["pe"] else "None",
+                "YEARLY HIGH": d["high52"],
+                "YEARLY LOW": d["low52"],
+                "RSI (14)": d["rsi"]
+            })
+
+        df_watch = pd.DataFrame(rows)
+
+        def style_watch_table(val, col_name):
+            base = "background-color: #07193d; font-size: 22px; font-weight: 700;"
+            if col_name in ["CHANGE", "% CHANGE"]:
+                color = "#4ade80" if val > 0 else ("#f87171" if val < 0 else "#ffffff")
+                return base + " color: " + color + ";"
+            if col_name == "RSI (14)":
+                if val >= 70:
+                    return "background-color: #dc2626; color: #ffffff; font-size: 22px; font-weight: 800;"
+                elif val <= 40:
+                    return "background-color: #eab308; color: #000000; font-size: 22px; font-weight: 800;"
+                else:
+                    return "background-color: #16a34a; color: #ffffff; font-size: 22px; font-weight: 800;"
+            if col_name == "COMPANY CODE":
+                return base + " color: #60a5fa; font-weight: 900;"
+            if col_name == "TODAY PRICE":
+                return base + " color: #facc15; font-weight: 800;"
+            return base + " color: #ffffff;"
+
+        styled_df = df_watch.style.apply(lambda col: [style_watch_table(v, col.name) for v in col], axis=0).format({
+            "TODAY PRICE": "{:.2f}", "YESTERDAY PRICE": "{:.2f}", "CHANGE": "{:+.2f}", "% CHANGE": "{:+.2f}%",
+            "MA20": "{:.2f}", "MA50": "{:.2f}", "MA200": "{:.2f}", "YEARLY HIGH": "{:.2f}", "YEARLY LOW": "{:.2f}", "RSI (14)": "{:.1f}"
+        })
+
+        event = st.dataframe
