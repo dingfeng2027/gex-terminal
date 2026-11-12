@@ -290,22 +290,13 @@ elif st.session_state.page == "Stock Analysis":
     with col_chart:
         st.markdown(f"<div class='card-header'>{sym} — {metrics['name']} | Price Chart & Historical Range</div>", unsafe_allow_html=True)
         
+        # 使用横向单选按钮替代多列按钮，完美解决窄屏换行错位问题
         periods = ["1日", "1星期", "3星期", "1个月", "6个月", "1年", "全部"]
-        cols = st.columns(7)
-        for i, p in enumerate(periods):
-            with cols[i]:
-                is_active = (st.session_state.chart_period == p)
-                if is_active:
-                    st.markdown(f"""
-                        <style>
-                        div.stButton > button[data-baseweb="button"]:nth-of-type({i+1}) {{
-                            background: #ffffff !important; color: #000000 !important; font-weight: 900 !important;
-                        }}
-                        </style>
-                    """, unsafe_allow_html=True)
-                if st.button(p, use_container_width=True, key=f"period_{p}"):
-                    st.session_state.chart_period = p
-                    st.rerun()
+        current_period_idx = periods.index(st.session_state.chart_period) if st.session_state.chart_period in periods else 4
+        selected_p = st.radio("时间周期", periods, index=current_period_idx, horizontal=True, label_visibility="collapsed")
+        if selected_p != st.session_state.chart_period:
+            st.session_state.chart_period = selected_p
+            st.rerun()
 
         hist_df = fetch_history_df(sym, st.session_state.chart_period, metrics["price"])
         
