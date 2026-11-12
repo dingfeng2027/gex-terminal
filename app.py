@@ -6,7 +6,7 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 
 # ---------------------------------------------------------
-# 1. 页面基础配置与大字号样式
+# 1. 页面基础配置与整屏大字号样式
 # ---------------------------------------------------------
 st.set_page_config(
     page_title="CAPITAL QUANT v2",
@@ -162,22 +162,25 @@ if "tickers" not in st.session_state:
 if "selected_ticker" not in st.session_state:
     st.session_state.selected_ticker = "NVDA"
 if "use_live_api" not in st.session_state:
-    st.session_state.use_live_api = True
+    st.session_state.use_live_api = False  # 默认关闭实时接口，使用内置极速稳定数据
 
 # ---------------------------------------------------------
-# 3. 数据获取函数
+# 3. 数据获取函数（带安全保护）
 # ---------------------------------------------------------
 def compute_rsi(series, period=14):
-    delta = series.diff()
-    gain = delta.clip(lower=0).rolling(window=period).mean()
-    loss = -delta.clip(upper=0).rolling(window=period).mean()
-    rs = gain / loss
-    rsi = 100 - (100 / (1 + rs))
-    val = rsi.iloc[-1]
-    return round(float(val), 1) if pd.notna(val) else 50.0
+    try:
+        delta = series.diff()
+        gain = delta.clip(lower=0).rolling(window=period).mean()
+        loss = -delta.clip(upper=0).rolling(window=period).mean()
+        rs = gain / loss
+        rsi = 100 - (100 / (1 + rs))
+        val = rsi.iloc[-1]
+        return round(float(val), 1) if pd.notna(val) else 50.0
+    except Exception:
+        return 50.0
 
 @st.cache_data(ttl=300, show_spinner=False)
-def fetch_stock_metrics(symbol, live=True):
+def fetch_stock_metrics(symbol, live=False):
     fb = FALLBACK_DATA.get(symbol, {
         "name": f"{symbol} Holdings", "price": 150.00, "prev": 148.00,
         "ma20": 145.00, "ma50": 140.00, "ma200": 130.00, "pe": 25.0,
@@ -188,7 +191,7 @@ def fetch_stock_metrics(symbol, live=True):
 
     try:
         t = yf.Ticker(symbol)
-        hist = t.history(period="1y").dropna(subset=["Close"])
+        hist = t.history(period="1y")
         if hist.empty or len(hist) < 2:
             return fb
 
@@ -201,9 +204,6 @@ def fetch_stock_metrics(symbol, live=True):
         high52 = round(float(hist["High"].max()), 2)
         low52 = round(float(hist["Low"].min()), 2)
         rsi = compute_rsi(close, 14)
-
-        if any(pd.isna(x) for x in [price, prev, ma20, ma50, ma200]):
-            return fb
 
         info = t.info or {}
         pe = info.get("trailingPE")
@@ -230,7 +230,7 @@ def fetch_stock_metrics(symbol, live=True):
 def fetch_history_df(symbol, current_price):
     try:
         t = yf.Ticker(symbol)
-        hist = t.history(period="6mo").dropna(subset=["Close"])
+        hist = t.history(period="6mo")
         if not hist.empty and len(hist) > 20:
             hist = hist.reset_index()
             hist["MA20"] = hist["Close"].rolling(20, min_periods=1).mean()
@@ -260,16 +260,6 @@ def fetch_history_df(symbol, current_price):
 
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_options_chain(symbol, spot_price):
-    try:
-        t = yf.Ticker(symbol)
-        exps = t.options
-        if exps and len(exps) > 0:
-            target_exp = exps[0]
-            chain = t.option_chain(target_exp)
-            return list(exps[:8]), target_exp, chain.calls, chain.puts, True
-    except Exception:
-        pass
-
     exps = [(datetime.today() + timedelta(days=7 * i)).strftime("%Y-%m-%d") for i in range(1, 7)]
     step = 5.0 if spot_price > 100 else 2.5
     base_strike = round(spot_price / step) * step
@@ -405,3 +395,129 @@ if st.session_state.page == "Market Watch":
         "RSI (14)": "{:.1f}"
     })
 
+    event = st.dataframe(
+        styled_df,
+        use_container_width=True,
+        height=500,
+        row_height=40,
+        hide_index=True,
+        on_select="rerun",
+        selection_mode="single-row"
+    )
+
+    if event and event.selection and len(event.selection.rows) > 0:
+        clicked_idx = event.selection.rows[0]
+        clicked_symbol = df_watch.iloc[clicked_idx]["COMPANY CODE"]
+        st.session_state.selected_ticker = clicked_symbol
+        st.session_state.page = "Stock Analysis"
+        st.rerun()
+
+    b_left, b_mid, b_right = st.columns([2.4, 2.2, 2.4])
+    with b_left:
+        if st.button(f"🏛️ OPEN COMPANY ANALYSIS ({st.session_state.selected_ticker}) >", use_container_width=True):
+            st.session_state.page = "Stock Analysis"
+            st.rerun()
+    with b_mid:
+        del_sym = st.selectbox("移除自选股", ["选择要删除的代码..."] + st.session_state.tickers, label_visibility="collapsed")
+        if del_sym != "选择要删除的代码...":
+            st.session_state.tickers.remove(del_sym)
+            st.rerun()
+    with b_right:
+        st.markdown(
+            f"<div style='text-align:right; padding-top:6px; font-size:18px; font-weight:800;'>"
+            f"<span style='color:#4ade80;'>▲ {gainers} Gainers</span> &nbsp;|&nbsp; "
+            f"<span style='color:#f87171;'>● {losers} Losers</span> &nbsp;|&nbsp; "
+            f"Total: {len(df_watch)}</div>",
+            unsafe_allow_html=True
+        )
+
+# =========================================================
+# 页面 2：STOCK ANALYSIS
+# =========================================================
+elif st.session_state.page == "Stock Analysis":
+    top_l, top_sel, top_opt, top_back = st.columns([2.0, 2.4, 2.2, 1.2])
+    with top_l:
+        st.markdown("### 📈 Stock Analysis")
+    with top_sel:
+        current_idx = st.session_state.tickers.index(st.session_state.selected_ticker) if st.session_state.selected_ticker in st.session_state.tickers else 0
+        chosen = st.selectbox("选择分析标的", st.session_state.tickers, index=current_idx, label_visibility="collapsed")
+        if chosen != st.session_state.selected_ticker:
+            st.session_state.selected_ticker = chosen
+            st.rerun()
+    with top_opt:
+        if st.button("⚡ PUT & CALL OPTIONS DATA >", use_container_width=True):
+            st.session_state.page = "Options Data"
+            st.rerun()
+    with top_back:
+        if st.button("← BACK", use_container_width=True):
+            st.session_state.page = "Market Watch"
+            st.rerun()
+
+    sym = st.session_state.selected_ticker
+    metrics = fetch_stock_metrics(sym, live=st.session_state.use_live_api)
+    hist_df = fetch_history_df(sym, metrics["price"])
+
+    col_chart, col_levels = st.columns([2.5, 1.1])
+
+    with col_chart:
+        st.markdown(f"<div class='card-header'>{sym} — {metrics['name']} | Price & Moving Averages</div>", unsafe_allow_html=True)
+        chart_mode = st.radio("图表维度", ["Price Chart (Candles + MA)", "Volume", "RSI (14)"], horizontal=True, label_visibility="collapsed")
+
+        fig = go.Figure()
+        if chart_mode == "Price Chart (Candles + MA)":
+            fig.add_trace(go.Candlestick(
+                x=hist_df["Date"], open=hist_df["Open"], high=hist_df["High"],
+                low=hist_df["Low"], close=hist_df["Close"], name="Price",
+                increasing_line_color="#22c55e", decreasing_line_color="#ef4444"
+            ))
+            fig.add_trace(go.Scatter(x=hist_df["Date"], y=hist_df["MA20"], line=dict(color="#facc15", width=2), name="MA20"))
+            fig.add_trace(go.Scatter(x=hist_df["Date"], y=hist_df["MA50"], line=dict(color="#38bdf8", width=2), name="MA50"))
+            fig.add_trace(go.Scatter(x=hist_df["Date"], y=hist_df["MA200"], line=dict(color="#e879f9", width=2), name="MA200"))
+        elif chart_mode == "Volume":
+            fig.add_trace(go.Bar(x=hist_df["Date"], y=hist_df["Volume"], marker_color="#3b82f6", name="Volume"))
+        else:
+            delta = hist_df["Close"].diff()
+            gain = delta.clip(lower=0).rolling(14).mean()
+            loss = -delta.clip(upper=0).rolling(14).mean()
+            rsi_series = 100 - (100 / (1 + gain / loss))
+            fig.add_trace(go.Scatter(x=hist_df["Date"], y=rsi_series, line=dict(color="#38bdf8", width=2.5), name="RSI (14)"))
+            fig.add_hline(y=70, line_dash="dash", line_color="#ef4444")
+            fig.add_hline(y=30, line_dash="dash", line_color="#22c55e")
+
+        fig.update_layout(
+            template="plotly_dark",
+            paper_bgcolor="rgba(6, 20, 48, 0.95)",
+            plot_bgcolor="rgba(4, 14, 34, 0.98)",
+            xaxis_rangeslider_visible=False,
+            height=410,
+            font=dict(size=16, color="#ffffff"),
+            margin=dict(l=10, r=10, t=20, b=10),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0)
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    with col_levels:
+        st.markdown("<div class='card-header'>PRICE LEVEL LADDER</div>", unsafe_allow_html=True)
+        curr = metrics["price"]
+        levels = [30, 25, 20, 15, 10, 5, 0, -5, -10, -15, -20, -25, -30]
+        level_rows = []
+        for pct in levels:
+            label = "CURRENT" if pct == 0 else f"{pct:+d}%"
+            target_p = round(curr * (1 + pct / 100.0), 2)
+            level_rows.append({"LEVEL": label, "TARGET PRICE": f"{target_p:.2f}"})
+
+        df_levels = pd.DataFrame(level_rows)
+
+        def highlight_current(row):
+            if row["LEVEL"] == "CURRENT":
+                return ["background-color: #eab308; color: #000000; font-size: 18px; font-weight: 900;"] * 2
+            elif "+" in row["LEVEL"]:
+                return ["background-color: #07193d; color: #4ade80; font-size: 17px; font-weight: 700;"] * 2
+            else:
+                return ["background-color: #07193d; color: #f87171; font-size: 17px; font-weight: 700;"] * 2
+
+        st.dataframe(
+            df_levels.style.apply(highlight_current, axis=1),
+            use_container_width=True,
+            height=415,
+            row_height=30
