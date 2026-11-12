@@ -203,9 +203,9 @@ elif st.session_state.page == "Stock Analysis":
             bg = "#eab308" if pct == 0 else "#07193d"
             fg = "#000" if pct == 0 else ("#4ade80" if pct > 0 else "#f87171")
             fw = "900" if pct == 0 else "700"
-            rows_html += f"<tr style='background:{bg};border-bottom:1px solid #1e3a8a;'><td style='padding:6px 10px;color:{fg};font-weight:{fw};font-size:14px;'>{lbl}</td><td style='padding:6px 10px;color:{fg};font-weight:{fw};font-size:14px;text-align:right;'>{tp:.2f}</td></tr>"
-        html_box = f"<div style='background:#061430;border:1px solid #2563eb;border-radius:8px;height:490px;overflow-y:auto;padding:2px;'><table style='width:100%;border-collapse:collapse;font-family:sans-serif;'><thead><tr style='border-bottom:2px solid #1e3a8a;color:#93c5fd;font-size:14px;position:sticky;top:0;background:#061430;'><th style='padding:6px 10px;text-align:left;'>LEVEL</th><th style='padding:6px 10px;text-align:right;'>TARGET PRICE</th></tr></thead><tbody>{rows_html}</tbody></table></div>"
-        st.components.v1.html(html_box, height=505)
+            rows_html += f"<tr style='background:{bg};border-bottom:1px solid #1e3a8a;'><td style='padding:8px 10px;color:{fg};font-weight:{fw};font-size:15px;'>{lbl}</td><td style='padding:8px 10px;color:{fg};font-weight:{fw};font-size:15px;text-align:right;'>{tp:.2f}</td></tr>"
+        html_box = f"<div style='background:#061430;border:1px solid #2563eb;border-radius:8px;height:540px;overflow-y:auto;padding:2px;'><table style='width:100%;border-collapse:collapse;font-family:sans-serif;'><thead><tr style='border-bottom:2px solid #1e3a8a;color:#93c5fd;font-size:15px;position:sticky;top:0;background:#061430;'><th style='padding:8px 10px;text-align:left;'>LEVEL</th><th style='padding:8px 10px;text-align:right;'>TARGET PRICE</th></tr></thead><tbody>{rows_html}</tbody></table></div>"
+        st.components.v1.html(html_box, height=555)
 
     chg = round(m["price"] - m["prev"], 2)
     pct_c = round((chg / m["prev"]) * 100, 2) if m["prev"] else 0.0
