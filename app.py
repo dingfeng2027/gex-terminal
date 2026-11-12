@@ -290,13 +290,30 @@ elif st.session_state.page == "Stock Analysis":
     with col_chart:
         st.markdown(f"<div class='card-header'>{sym} — {metrics['name']} | Price Chart & Historical Range</div>", unsafe_allow_html=True)
         
-        # 使用横向单选按钮替代多列按钮，完美解决窄屏换行错位问题
+        # 完美解决换行错位：使用原生水平排列的胶囊按钮组
         periods = ["1日", "1星期", "3星期", "1个月", "6个月", "1年", "全部"]
-        current_period_idx = periods.index(st.session_state.chart_period) if st.session_state.chart_period in periods else 4
-        selected_p = st.radio("时间周期", periods, index=current_period_idx, horizontal=True, label_visibility="collapsed")
-        if selected_p != st.session_state.chart_period:
-            st.session_state.chart_period = selected_p
-            st.rerun()
+        p_cols = st.columns(len(periods))
+        for idx, p in enumerate(periods):
+            with p_cols[idx]:
+                is_selected = (st.session_state.chart_period == p)
+                btn_bg = "#ffffff" if is_selected else "linear-gradient(180deg, #2563eb 0%, #1d4ed8 100%)"
+                btn_fg = "#000000" if is_selected else "#ffffff"
+                btn_fw = "900" if is_selected else "700"
+                
+                # 注入当前选中按钮的特定高亮样式
+                st.markdown(f"""
+                <style>
+                div.stButton > button[data-baseweb="button"]:nth-of-type({idx+1}) {{
+                    background: {btn_bg} !important;
+                    color: {btn_fg} !important;
+                    font-weight: {btn_fw} !important;
+                }}
+                </style>
+                """, unsafe_allow_html=True)
+                
+                if st.button(p, use_container_width=True, key=f"period_btn_{p}"):
+                    st.session_state.chart_period = p
+                    st.rerun()
 
         hist_df = fetch_history_df(sym, st.session_state.chart_period, metrics["price"])
         
