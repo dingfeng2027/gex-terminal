@@ -32,7 +32,7 @@ FALLBACK_DATA = {
     "NVDA": {"name": "NVIDIA Corp", "price": 177.34, "prev": 186.64, "ma20": 209.10, "ma50": 219.01, "ma200": 204.62, "pe": 22.43, "high52": 195.95, "low52": 86.62, "rsi": 38.7, "eps": 8.31, "mcap": "4.60T"},
     "GOOGL": {"name": "Alphabet Inc", "price": 288.93, "prev": 284.78, "ma20": 314.25, "ma50": 331.77, "ma200": 339.32, "pe": 15.09, "high52": 303.14, "low52": 142.66, "rsi": 55.9, "eps": 19.14, "mcap": "3.54T"},
     "TSM": {"name": "TSMC", "price": 391.23, "prev": 375.44, "ma20": 413.78, "ma50": 431.12, "ma200": 401.76, "pe": 25.36, "high52": 475.59, "low52": 260.50, "rsi": 62.3, "eps": 15.42, "mcap": "2.02T"},
-    "AMD": {"name": "AMD Inc", "price": 509.52, "prev": 449.04, "ma20": 523.06, "ma50": 547.69, "ma200": 417.23, "pe": 108.81, "high52": 607.31, "low52": 128.20, "rsi": 72.5, "eps": 4.68, "mcap": "825B"},
+    "AMD": {"name": "Advanced Micro Devices", "price": 509.52, "prev": 449.04, "ma20": 523.06, "ma50": 547.69, "ma200": 417.23, "pe": 108.81, "high52": 607.31, "low52": 128.20, "rsi": 72.5, "eps": 4.68, "mcap": "825B"},
     "MSFT": {"name": "Microsoft", "price": 546.89, "prev": 530.61, "ma20": 531.69, "ma50": 517.31, "ma200": 440.25, "pe": 28.55, "high52": 567.20, "low52": 349.70, "rsi": 64.1, "eps": 19.15, "mcap": "4.06T"},
     "META": {"name": "Meta Platforms", "price": 644.30, "prev": 610.15, "ma20": 657.74, "ma50": 676.24, "ma200": 631.87, "pe": 21.99, "high52": 740.91, "low52": 476.50, "rsi": 59.4, "eps": 29.30, "mcap": "1.63T"},
     "AMZN": {"name": "Amazon.com", "price": 268.44, "prev": 259.30, "ma20": 254.72, "ma50": 253.99, "ma200": 244.09, "pe": 21.70, "high52": 287.38, "low52": 161.67, "rsi": 57.8, "eps": 12.37, "mcap": "2.81T"},
@@ -203,9 +203,9 @@ elif st.session_state.page == "Stock Analysis":
             bg = "#eab308" if pct == 0 else "#07193d"
             fg = "#000" if pct == 0 else ("#4ade80" if pct > 0 else "#f87171")
             fw = "900" if pct == 0 else "700"
-            rows_html += f"<tr style='background:{bg};border-bottom:1px solid #1e3a8a;'><td style='padding:10px 12px;color:{fg};font-weight:{fw};font-size:18px;'>{lbl}</td><td style='padding:10px 12px;color:{fg};font-weight:{fw};font-size:18px;text-align:right;'>{tp:.2f}</td></tr>"
-        html_box = f"<div style='background:#061430;border:1px solid #2563eb;border-radius:8px;height:600px;overflow-y:auto;padding:4px;'><table style='width:100%;border-collapse:collapse;font-family:sans-serif;'><thead><tr style='border-bottom:2px solid #1e3a8a;color:#93c5fd;font-size:16px;position:sticky;top:0;background:#061430;'><th style='padding:10px 12px;text-align:left;'>LEVEL</th><th style='padding:10px 12px;text-align:right;'>TARGET PRICE</th></tr></thead><tbody>{rows_html}</tbody></table></div>"
-        st.components.v1.html(html_box, height=620)
+            rows_html += f"<tr style='background:{bg};border-bottom:1px solid #1e3a8a;'><td style='padding:6px 10px;color:{fg};font-weight:{fw};font-size:14px;'>{lbl}</td><td style='padding:6px 10px;color:{fg};font-weight:{fw};font-size:14px;text-align:right;'>{tp:.2f}</td></tr>"
+        html_box = f"<div style='background:#061430;border:1px solid #2563eb;border-radius:8px;height:490px;overflow-y:auto;padding:2px;'><table style='width:100%;border-collapse:collapse;font-family:sans-serif;'><thead><tr style='border-bottom:2px solid #1e3a8a;color:#93c5fd;font-size:14px;position:sticky;top:0;background:#061430;'><th style='padding:6px 10px;text-align:left;'>LEVEL</th><th style='padding:6px 10px;text-align:right;'>TARGET PRICE</th></tr></thead><tbody>{rows_html}</tbody></table></div>"
+        st.components.v1.html(html_box, height=505)
 
     chg = round(m["price"] - m["prev"], 2)
     pct_c = round((chg / m["prev"]) * 100, 2) if m["prev"] else 0.0
