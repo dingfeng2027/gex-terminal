@@ -6,7 +6,7 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 
 # ---------------------------------------------------------
-# 1. 页面基础配置与深蓝金融终端 CSS 样式
+# 1. 页面基础配置与高对比深蓝大字体样式
 # ---------------------------------------------------------
 st.set_page_config(
     page_title="CAPITAL QUANT v2",
@@ -16,54 +16,50 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-    /* 全局深蓝渐变背景 */
+    /* 强制全局深蓝终端背景与大字号 */
+    html, body, [class*="css"] {
+        font-size: 17px !important;
+    }
     .stApp {
-        background: radial-gradient(circle at top center, #0a2558 0%, #040d21 65%, #020712 100%);
-        color: #ffffff;
-        font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+        background: radial-gradient(circle at top center, #0a2558 0%, #040d21 65%, #020712 100%) !important;
+        color: #ffffff !important;
+        font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif !important;
     }
     .block-container {
-        padding-top: 1.2rem !important;
+        padding-top: 1rem !important;
         padding-bottom: 2rem !important;
-        max-width: 1400px !important;
+        max-width: 1480px !important;
     }
     header, footer, #MainMenu {visibility: hidden;}
 
-    /* 顶部导航栏容器 */
+    /* 顶部导航栏 */
     .top-bar {
         background: linear-gradient(90deg, #061533 0%, #0c275e 50%, #061533 100%);
-        border: 1px solid #1e4287;
+        border: 1px solid #2563eb;
         border-radius: 8px;
-        padding: 12px 20px;
+        padding: 14px 22px;
         display: flex;
         justify-content: space-between;
         align-items: center;
         margin-bottom: 16px;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+        box-shadow: 0 4px 15px rgba(0,0,0,0.6);
     }
     .brand-title {
-        font-size: 20px;
+        font-size: 24px !important;
         font-weight: 800;
         letter-spacing: 1px;
         color: #ffffff;
     }
     .live-badge {
-        color: #22c55e;
+        color: #4ade80;
         font-weight: 700;
-        font-size: 13px;
+        font-size: 15px !important;
     }
 
-    /* 区块卡片样式 */
-    .terminal-card {
-        background: rgba(7, 22, 54, 0.85);
-        border: 1px solid #1d4ed8;
-        border-radius: 8px;
-        padding: 14px 18px;
-        margin-bottom: 14px;
-    }
+    /* 区块标题 */
     .card-header {
-        font-size: 14px;
-        font-weight: 700;
+        font-size: 17px !important;
+        font-weight: 800;
         letter-spacing: 0.8px;
         color: #93c5fd;
         border-bottom: 1px solid #1e3a8a;
@@ -72,49 +68,61 @@ st.markdown("""
         text-transform: uppercase;
     }
 
-    /* 按钮美化 */
+    /* 按钮样式放大 */
     div.stButton > button {
-        background: linear-gradient(180deg, #2563eb 0%, #1d4ed8 100%);
-        color: white !important;
-        border: 1px solid #60a5fa;
-        border-radius: 6px;
-        font-weight: 700;
-        letter-spacing: 0.5px;
-        transition: all 0.2s;
+        background: linear-gradient(180deg, #2563eb 0%, #1d4ed8 100%) !important;
+        color: #ffffff !important;
+        border: 1px solid #60a5fa !important;
+        border-radius: 6px !important;
+        font-size: 16px !important;
+        font-weight: 700 !important;
+        padding: 8px 14px !important;
     }
     div.stButton > button:hover {
-        background: linear-gradient(180deg, #3b82f6 0%, #2563eb 100%);
-        border-color: #ffffff;
-        transform: translateY(-1px);
+        background: linear-gradient(180deg, #3b82f6 0%, #2563eb 100%) !important;
+        border-color: #ffffff !important;
     }
 
-    /* 表格与输入框深色适配 */
-    div[data-testid="stDataFrame"] {
-        border: 1px solid #1e40af;
-        border-radius: 8px;
-        overflow: hidden;
-    }
-    .stTextInput input, .stSelectbox div[data-baseweb="select"] {
+    /* 输入框与下拉框高对比深蓝底白字 */
+    .stTextInput input {
         background-color: #07193d !important;
         color: #ffffff !important;
+        border: 1px solid #3b82f6 !important;
+        font-size: 16px !important;
+    }
+    .stTextInput input::placeholder {
+        color: #94a3b8 !important;
+    }
+    div[data-baseweb="select"] > div {
+        background-color: #07193d !important;
+        color: #ffffff !important;
+        border: 1px solid #3b82f6 !important;
+        font-size: 16px !important;
+    }
+
+    /* 强制表格内部文字放大并高对比 */
+    div[data-testid="stDataFrame"] {
         border: 1px solid #2563eb !important;
+        border-radius: 8px !important;
+        background-color: #061430 !important;
     }
 
     /* 关键指标小卡片 */
     .metric-box {
         background: #061430;
-        border: 1px solid #1e3a8a;
-        border-radius: 6px;
-        padding: 10px 14px;
+        border: 1px solid #2563eb;
+        border-radius: 8px;
+        padding: 12px 16px;
         text-align: center;
     }
     .metric-label {
-        font-size: 12px;
-        color: #94a3b8;
+        font-size: 14px !important;
+        color: #93c5fd;
         margin-bottom: 4px;
+        font-weight: 600;
     }
     .metric-val {
-        font-size: 18px;
+        font-size: 21px !important;
         font-weight: 800;
         color: #ffffff;
     }
@@ -129,7 +137,6 @@ DEFAULT_TICKERS = [
     "AMZN", "AAPL", "ASML", "TSLA", "VUAG.L", "EQQQ.L"
 ]
 
-# 基准兜底数据（当网络拉取受限或休市无数据时保证界面完美展示）
 FALLBACK_DATA = {
     "NVDA":   {"name": "NVIDIA Corporation", "price": 177.34, "prev": 186.64, "ma20": 209.10, "ma50": 219.01, "ma200": 204.62, "pe": 22.43, "high52": 195.95, "low52": 86.62, "rsi": 38.7, "eps": 8.31, "mcap": "4.60T"},
     "GOOGL":  {"name": "Alphabet Inc.", "price": 288.93, "prev": 284.78, "ma20": 314.25, "ma50": 331.77, "ma200": 339.32, "pe": 15.09, "high52": 303.14, "low52": 142.66, "rsi": 55.9, "eps": 19.14, "mcap": "3.54T"},
@@ -155,7 +162,7 @@ if "use_live_api" not in st.session_state:
     st.session_state.use_live_api = True
 
 # ---------------------------------------------------------
-# 3. 数据获取函数（支持实时 yfinance + 自动兜底）
+# 3. 数据获取函数（修复 NaN/None 导致的表格空白问题）
 # ---------------------------------------------------------
 def compute_rsi(series, period=14):
     delta = series.diff()
@@ -163,7 +170,8 @@ def compute_rsi(series, period=14):
     loss = -delta.clip(upper=0).rolling(window=period).mean()
     rs = gain / loss
     rsi = 100 - (100 / (1 + rs))
-    return round(float(rsi.iloc[-1]), 1) if not pd.isna(rsi.iloc[-1]) else 50.0
+    val = rsi.iloc[-1]
+    return round(float(val), 1) if pd.notna(val) else 50.0
 
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_stock_metrics(symbol, live=True):
@@ -177,7 +185,7 @@ def fetch_stock_metrics(symbol, live=True):
 
     try:
         t = yf.Ticker(symbol)
-        hist = t.history(period="1y")
+        hist = t.history(period="1y").dropna(subset=["Close"])
         if hist.empty or len(hist) < 2:
             return fb
 
@@ -191,11 +199,14 @@ def fetch_stock_metrics(symbol, live=True):
         low52 = round(float(hist["Low"].min()), 2)
         rsi = compute_rsi(close, 14)
 
+        if any(pd.isna(x) for x in [price, prev, ma20, ma50, ma200]):
+            return fb
+
         info = t.info or {}
         pe = info.get("trailingPE")
-        pe = round(float(pe), 2) if pe else fb["pe"]
+        pe = round(float(pe), 2) if (pe is not None and pd.notna(pe)) else fb["pe"]
         eps = info.get("trailingEps")
-        eps = round(float(eps), 2) if eps else fb["eps"]
+        eps = round(float(eps), 2) if (eps is not None and pd.notna(eps)) else fb["eps"]
         name = info.get("shortName") or fb["name"]
         mcap_raw = info.get("marketCap")
         if mcap_raw:
@@ -216,17 +227,16 @@ def fetch_stock_metrics(symbol, live=True):
 def fetch_history_df(symbol, current_price):
     try:
         t = yf.Ticker(symbol)
-        hist = t.history(period="6mo")
+        hist = t.history(period="6mo").dropna(subset=["Close"])
         if not hist.empty and len(hist) > 20:
             hist = hist.reset_index()
-            hist["MA20"] = hist["Close"].rolling(20).mean()
-            hist["MA50"] = hist["Close"].rolling(50).mean()
+            hist["MA20"] = hist["Close"].rolling(20, min_periods=1).mean()
+            hist["MA50"] = hist["Close"].rolling(50, min_periods=1).mean()
             hist["MA200"] = hist["Close"].rolling(200, min_periods=1).mean()
             return hist
     except Exception:
         pass
 
-    # 生成模拟6个月趋势（如果接口受限）
     np.random.seed(abs(hash(symbol)) % 10000)
     dates = pd.date_range(end=datetime.today(), periods=120, freq="B")
     returns = np.random.normal(0.001, 0.02, size=len(dates))
@@ -257,7 +267,6 @@ def fetch_options_chain(symbol, spot_price):
     except Exception:
         pass
 
-    # 若为英股ETF或无期权链标的，生成标准BS模型仿真期权链供展示
     exps = [(datetime.today() + timedelta(days=7 * i)).strftime("%Y-%m-%d") for i in range(1, 7)]
     step = 5.0 if spot_price > 100 else 2.5
     base_strike = round(spot_price / step) * step
@@ -294,7 +303,7 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-nav1, nav2, nav3, nav4 = st.columns([1.2, 1.2, 1.5, 2.5])
+nav1, nav2, nav3, nav4 = st.columns([1.3, 1.3, 1.6, 2.2])
 with nav1:
     if st.button("📊 1. Market Watch", use_container_width=True):
         st.session_state.page = "Market Watch"
@@ -316,7 +325,7 @@ st.markdown("---")
 # 页面 1：MARKET WATCH（自选股监控总览）
 # =========================================================
 if st.session_state.page == "Market Watch":
-    c_title, c_input, c_add, c_refresh = st.columns([2.2, 2.2, 1.1, 1.3])
+    c_title, c_input, c_add, c_refresh = st.columns([2.0, 2.2, 1.2, 1.3])
     with c_title:
         st.markdown("### 🖥️ Market Watch")
     with c_input:
@@ -331,7 +340,7 @@ if st.session_state.page == "Market Watch":
             st.cache_data.clear()
             st.rerun()
 
-    st.caption("💡 **操作提示**：直接点击表格中的任意一行公司，即可自动进入第 2 页 **Stock Analysis** 查看详细技术面与阶梯价位。")
+    st.markdown("<div style='font-size:15px; color:#93c5fd; margin-bottom:8px;'>💡 <b>操作提示</b>：点击表格左侧勾选框或任意一行公司，即可自动进入第 2 页 <b>Stock Analysis</b> 查看详细技术面与阶梯价位。</div>", unsafe_allow_html=True)
 
     rows = []
     gainers, losers = 0, 0
@@ -360,21 +369,24 @@ if st.session_state.page == "Market Watch":
 
     df_watch = pd.DataFrame(rows)
 
-    # 样式着色函数
+    # 强制每个单元格都带有深蓝底色 + 大号清晰字体，彻底杜绝白底隐身
     def style_watch_table(val, col_name):
+        base = "background-color: #07193d; font-size: 17px; font-weight: 700;"
         if col_name in ["CHANGE", "% CHANGE"]:
-            color = "#22c55e" if val > 0 else ("#ef4444" if val < 0 else "#ffffff")
-            return f"color: {color}; font-weight: 700;"
+            color = "#4ade80" if val > 0 else ("#f87171" if val < 0 else "#ffffff")
+            return f"{base} color: {color};"
         if col_name == "RSI (14)":
             if val >= 70:
-                return "background-color: #dc2626; color: white; font-weight: 700;"
+                return "background-color: #dc2626; color: #ffffff; font-size: 17px; font-weight: 800;"
             elif val <= 40:
-                return "background-color: #eab308; color: black; font-weight: 700;"
+                return "background-color: #eab308; color: #000000; font-size: 17px; font-weight: 800;"
             else:
-                return "background-color: #16a34a; color: white; font-weight: 700;"
+                return "background-color: #16a34a; color: #ffffff; font-size: 17px; font-weight: 800;"
         if col_name == "COMPANY CODE":
-            return "color: #60a5fa; font-weight: 800;"
-        return "color: #f8fafc;"
+            return f"{base} color: #60a5fa; font-weight: 900;"
+        if col_name == "TODAY PRICE":
+            return f"{base} color: #facc15; font-weight: 800;"
+        return f"{base} color: #ffffff;"
 
     styled_df = df_watch.style.apply(
         lambda col: [style_watch_table(v, col.name) for v in col], axis=0
@@ -391,11 +403,11 @@ if st.session_state.page == "Market Watch":
         "RSI (14)": "{:.1f}"
     })
 
-    # 支持单行点击选择（Streamlit 原生交互事件）
     event = st.dataframe(
         styled_df,
         use_container_width=True,
-        height=490,
+        height=560,
+        row_height=42,
         hide_index=True,
         on_select="rerun",
         selection_mode="single-row"
@@ -409,7 +421,7 @@ if st.session_state.page == "Market Watch":
         st.rerun()
 
     # 底部栏：快速进入按钮 + 涨跌统计
-    b_left, b_mid, b_right = st.columns([2.2, 2.5, 2.5])
+    b_left, b_mid, b_right = st.columns([2.4, 2.2, 2.4])
     with b_left:
         if st.button(f"🏛️ OPEN COMPANY ANALYSIS ({st.session_state.selected_ticker}) >", use_container_width=True):
             st.session_state.page = "Stock Analysis"
@@ -421,9 +433,9 @@ if st.session_state.page == "Market Watch":
             st.rerun()
     with b_right:
         st.markdown(
-            f"<div style='text-align:right; padding-top:8px; font-weight:700;'>"
-            f"<span style='color:#22c55e;'>▲ {gainers} Gainers</span> &nbsp;|&nbsp; "
-            f"<span style='color:#ef4444;'>● {losers} Losers</span> &nbsp;|&nbsp; "
+            f"<div style='text-align:right; padding-top:8px; font-size:17px; font-weight:800;'>"
+            f"<span style='color:#4ade80;'>▲ {gainers} Gainers</span> &nbsp;|&nbsp; "
+            f"<span style='color:#f87171;'>● {losers} Losers</span> &nbsp;|&nbsp; "
             f"Total: {len(df_watch)}</div>",
             unsafe_allow_html=True
         )
@@ -432,7 +444,7 @@ if st.session_state.page == "Market Watch":
 # 页面 2：STOCK ANALYSIS（个股深度技术分析 + 阶梯价位）
 # =========================================================
 elif st.session_state.page == "Stock Analysis":
-    top_l, top_sel, top_opt, top_back = st.columns([2.0, 2.4, 2.0, 1.2])
+    top_l, top_sel, top_opt, top_back = st.columns([2.0, 2.4, 2.2, 1.2])
     with top_l:
         st.markdown("### 📈 Stock Analysis")
     with top_sel:
@@ -454,7 +466,7 @@ elif st.session_state.page == "Stock Analysis":
     metrics = fetch_stock_metrics(sym, live=st.session_state.use_live_api)
     hist_df = fetch_history_df(sym, metrics["price"])
 
-    col_chart, col_levels = st.columns([2.6, 1.0])
+    col_chart, col_levels = st.columns([2.5, 1.1])
 
     with col_chart:
         st.markdown(f"<div class='card-header'>{sym} — {metrics['name']} | Price & Moving Averages</div>", unsafe_allow_html=True)
@@ -467,9 +479,9 @@ elif st.session_state.page == "Stock Analysis":
                 low=hist_df["Low"], close=hist_df["Close"], name="Price",
                 increasing_line_color="#22c55e", decreasing_line_color="#ef4444"
             ))
-            fig.add_trace(go.Scatter(x=hist_df["Date"], y=hist_df["MA20"], line=dict(color="#facc15", width=1.8), name="MA20"))
-            fig.add_trace(go.Scatter(x=hist_df["Date"], y=hist_df["MA50"], line=dict(color="#38bdf8", width=1.8), name="MA50"))
-            fig.add_trace(go.Scatter(x=hist_df["Date"], y=hist_df["MA200"], line=dict(color="#e879f9", width=1.8), name="MA200"))
+            fig.add_trace(go.Scatter(x=hist_df["Date"], y=hist_df["MA20"], line=dict(color="#facc15", width=2), name="MA20"))
+            fig.add_trace(go.Scatter(x=hist_df["Date"], y=hist_df["MA50"], line=dict(color="#38bdf8", width=2), name="MA50"))
+            fig.add_trace(go.Scatter(x=hist_df["Date"], y=hist_df["MA200"], line=dict(color="#e879f9", width=2), name="MA200"))
         elif chart_mode == "Volume":
             fig.add_trace(go.Bar(x=hist_df["Date"], y=hist_df["Volume"], marker_color="#3b82f6", name="Volume"))
         else:
@@ -477,16 +489,17 @@ elif st.session_state.page == "Stock Analysis":
             gain = delta.clip(lower=0).rolling(14).mean()
             loss = -delta.clip(upper=0).rolling(14).mean()
             rsi_series = 100 - (100 / (1 + gain / loss))
-            fig.add_trace(go.Scatter(x=hist_df["Date"], y=rsi_series, line=dict(color="#38bdf8", width=2), name="RSI (14)"))
+            fig.add_trace(go.Scatter(x=hist_df["Date"], y=rsi_series, line=dict(color="#38bdf8", width=2.5), name="RSI (14)"))
             fig.add_hline(y=70, line_dash="dash", line_color="#ef4444")
             fig.add_hline(y=30, line_dash="dash", line_color="#22c55e")
 
         fig.update_layout(
             template="plotly_dark",
-            paper_bgcolor="rgba(6, 20, 48, 0.9)",
-            plot_bgcolor="rgba(4, 14, 34, 0.95)",
+            paper_bgcolor="rgba(6, 20, 48, 0.95)",
+            plot_bgcolor="rgba(4, 14, 34, 0.98)",
             xaxis_rangeslider_visible=False,
-            height=380,
+            height=430,
+            font=dict(size=14, color="#ffffff"),
             margin=dict(l=10, r=10, t=20, b=10),
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0)
         )
@@ -506,16 +519,17 @@ elif st.session_state.page == "Stock Analysis":
 
         def highlight_current(row):
             if row["LEVEL"] == "CURRENT":
-                return ["background-color: #eab308; color: #000000; font-weight: 800;"] * 2
+                return ["background-color: #eab308; color: #000000; font-size: 17px; font-weight: 900;"] * 2
             elif "+" in row["LEVEL"]:
-                return ["color: #4ade80; font-weight: 600;"] * 2
+                return ["background-color: #07193d; color: #4ade80; font-size: 16px; font-weight: 700;"] * 2
             else:
-                return ["color: #f87171; font-weight: 600;"] * 2
+                return ["background-color: #07193d; color: #f87171; font-size: 16px; font-weight: 700;"] * 2
 
         st.dataframe(
             df_levels.style.apply(highlight_current, axis=1),
             use_container_width=True,
-            height=385,
+            height=435,
+            row_height=31,
             hide_index=True
         )
 
@@ -523,10 +537,10 @@ elif st.session_state.page == "Stock Analysis":
     st.markdown("<div class='card-header'>KEY DATA SUMMARY</div>", unsafe_allow_html=True)
     chg = round(metrics["price"] - metrics["prev"], 2)
     pct_chg = round((chg / metrics["prev"]) * 100, 2) if metrics["prev"] else 0.0
-    chg_color = "#22c55e" if chg >= 0 else "#ef4444"
+    chg_color = "#4ade80" if chg >= 0 else "#f87171"
 
     k1, k2, k3, k4, k5, k6 = st.columns(6)
-    k1.markdown(f"<div class='metric-box'><div class='metric-label'>Current Price</div><div class='metric-val'>{metrics['price']:.2f} <span style='font-size:13px;color:{chg_color};'>({pct_chg:+.2f}%)</span></div></div>", unsafe_allow_html=True)
+    k1.markdown(f"<div class='metric-box'><div class='metric-label'>Current Price</div><div class='metric-val'>{metrics['price']:.2f} <span style='font-size:15px;color:{chg_color};'>({pct_chg:+.2f}%)</span></div></div>", unsafe_allow_html=True)
     k2.markdown(f"<div class='metric-box'><div class='metric-label'>52 Week High</div><div class='metric-val'>{metrics['high52']:.2f}</div></div>", unsafe_allow_html=True)
     k3.markdown(f"<div class='metric-box'><div class='metric-label'>52 Week Low</div><div class='metric-val'>{metrics['low52']:.2f}</div></div>", unsafe_allow_html=True)
     k4.markdown(f"<div class='metric-box'><div class='metric-label'>Market Cap</div><div class='metric-val'>{metrics['mcap']}</div></div>", unsafe_allow_html=True)
@@ -561,7 +575,7 @@ elif st.session_state.page == "Options Data":
 
     exps, default_exp, calls_df, puts_df, is_real_opt = fetch_options_chain(sym, spot)
 
-    exp_col, info_col = st.columns([1.5, 3.5])
+    exp_col, info_col = st.columns([1.6, 3.4])
     with exp_col:
         selected_exp = st.selectbox("选择到期日 (Expiration Date)", exps, index=0)
         if is_real_opt and selected_exp != default_exp:
@@ -573,9 +587,8 @@ elif st.session_state.page == "Options Data":
 
     with info_col:
         data_tag = "🟢 实时期权链数据 (Yahoo Options)" if is_real_opt else "🟡 量化模型仿真期权链 (该标的暂无公开美股期权)"
-        st.markdown(f"<div style='padding-top:28px; font-weight:700; color:#93c5fd;'>标的现价: <span style='color:#facc15;font-size:18px;'>${spot:.2f}</span> &nbsp;|&nbsp; {data_tag}</div>", unsafe_allow_html=True)
+        st.markdown(f"<div style='padding-top:32px; font-size:17px; font-weight:700; color:#93c5fd;'>标的现价: <span style='color:#facc15;font-size:21px;'>${spot:.2f}</span> &nbsp;|&nbsp; {data_tag}</div>", unsafe_allow_html=True)
 
-    # 筛选现价上下各 8 档行权价（ATM 附近最活跃期权）
     calls_sub = calls_df.copy()
     puts_sub = puts_df.copy()
     calls_sub["dist"] = (calls_sub["strike"] - spot).abs()
@@ -584,13 +597,11 @@ elif st.session_state.page == "Options Data":
     c_filt = calls_sub[calls_sub["strike"].isin(closest_strikes)].set_index("strike")
     p_filt = puts_sub[puts_sub["strike"].isin(closest_strikes)].set_index("strike")
 
-    # 计算期权核心指标：Put/Call Ratio、平均 IV、Max Pain
     total_call_oi = int(c_filt["openInterest"].fillna(0).sum())
     total_put_oi = int(p_filt["openInterest"].fillna(0).sum())
     pcr = round(total_put_oi / total_call_oi, 2) if total_call_oi > 0 else 1.0
     avg_iv = round(float(c_filt["impliedVolatility"].fillna(0.3).mean()) * 100, 1)
 
-    # 计算 Max Pain（最大痛点行权价）
     min_pain_val = float("inf")
     max_pain_strike = spot
     for k in closest_strikes:
@@ -608,14 +619,12 @@ elif st.session_state.page == "Options Data":
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # 组装 T 型跨式期权链表格（CALLS | STRIKE | PUTS）
     straddle_rows = []
     atm_strike = min(closest_strikes, key=lambda x: abs(x - spot)) if closest_strikes else spot
 
     for k in closest_strikes:
         c_row = c_filt.loc[k] if k in c_filt.index else {}
         p_row = p_filt.loc[k] if k in p_filt.index else {}
-        # 处理可能存在的重复行权价
         if isinstance(c_row, pd.DataFrame):
             c_row = c_row.iloc[0]
         if isinstance(p_row, pd.DataFrame):
@@ -645,15 +654,15 @@ elif st.session_state.page == "Options Data":
         for col in row.index:
             if col == "STRIKE":
                 if is_atm:
-                    styles.append("background-color: #eab308; color: #000000; font-weight: 900;")
+                    styles.append("background-color: #eab308; color: #000000; font-size: 17px; font-weight: 900;")
                 else:
-                    styles.append("background-color: #1e3a8a; color: #ffffff; font-weight: 800;")
+                    styles.append("background-color: #1e3a8a; color: #ffffff; font-size: 17px; font-weight: 800;")
             elif col.startswith("CALL"):
-                bg = "rgba(22, 163, 74, 0.18)" if row["STRIKE"] < spot else "rgba(7, 22, 54, 0.8)"
-                styles.append(f"background-color: {bg}; color: #86efac;")
+                bg = "#0c2b1e" if row["STRIKE"] < spot else "#07193d"
+                styles.append(f"background-color: {bg}; color: #86efac; font-size: 16px; font-weight: 700;")
             else:
-                bg = "rgba(220, 38, 38, 0.18)" if row["STRIKE"] > spot else "rgba(7, 22, 54, 0.8)"
-                styles.append(f"background-color: {bg}; color: #fca5a5;")
+                bg = "#2d1218" if row["STRIKE"] > spot else "#07193d"
+                styles.append(f"background-color: {bg}; color: #fca5a5; font-size: 16px; font-weight: 700;")
         return styles
 
     st.markdown("<div class='card-header'>T-SHAPED STRADDLE OPTIONS CHAIN (LEFT: CALLS | CENTER: STRIKE | RIGHT: PUTS)</div>", unsafe_allow_html=True)
@@ -664,11 +673,11 @@ elif st.session_state.page == "Options Data":
             "PUT LAST": "{:.2f}", "PUT BID": "{:.2f}", "PUT ASK": "{:.2f}"
         }),
         use_container_width=True,
-        height=480,
+        height=540,
+        row_height=40,
         hide_index=True
     )
 
-    # 持仓分布柱状图（Call OI vs Put OI 按行权价分布）
     st.markdown("<div class='card-header'>OPEN INTEREST DISTRIBUTION BY STRIKE (CALLS VS PUTS)</div>", unsafe_allow_html=True)
     fig_oi = go.Figure()
     fig_oi.add_trace(go.Bar(x=df_straddle["STRIKE"], y=df_straddle["CALL OI"], name="Call Open Interest", marker_color="#22c55e"))
@@ -677,9 +686,10 @@ elif st.session_state.page == "Options Data":
     fig_oi.update_layout(
         barmode="group",
         template="plotly_dark",
-        paper_bgcolor="rgba(6, 20, 48, 0.9)",
-        plot_bgcolor="rgba(4, 14, 34, 0.95)",
-        height=280,
+        paper_bgcolor="rgba(6, 20, 48, 0.95)",
+        plot_bgcolor="rgba(4, 14, 34, 0.98)",
+        height=310,
+        font=dict(size=14, color="#ffffff"),
         margin=dict(l=10, r=10, t=25, b=10)
     )
     st.plotly_chart(fig_oi, use_container_width=True)
