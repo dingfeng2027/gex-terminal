@@ -193,10 +193,21 @@ elif st.session_state.page == "Stock Analysis":
             if p_cols[i].button(p, use_container_width=True, key="p_" + p):
                 st.session_state.chart_period = p; st.rerun()
         hdf = fetch_history_df(sym, st.session_state.chart_period, m["price"])
+        
+        # 强制计算并锁定 Y 轴上下边界，确保现价虚线和右侧价格标签 100% 精准对齐
+        y_min = min(hdf["Close"].min(), m["price"]) * 0.98
+        y_max = max(hdf["Close"].max(), m["price"]) * 1.02
+
         fig = go.Figure(go.Scatter(x=hdf["Date"], y=hdf["Close"], mode="lines", line=dict(color="#0284c7", width=2.5)))
         fig.add_hline(y=m["price"], line_dash="dash", line_color="#64748b", annotation_text=" " + str(m['price']) + " ", annotation_position="right", annotation_font=dict(color="#fff", size=15), annotation_bgcolor="#334155")
-        fig.update_layout(template="plotly_white", paper_bgcolor="#fff", plot_bgcolor="#fff", xaxis_rangeslider_visible=False, height=455, font=dict(size=18, color="#1e293b"), margin=dict(l=10, r=70, t=10, b=10), showlegend=False)
-        fig.update_yaxes(side="right", gridcolor="#e2e8f0")
+        
+        fig.update_layout(
+            template="plotly_white", paper_bgcolor="#fff", plot_bgcolor="#fff",
+            xaxis_rangeslider_visible=False, height=455,
+            font=dict(size=18, color="#1e293b"),
+            margin=dict(l=10, r=70, t=10, b=10), showlegend=False
+        )
+        fig.update_yaxes(side="right", gridcolor="#e2e8f0", range=[y_min, y_max])
         st.plotly_chart(fig, use_container_width=True)
 
     with col_l:
