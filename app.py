@@ -235,6 +235,7 @@ elif st.session_state.page == "Stock Analysis":
         card_title_html = "<div class='card-header'>" + sym + " — " + m['name'] + " | Price Chart</div>"
         st.markdown(card_title_html, unsafe_allow_html=True)
         
+        # 动态注入选中周期的专属高亮样式（选中按钮背景变为亮金色/黄色 #eab308，文字为黑色加粗）
         active_p = st.session_state.chart_period
         periods = ["1日", "1星期", "1个月", "3个月", "6个月", "1年", "全部"]
         
@@ -282,8 +283,7 @@ elif st.session_state.page == "Stock Analysis":
             fw = "900" if pct == 0 else "700"
             rows_html += "<tr style='background:" + bg + ";border-bottom:1px solid #1e3a8a;'><td style='padding:9px 10px;color:" + fg + ";font-weight:" + fw + ";font-size:14px;'>" + lbl + "</td><td style='padding:9px 10px;color:" + fg + ";font-weight:" + fw + ";font-size:14px;text-align:right;'>" + f"{tp:.2f}" + "</td></tr>"
         
-        # 将内边距调整为 3px
-        html_box = "<div style='background:#061430;border:1px solid #2563eb;border-radius:8px;height:525px;overflow-y:auto;padding:3px 2px 2px 2px;'><table style='width:100%;border-collapse:collapse;font-family:sans-serif;'><thead><tr style='border-bottom:2px solid #1e3a8a;color:#93c5fd;font-size:14px;position:sticky;top:0;background:#061430;'><th style='padding:8px 10px;text-align:left;'>LEVEL</th><th style='padding:8px 10px;text-align:right;'>TARGET PRICE</th></tr></thead><tbody>" + rows_html + "</tbody></table></div>"
+        html_box = "<div style='background:#061430;border:1px solid #2563eb;border-radius:8px;height:525px;overflow-y:auto;padding:1px 2px 2px 2px;'><table style='width:100%;border-collapse:collapse;font-family:sans-serif;'><thead><tr style='border-bottom:2px solid #1e3a8a;color:#93c5fd;font-size:14px;position:sticky;top:0;background:#061430;'><th style='padding:8px 10px;text-align:left;'>LEVEL</th><th style='padding:8px 10px;text-align:right;'>TARGET PRICE</th></tr></thead><tbody>" + rows_html + "</tbody></table></div>"
         st.components.v1.html(html_box, height=540)
 
     chg = round(m["price"] - m["prev"], 2)
