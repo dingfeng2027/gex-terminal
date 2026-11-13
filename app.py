@@ -270,9 +270,9 @@ elif st.session_state.page == "Stock Analysis":
             fg = "#000" if pct == 0 else ("#4ade80" if pct > 0 else "#f87171")
             fw = "900" if pct == 0 else "700"
             rows_html += "<tr style='background:" + bg + ";border-bottom:1px solid #1e3a8a;'><td style='padding:9px 10px;color:" + fg + ";font-weight:" + fw + ";font-size:14px;'>" + lbl + "</td><td style='padding:9px 10px;color:" + fg + ";font-weight:" + fw + ";font-size:14px;text-align:right;'>" + f"{tp:.2f}" + "</td></tr>"
-        # 调整为精细的 1px 上边距
-        html_box = "<div style='background:#061430;border:1px solid #2563eb;border-radius:8px;height:510px;overflow-y:auto;padding:1px 2px 2px 2px;'><table style='width:100%;border-collapse:collapse;font-family:sans-serif;'><thead><tr style='border-bottom:2px solid #1e3a8a;color:#93c5fd;font-size:14px;position:sticky;top:0;background:#061430;'><th style='padding:8px 10px;text-align:left;'>LEVEL</th><th style='padding:8px 10px;text-align:right;'>TARGET PRICE</th></tr></thead><tbody>" + rows_html + "</tbody></table></div>"
-        st.components.v1.html(html_box, height=525)
+        # 完美解决：将 iframe 组件高度从 525 扩大到 550，彻底给所有行和底部的 -20% 留出充足空间
+        html_box = "<div style='background:#061430;border:1px solid #2563eb;border-radius:8px;height:535px;overflow-y:auto;padding:1px 2px 2px 2px;'><table style='width:100%;border-collapse:collapse;font-family:sans-serif;'><thead><tr style='border-bottom:2px solid #1e3a8a;color:#93c5fd;font-size:14px;position:sticky;top:0;background:#061430;'><th style='padding:8px 10px;text-align:left;'>LEVEL</th><th style='padding:8px 10px;text-align:right;'>TARGET PRICE</th></tr></thead><tbody>" + rows_html + "</tbody></table></div>"
+        st.components.v1.html(html_box, height=550)
 
     chg = round(m["price"] - m["prev"], 2)
     pct_c = round((chg / m["prev"]) * 100, 2) if m["prev"] else 0.0
