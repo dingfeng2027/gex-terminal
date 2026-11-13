@@ -293,13 +293,16 @@ elif st.session_state.page == "Stock Analysis":
         y_max = c_max + margin
 
         fig = go.Figure()
+        # 主股价曲线
         fig.add_trace(go.Scatter(x=hdf["Date"], y=hdf["Close"], mode="lines", line=dict(color="#0284c7", width=2.5), showlegend=False))
+        
+        # 使用 Scatter 模式，在虚线起点左侧/上方同时显示水平虚线和带有价格背景的数字标签
         fig.add_trace(go.Scatter(
             x=[hdf["Date"].iloc[0], hdf["Date"].iloc[-1]],
             y=[cur_price, cur_price],
             mode="lines+text",
             line=dict(color="#64748b", dash="dash", width=2),
-            text=["", f" {cur_price} "],
+            text=["", f"  {cur_price}  "],
             textposition="top right",
             textfont=dict(color="#fff", size=15),
             showlegend=False
