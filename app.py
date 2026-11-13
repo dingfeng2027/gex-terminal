@@ -77,18 +77,24 @@ def fetch_stock_metrics(symbol, live=True):
         if isinstance(c, pd.DataFrame):
             c = c.iloc[:, 0]
             
-        last_price = float(c.iloc[-1].item() if hasattr(c.iloc[-1], 'item') else c.iloc[-1])
-        prev_price = float(c.iloc[-2].item() if hasattr(c.iloc[-2], 'item') else c.iloc[-2])
-        ma20_val = float(c.tail(20).mean().item() if hasattr(c.tail(20).mean(), 'item') else c.tail(20).mean())
-        ma50_val = float(c.tail(50).mean().item() if hasattr(c.tail(50).mean(), 'item') else c.tail(50).mean())
-        ma200_val = float(c.tail(200).mean().item() if hasattr(c.tail(200).mean(), 'item') else c.tail(200).mean())
-        high_val = float(hist["High"].max().item() if hasattr(hist["High"].max(), 'item') else hist["High"].max())
-        low_val = float(hist["Low"].min().item() if hasattr(hist["Low"].min(), 'item') else hist["Low"].min())
+        last_val = c.iloc[-1]
+        if hasattr(last_val, 'item'): last_val = last_val.item()
+        last_price = float(last_val)
+
+        prev_val = c.iloc[-2]
+        if hasattr(prev_val, 'item'): prev_val = prev_val.item()
+        prev_price = float(prev_val)
+
+        ma20_val = float(c.tail(20).mean())
+        ma50_val = float(c.tail(50).mean())
+        ma200_val = float(c.tail(200).mean())
+        high_val = float(hist["High"].max())
+        low_val = float(hist["Low"].min())
         
         delta = c.diff()
         rs = delta.clip(lower=0).rolling(14).mean() / (-delta.clip(upper=0).rolling(14).mean())
         rsi_series = (100 - 100 / (1 + rs))
-        rsi_val = float(rsi_series.iloc[-1].item() if hasattr(rsi_series.iloc[-1], 'item') else rsi_series.iloc[-1])
+        rsi_val = float(rsi_series.iloc[-1])
         
         info = t.info or {}
         pe = info.get("trailingPE")
@@ -246,6 +252,8 @@ elif st.session_state.page == "Stock Analysis":
 
     sym = st.session_state.selected_ticker
     m = fetch_stock_metrics(sym, live=st.session_state.use_live_api)
+    cur_price = float(m["price"])
+    
     col_c, col_l = st.columns([2.5, 1.1])
     with col_c:
         card_title_html = "<div class='card-header'>" + sym + " — " + m['name'] + " | Price Chart</div>"
@@ -267,7 +275,7 @@ elif st.session_state.page == "Stock Analysis":
                 st.session_state.chart_period = p
                 st.rerun()
 
-        hdf = fetch_history_df(sym, st.session_state.chart_period, m["price"])
+        hdf = fetch_history_df(sym, st.session_state.chart_period, cur_price)
         
         c_min = hdf["Close"].min()
         c_max = hdf["Close"].max()
@@ -275,21 +283,8 @@ elif st.session_state.page == "Stock Analysis":
         y_min = c_min - margin
         y_max = c_max + margin
 
-        cur_price = float(m["price"])
-        fig = go.Figure()
-        # 主股价曲线
-        fig.add_trace(go.Scatter(x=hdf["Date"], y=hdf["Close"], mode="lines", line=dict(color="#0284c7", width=2.5), showlegend=False))
-        # 绝对水平的现价虚线（用首尾相同的 y 坐标确保 100% 水平）
-        fig.add_trace(go.Scatter(
-            x=[hdf["Date"].iloc[0], hdf["Date"].iloc[-1]],
-            y=[cur_price, cur_price],
-            mode="lines+text",
-            line=dict(color="#64748b", dash="dash", width=2),
-            text=["", f" {cur_price} "],
-            textposition="top right",
-            textfont=dict(color="#fff", size=15),
-            showlegend=False
-        ))
+        fig = go.Figure(go.Scatter(x=hdf["Date"], y=hdf["Close"], mode="lines", line=dict(color="#0284c7", width=2.5)))
+        fig.add_hline(y=cur_price, line_dash="dash", line_color="#64748b", annotation_text=" " + str(cur_price) + " ", annotation_position="right", annotation_font=dict(color="#fff", size=15), annotation_bgcolor="#334155")
         
         fig.update_layout(
             template="plotly_white", paper_bgcolor="#fff", plot_bgcolor="#fff",
@@ -311,9 +306,9 @@ elif st.session_state.page == "Stock Analysis":
             fw = "900" if pct == 0 else "700"
             rows_html += "<tr style='background:" + bg + ";border-bottom:1px solid #1e3a8a;'><td style='padding:9px 10px;color:" + fg + ";font-weight:" + fw + ";font-size:14px;'>" + lbl + "</td><td style='padding:9px 10px;color:" + fg + ";font-weight:" + fw + ";font-size:14px;text-align:right;'>" + f"{tp:.2f}" + "</td></tr>"
         
-        # 将内边距调整为要求的 4px，组件高度 540
-        html_box = "<div style='background:#061430;border:1px solid #2563eb;border-radius:8px;height:525px;overflow-y:auto;padding:4px 2px 2px 2px;'><table style='width:100%;border-collapse:collapse;font-family:sans-serif;'><thead><tr style='border-bottom:2px solid #1e3a8a;color:#93c5fd;font-size:14px;position:sticky;top:0;background:#061430;'><th style='padding:8px 10px;text-align:left;'>LEVEL</th><th style='padding:8px 10px;text-align:right;'>TARGET PRICE</th></tr></thead><tbody>" + rows_html + "</tbody></table></div>"
-        st.components.v1.html(html_box, height=540)
+        # 内边距调整为 4px，组件高度精确设为 545px
+        html_box = "<div style='background:#061430;border:1px solid #2563eb;border-radius:8px;height:530px;overflow-y:auto;padding:4px 2px 2px 2px;'><table style='width:100%;border-collapse:collapse;font-family:sans-serif;'><thead><tr style='border-bottom:2px solid #1e3a8a;color:#93c5fd;font-size:14px;position:sticky;top:0;background:#061430;'><th style='padding:8px 10px;text-align:left;'>LEVEL</th><th style='padding:8px 10px;text-align:right;'>TARGET PRICE</th></tr></thead><tbody>" + rows_html + "</tbody></table></div>"
+        st.components.v1.html(html_box, height=545)
 
     chg = round(cur_price - float(m["prev"]), 2)
     pct_c = round((chg / float(m["prev"])) * 100, 2) if float(m["prev"]) else 0.0
