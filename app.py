@@ -292,28 +292,33 @@ elif st.session_state.page == "Stock Analysis":
         y_min = c_min - margin
         y_max = c_max + margin
 
+        # 获取数据起止日期，并向右延伸 8% 作为虚线终点，确保虚线贯穿图表直达右侧边界
+        start_date = hdf["Date"].iloc[0]
+        end_date = hdf["Date"].iloc[-1]
+        if isinstance(end_date, pd.Timestamp) or hasattr(end_date, 'to_pydatetime'):
+            extended_end = end_date + timedelta(days=max(1, int((end_date - start_date).days * 0.08)))
+        else:
+            extended_end = end_date
+
         fig = go.Figure(go.Scatter(x=hdf["Date"], y=hdf["Close"], mode="lines", line=dict(color="#0284c7", width=2.5), showlegend=False))
         
-        # 显式加入 xref="paper", x0=0, x1=1，强制虚线从图表最左侧 100% 贯穿延伸到右侧边缘的价格标签处
-        fig.add_hline(
-            y=cur_price, 
-            xref="paper",
-            x0=0,
-            x1=1,
-            line_dash="dash", 
-            line_color="#64748b", 
-            line_width=2,
-            annotation_text=f" {cur_price} ", 
-            annotation_position="right", 
-            annotation_font=dict(color="#fff", size=15), 
-            annotation_bgcolor="#334155"
-        )
+        # 使用 go.Scatter 画一条从头贯穿到右侧边界的现价线，并在最右端附带带灰色背景框和价格的标签
+        fig.add_trace(go.Scatter(
+            x=[start_date, extended_end],
+            y=[cur_price, cur_price],
+            mode="lines+text",
+            line=dict(color="#64748b", dash="dash", width=2),
+            text=["", f" {cur_price} "],
+            textposition="middle right",
+            textfont=dict(color="#fff", size=15),
+            showlegend=False
+        ))
         
         fig.update_layout(
             template="plotly_white", paper_bgcolor="#fff", plot_bgcolor="#fff",
             xaxis_rangeslider_visible=False, height=467,
             font=dict(size=17, color="#1e293b"),
-            margin=dict(l=10, r=70, t=10, b=10), showlegend=False
+            margin=dict(l=10, r=100, t=10, b=10), showlegend=False
         )
         fig.update_yaxes(side="right", gridcolor="#e2e8f0", range=[y_min, y_max])
         st.plotly_chart(fig, use_container_width=True)
@@ -365,7 +370,7 @@ elif st.session_state.page == "Options Data":
     exps, cdf, pdf = fetch_options_chain(sym, spot)
     ec, ic = st.columns([1.6, 3.4])
     ec.selectbox("到期日 (Expiration)", exps, index=0)
-    ic.markdown("<div style='padding-top:26px;font-size:19px;font-weight:700;color:#93c5fd;'>标的现价: <span style='color:#facc15;font-size:28px;'>$" + f"{spot:.2f}" + "</span> | 🟡 量化仿真期权链</div>", unsafe_allow_html=True)
+    ic.markdown("<div style='padding-top:26px;font-size:19px;font-weight:700;color:#93c5fd;'>标的现价: <span style='color:#facc15;font-size:28px;'>" + f"{spot:.2f}" + "</span> | 🟡 量化仿真期权链</div>", unsafe_allow_html=True)
 
     cdf["dist"] = (cdf["strike"] - spot).abs()
     strikes = cdf.nsmallest(15, "dist")["strike"].sort_values().tolist()
