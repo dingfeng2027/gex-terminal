@@ -275,8 +275,21 @@ elif st.session_state.page == "Stock Analysis":
         y_min = c_min - margin
         y_max = c_max + margin
 
-        fig = go.Figure(go.Scatter(x=hdf["Date"], y=hdf["Close"], mode="lines", line=dict(color="#0284c7", width=2.5)))
-        fig.add_hline(y=float(m["price"]), line_dash="dash", line_color="#64748b", annotation_text=" " + str(m['price']) + " ", annotation_position="right", annotation_font=dict(color="#fff", size=15), annotation_bgcolor="#334155")
+        cur_price = float(m["price"])
+        fig = go.Figure()
+        # 主股价曲线
+        fig.add_trace(go.Scatter(x=hdf["Date"], y=hdf["Close"], mode="lines", line=dict(color="#0284c7", width=2.5), showlegend=False))
+        # 绝对水平的现价虚线（用首尾相同的 y 坐标确保 100% 水平）
+        fig.add_trace(go.Scatter(
+            x=[hdf["Date"].iloc[0], hdf["Date"].iloc[-1]],
+            y=[cur_price, cur_price],
+            mode="lines+text",
+            line=dict(color="#64748b", dash="dash", width=2),
+            text=["", f" {cur_price} "],
+            textposition="top right",
+            textfont=dict(color="#fff", size=15),
+            showlegend=False
+        ))
         
         fig.update_layout(
             template="plotly_white", paper_bgcolor="#fff", plot_bgcolor="#fff",
@@ -292,22 +305,22 @@ elif st.session_state.page == "Stock Analysis":
         rows_html = ""
         for pct in [20, 15, 12, 10, 8, 6, 0, -6, -8, -10, -12, -15, -18, -20]:
             lbl = "CURRENT" if pct == 0 else (("+" + str(pct)) if pct > 0 else str(pct)) + "%"
-            tp = round(float(m["price"]) * (1 + pct / 100.0), 2)
+            tp = round(cur_price * (1 + pct / 100.0), 2)
             bg = "#eab308" if pct == 0 else "#07193d"
             fg = "#000" if pct == 0 else ("#4ade80" if pct > 0 else "#f87171")
             fw = "900" if pct == 0 else "700"
             rows_html += "<tr style='background:" + bg + ";border-bottom:1px solid #1e3a8a;'><td style='padding:9px 10px;color:" + fg + ";font-weight:" + fw + ";font-size:14px;'>" + lbl + "</td><td style='padding:9px 10px;color:" + fg + ";font-weight:" + fw + ";font-size:14px;text-align:right;'>" + f"{tp:.2f}" + "</td></tr>"
         
-        # 将内边距调整为用户要求的 4px
+        # 将内边距调整为要求的 4px，组件高度 540
         html_box = "<div style='background:#061430;border:1px solid #2563eb;border-radius:8px;height:525px;overflow-y:auto;padding:4px 2px 2px 2px;'><table style='width:100%;border-collapse:collapse;font-family:sans-serif;'><thead><tr style='border-bottom:2px solid #1e3a8a;color:#93c5fd;font-size:14px;position:sticky;top:0;background:#061430;'><th style='padding:8px 10px;text-align:left;'>LEVEL</th><th style='padding:8px 10px;text-align:right;'>TARGET PRICE</th></tr></thead><tbody>" + rows_html + "</tbody></table></div>"
         st.components.v1.html(html_box, height=540)
 
-    chg = round(float(m["price"]) - float(m["prev"]), 2)
+    chg = round(cur_price - float(m["prev"]), 2)
     pct_c = round((chg / float(m["prev"])) * 100, 2) if float(m["prev"]) else 0.0
     cc = "#4ade80" if chg >= 0 else "#f87171"
     k1, k2, k3, k4, k5, k6 = st.columns(6)
     
-    k1.markdown("<div class='metric-box'><div class='metric-label'>Current Price</div><div class='metric-val'>" + f"{float(m['price']):.2f}" + " <span style='font-size:19px;color:" + cc + ";'>(" + f"{pct_c:+.2f}" + "%)</span></div></div>", unsafe_allow_html=True)
+    k1.markdown("<div class='metric-box'><div class='metric-label'>Current Price</div><div class='metric-val'>" + f"{cur_price:.2f}" + " <span style='font-size:19px;color:" + cc + ";'>(" + f"{pct_c:+.2f}" + "%)</span></div></div>", unsafe_allow_html=True)
     k2.markdown("<div class='metric-box'><div class='metric-label'>52W High</div><div class='metric-val'>" + f"{float(m['high52']):.2f}" + "</div></div>", unsafe_allow_html=True)
     k3.markdown("<div class='metric-box'><div class='metric-label'>52W Low</div><div class='metric-val'>" + f"{float(m['low52']):.2f}" + "</div></div>", unsafe_allow_html=True)
     k4.markdown("<div class='metric-box'><div class='metric-label'>Market Cap</div><div class='metric-val'>" + str(m['mcap']) + "</div></div>", unsafe_allow_html=True)
