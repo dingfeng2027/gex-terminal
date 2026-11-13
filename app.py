@@ -292,25 +292,33 @@ elif st.session_state.page == "Stock Analysis":
         y_min = c_min - margin
         y_max = c_max + margin
 
+        # 计算向右延伸的日期边界，确保虚线和价格标签完美对齐到右侧边缘
+        start_date = hdf["Date"].iloc[0]
+        end_date = hdf["Date"].iloc[-1]
+        if isinstance(end_date, pd.Timestamp) or hasattr(end_date, 'to_pydatetime'):
+            extended_end = end_date + timedelta(days=max(1, int((end_date - start_date).days * 0.08)))
+        else:
+            extended_end = end_date
+
         fig = go.Figure(go.Scatter(x=hdf["Date"], y=hdf["Close"], mode="lines", line=dict(color="#0284c7", width=2.5), showlegend=False))
         
-        # 完美带有右侧箭头和灰色背景数字的 add_hline 标签
-        fig.add_hline(
-            y=cur_price, 
-            line_dash="dash", 
-            line_color="#64748b", 
-            line_width=2,
-            annotation_text=f" {cur_price} ", 
-            annotation_position="right", 
-            annotation_font=dict(color="#fff", size=15), 
-            annotation_bgcolor="#334155"
-        )
+        # 使用 Scatter 替代 add_hline，让虚线从头贯穿到右侧边界，并将带有灰色背景和箭头的价格标签固定在右侧终点
+        fig.add_trace(go.Scatter(
+            x=[start_date, extended_end],
+            y=[cur_price, cur_price],
+            mode="lines+text",
+            line=dict(color="#64748b", dash="dash", width=2),
+            text=["", f" {cur_price} "],
+            textposition="middle right",
+            textfont=dict(color="#fff", size=15),
+            showlegend=False
+        ))
         
         fig.update_layout(
             template="plotly_white", paper_bgcolor="#fff", plot_bgcolor="#fff",
             xaxis_rangeslider_visible=False, height=467,
             font=dict(size=17, color="#1e293b"),
-            margin=dict(l=10, r=70, t=10, b=10), showlegend=False
+            margin=dict(l=10, r=80, t=10, b=10), showlegend=False
         )
         fig.update_yaxes(side="right", gridcolor="#e2e8f0", range=[y_min, y_max])
         st.plotly_chart(fig, use_container_width=True)
