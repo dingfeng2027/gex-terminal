@@ -262,7 +262,6 @@ elif st.session_state.page == "Stock Analysis":
     sym = st.session_state.selected_ticker
     m = fetch_stock_metrics(sym, live=st.session_state.use_live_api)
     
-    # 严格防护：确保现价绝对不为 nan，若异常则强制读取备用价格
     fallback_price = FALLBACK_DATA.get(sym, {}).get("price", 177.34)
     cur_price = float(m["price"]) if (m and "price" in m and pd.notna(m["price"]) and float(m["price"]) > 0) else fallback_price
     
@@ -295,26 +294,19 @@ elif st.session_state.page == "Stock Analysis":
         y_min = c_min - margin
         y_max = c_max + margin
 
-        start_date = hdf["Date"].iloc[0]
-        end_date = hdf["Date"].iloc[-1]
-        if isinstance(end_date, pd.Timestamp) or hasattr(end_date, 'to_pydatetime'):
-            extended_end = end_date + timedelta(days=max(1, int((end_date - start_date).days * 0.08)))
-        else:
-            extended_end = end_date
-
         fig = go.Figure(go.Scatter(x=hdf["Date"], y=hdf["Close"], mode="lines", line=dict(color="#0284c7", width=2.5), showlegend=False))
         
-        # 使用 Scatter 确保虚线 100% 贯穿图表，右侧带价格标签
-        fig.add_trace(go.Scatter(
-            x=[start_date, extended_end],
-            y=[cur_price, cur_price],
-            mode="lines+text",
-            line=dict(color="#64748b", dash="dash", width=2),
-            text=["", f" {cur_price:.2f} "],
-            textposition="middle right",
-            textfont=dict(color="#fff", size=15),
-            showlegend=False
-        ))
+        # 使用 Plotly 官方标准的 add_hline，完美渲染右侧带箭头和价格数字的标准标签与贯穿虚线
+        fig.add_hline(
+            y=cur_price, 
+            line_dash="dash", 
+            line_color="#64748b", 
+            line_width=2,
+            annotation_text=f" {cur_price:.2f} ", 
+            annotation_position="right", 
+            annotation_font=dict(color="#fff", size=15), 
+            annotation_bgcolor="#334155"
+        )
         
         fig.update_layout(
             template="plotly_white", paper_bgcolor="#fff", plot_bgcolor="#fff",
