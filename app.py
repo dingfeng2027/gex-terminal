@@ -100,7 +100,7 @@ def fetch_stock_metrics(symbol, live=True):
         return fb
 
 def fetch_history_df(symbol, period_str, current_price):
-    pmap = {"1日": "1d", "1星期": "5d", "3星期": "1mo", "1个月": "1mo", "6个月": "6mo", "1年": "1y", "全部": "max"}
+    pmap = {"1日": "1d", "1星期": "5d", "1个月": "1mo", "3个月": "3mo", "6个月": "6mo", "1年": "1y", "全部": "max"}
     yfp = pmap.get(period_str, "6mo")
     try:
         hist = yf.Ticker(symbol).history(period=yfp)
@@ -108,7 +108,7 @@ def fetch_history_df(symbol, period_str, current_price):
             return hist.reset_index()
     except Exception:
         pass
-    ndays = {"1d": 2, "5d": 7, "1mo": 21, "6mo": 120}.get(yfp, 250)
+    ndays = {"1d": 2, "5d": 7, "1mo": 21, "3mo": 63, "6mo": 120}.get(yfp, 250)
     np.random.seed(abs(hash(symbol + period_str)) % 10000)
     dates = pd.date_range(end=datetime.today(), periods=ndays, freq="B")
     prices = current_price * np.exp(np.cumsum(np.random.normal(0.0005, 0.015, size=len(dates))))
@@ -234,12 +234,24 @@ elif st.session_state.page == "Stock Analysis":
     with col_c:
         card_title_html = "<div class='card-header'>" + sym + " — " + m['name'] + " | Price Chart</div>"
         st.markdown(card_title_html, unsafe_allow_html=True)
-        periods = ["1日", "1星期", "3星期", "1个月", "6个月", "1年", "全部"]
+        
+        # 动态注入选中周期的专属高亮样式（选中按钮背景变为亮金色/黄色 #eab308，文字为黑色加粗）
+        active_p = st.session_state.chart_period
+        periods = ["1日", "1星期", "1个月", "3个月", "6个月", "1年", "全部"]
+        
+        style_overrides = "<style>"
+        for p in periods:
+            if p == active_p:
+                style_overrides += f"div[data-testid='stButton'] > button[kind='secondary']:has(p:contains('{p}')) {{ background: linear-gradient(180deg, #facc15, #eab308) !important; color: #000 !important; border: 1px solid #fef08a !important; font-weight: 900 !important; }}"
+        style_overrides += "</style>"
+        st.markdown(style_overrides, unsafe_allow_html=True)
+
         p_cols = st.columns(len(periods))
         for i, p in enumerate(periods):
             if p_cols[i].button(p, use_container_width=True, key="p_" + p):
                 st.session_state.chart_period = p
                 st.rerun()
+
         hdf = fetch_history_df(sym, st.session_state.chart_period, m["price"])
         
         c_min = hdf["Close"].min()
@@ -270,7 +282,7 @@ elif st.session_state.page == "Stock Analysis":
             fg = "#000" if pct == 0 else ("#4ade80" if pct > 0 else "#f87171")
             fw = "900" if pct == 0 else "700"
             rows_html += "<tr style='background:" + bg + ";border-bottom:1px solid #1e3a8a;'><td style='padding:9px 10px;color:" + fg + ";font-weight:" + fw + ";font-size:14px;'>" + lbl + "</td><td style='padding:9px 10px;color:" + fg + ";font-weight:" + fw + ";font-size:14px;text-align:right;'>" + f"{tp:.2f}" + "</td></tr>"
-        # 高度调整为 540px，内部容器设为 525px
+        
         html_box = "<div style='background:#061430;border:1px solid #2563eb;border-radius:8px;height:525px;overflow-y:auto;padding:1px 2px 2px 2px;'><table style='width:100%;border-collapse:collapse;font-family:sans-serif;'><thead><tr style='border-bottom:2px solid #1e3a8a;color:#93c5fd;font-size:14px;position:sticky;top:0;background:#061430;'><th style='padding:8px 10px;text-align:left;'>LEVEL</th><th style='padding:8px 10px;text-align:right;'>TARGET PRICE</th></tr></thead><tbody>" + rows_html + "</tbody></table></div>"
         st.components.v1.html(html_box, height=540)
 
