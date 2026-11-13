@@ -17,6 +17,7 @@ st.markdown("""
     .brand-title { font-size: 28px !important; font-weight: 800; color: #fff; }
     .live-badge { color: #4ade80; font-weight: 700; font-size: 19px !important; }
     .card-header { font-size: 21px !important; font-weight: 800; color: #93c5fd; border-bottom: 1px solid #1e3a8a; padding-bottom: 5px; margin-bottom: 8px; text-transform: uppercase; }
+    .module-container { background: rgba(6, 20, 48, 0.85); border: 1px solid #2563eb; border-radius: 10px; padding: 18px; margin-bottom: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
     div.stButton > button { background: linear-gradient(180deg, #2563eb, #1d4ed8) !important; color: #fff !important; border: 1px solid #60a5fa !important; border-radius: 6px !important; font-size: 19px !important; font-weight: 700 !important; padding: 8px 14px !important; }
     .stTextInput input, div[data-baseweb="select"] > div { background-color: #07193d !important; color: #fff !important; border: 1px solid #3b82f6 !important; font-size: 19px !important; }
     div[data-testid="stDataFrame"] { border: 1px solid #2563eb !important; border-radius: 8px !important; background-color: #061430 !important; }
@@ -365,141 +366,141 @@ elif st.session_state.page == "Options Intelligence":
     
     exps, cdf, pdf = fetch_options_chain(sym, spot)
     
-    # 六大核心子模块标签页 (Tabs)
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-        "FLOW 资金流监控", 
-        "ACCUMULATION 吸筹识别", 
-        "GAMMA 结构分析", 
-        "OPEN INTEREST 仓位追踪", 
-        "DIVERGENCE 价格背离", 
-        "SIGNALS 综合信号引擎"
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # ==================== 模块 1：FLOW 资金流监控 ====================
+    st.markdown("<div class='module-container'>", unsafe_allow_html=True)
+    st.markdown("<div class='card-header'>MODULE 1: OPTIONS FLOW & UNUSUAL ACTIVITY MONITOR</div>", unsafe_allow_html=True)
+    coi = int(cdf["openInterest"].sum())
+    poi = int(pdf["openInterest"].sum())
+    cvol = int(cdf["volume"].sum())
+    pvol = int(pdf["volume"].sum())
+    pcr = round(poi / coi, 2) if coi > 0 else 1.0
+    vcr = round(pvol / cvol, 2) if cvol > 0 else 1.0
+    
+    m1, m2, m3, m4 = st.columns(4)
+    m1.markdown("<div class='metric-box'><div class='metric-label'>Call / Put Volume</div><div class='metric-val'>" + f"{cvol:,} / {pvol:,}" + "</div></div>", unsafe_allow_html=True)
+    m2.markdown("<div class='metric-box'><div class='metric-label'>Volume P/C Ratio</div><div class='metric-val' style='color:#facc15;'>" + f"{vcr:.2f}" + "</div></div>", unsafe_allow_html=True)
+    m3.markdown("<div class='metric-box'><div class='metric-label'>Put / Call OI Ratio</div><div class='metric-val'>" + f"{pcr:.2f}" + "</div></div>", unsafe_allow_html=True)
+    m4.markdown("<div class='metric-box'><div class='metric-label'>Spot Price</div><div class='metric-val' style='color:#38bdf8;'>$" + f"{spot:.2f}" + "</div></div>", unsafe_allow_html=True)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown("##### 🚨 盘中大额异常成交与主动买卖提醒 (Unusual Flow Alert)")
+    alert_df = pd.DataFrame([
+        {"Time": "09:35:12", "Strike": f"${round(spot*0.95, 2)} Put", "Volume": f"{int(cvol*0.12):,}", "Avg IV": "42.5%", "Interpretation": "⚠️ 异常放量：PUT成交量超20日均值 2.8x，警惕短线对冲或防御买盘"},
+        {"Time": "10:14:45", "Strike": f"${round(spot*1.05, 2)} Call", "Volume": f"{int(cvol*0.18):,}", "Avg IV": "38.1%", "Interpretation": "🟢 主动买入：CALL大单扫货，机构正在抢筹上方阻力位突破"},
     ])
+    st.dataframe(alert_df, use_container_width=True, hide_index=True)
 
-    with tab1:
-        st.markdown("<div class='card-header'>MODULE 1: OPTIONS FLOW & UNUSUAL ACTIVITY MONITOR</div>", unsafe_allow_html=True)
-        coi = int(cdf["openInterest"].sum())
-        poi = int(pdf["openInterest"].sum())
-        cvol = int(cdf["volume"].sum())
-        pvol = int(pdf["volume"].sum())
-        pcr = round(poi / coi, 2) if coi > 0 else 1.0
-        vcr = round(pvol / cvol, 2) if cvol > 0 else 1.0
-        
-        m1, m2, m3, m4 = st.columns(4)
-        m1.markdown("<div class='metric-box'><div class='metric-label'>Call / Put Volume</div><div class='metric-val'>" + f"{cvol:,} / {pvol:,}" + "</div></div>", unsafe_allow_html=True)
-        m2.markdown("<div class='metric-box'><div class='metric-label'>Volume P/C Ratio</div><div class='metric-val' style='color:#facc15;'>" + f"{vcr:.2f}" + "</div></div>", unsafe_allow_html=True)
-        m3.markdown("<div class='metric-box'><div class='metric-label'>Put / Call OI Ratio</div><div class='metric-val'>" + f"{pcr:.2f}" + "</div></div>", unsafe_allow_html=True)
-        m4.markdown("<div class='metric-box'><div class='metric-label'>Spot Price</div><div class='metric-val' style='color:#38bdf8;'>$" + f"{spot:.2f}" + "</div></div>", unsafe_allow_html=True)
+    st.markdown("<br>##### T-SHAPED STRADDLE OPTIONS CHAIN (CURRENT EXPIRY)")
+    cdf["dist"] = (cdf["strike"] - spot).abs()
+    strikes = cdf.nsmallest(11, "dist")["strike"].sort_values().tolist()
+    cf = cdf[cdf["strike"].isin(strikes)].set_index("strike")
+    pf = pdf[pdf["strike"].isin(strikes)].set_index("strike")
+    s_rows = []
+    for k in strikes:
+        cr = cf.loc[k]
+        pr = pf.loc[k]
+        s_rows.append({"CALL OI": int(cr["openInterest"]), "CALL VOL": int(cr["volume"]), "CALL IV": f"{cr['impliedVolatility']*100:.1f}%", "CALL LAST": float(cr["lastPrice"]), "STRIKE": float(k), "PUT LAST": float(pr["lastPrice"]), "PUT IV": f"{pr['impliedVolatility']*100:.1f}%", "PUT VOL": int(pr["volume"]), "PUT OI": int(pr["openInterest"])})
+    dfs = pd.DataFrame(s_rows)
+    st.dataframe(dfs, use_container_width=True, height=350, hide_index=True)
+    st.markdown("</div>", unsafe_allow_html=True)
 
-        st.markdown("<br>", unsafe_allow_html=True)
-        st.markdown("##### 🚨 盘中大额异常成交与主动买卖提醒 (Unusual Flow Alert)")
-        alert_df = pd.DataFrame([
-            {"Time": "09:35:12", "Strike": f"${round(spot*0.95, 2)} Put", "Volume": f"{int(cvol*0.12):,}", "Avg IV": "42.5%", "Interpretation": "⚠️ 异常放量：PUT成交量超20日均值 2.8x，警惕短线对冲或防御买盘"},
-            {"Time": "10:14:45", "Strike": f"${round(spot*1.05, 2)} Call", "Volume": f"{int(cvol*0.18):,}", "Avg IV": "38.1%", "Interpretation": "🟢 主动买入：CALL大单扫货，机构正在抢筹上方阻力位突破"},
-        ])
-        st.dataframe(alert_df, use_container_width=True, hide_index=True)
-
-        st.markdown("<br><div class='card-header'>T-SHAPED STRADDLE OPTIONS CHAIN (CURRENT EXPIRY)</div>", unsafe_allow_html=True)
-        cdf["dist"] = (cdf["strike"] - spot).abs()
-        strikes = cdf.nsmallest(11, "dist")["strike"].sort_values().tolist()
-        cf = cdf[cdf["strike"].isin(strikes)].set_index("strike")
-        pf = pdf[pdf["strike"].isin(strikes)].set_index("strike")
-        atm = min(strikes, key=lambda x: abs(x - spot))
-        s_rows = []
-        for k in strikes:
-            cr = cf.loc[k]
-            pr = pf.loc[k]
-            s_rows.append({"CALL OI": int(cr["openInterest"]), "CALL VOL": int(cr["volume"]), "CALL IV": f"{cr['impliedVolatility']*100:.1f}%", "CALL LAST": float(cr["lastPrice"]), "STRIKE": float(k), "PUT LAST": float(pr["lastPrice"]), "PUT IV": f"{pr['impliedVolatility']*100:.1f}%", "PUT VOL": int(pr["volume"]), "PUT OI": int(pr["openInterest"])})
-        dfs = pd.DataFrame(s_rows)
-        st.dataframe(dfs, use_container_width=True, height=400, hide_index=True)
-
-    with tab2:
-        st.markdown("<div class='card-header'>MODULE 2: ACCUMULATION & DISTRIBUTION RECOGNITION</div>", unsafe_allow_html=True)
-        d1, d2 = st.columns(2)
-        with d1:
-            st.markdown("#### 🟢 潜在吸筹信号特征 (Accumulation Watch)")
-            st.info("""
-            * **价格行为**：股价下跌但动能衰减，跌幅逐波收窄。
-            * **成交反应**：放量但无法创出盘中新低，底部承接盘扎实。
-            * **期权结构**：PUT成交极端活跃但现货价格不再下挫，随后CALL主动买入开始放量。
-            * **当前判定**：**正在监控中** —— 当前标的处于窄幅震荡蓄势区，机构正分批构建低吸敞口。
-            """)
-        with d2:
-            st.markdown("#### 🔴 潜在派发风险信号 (Distribution Watch)")
-            st.warning("""
-            * **价格行为**：反弹无力，上涨速度明显放缓。
-            * **成交反应**：量增价平，无法突破关键阻力位。
-            * **期权结构**：CALL放量但价格受阻，PUT主动买入激增，跌破重要支撑。
-            * **当前判定**：**暂未触发** —— 暂未出现系统性机构派发迹象。
-            """)
-
-    with tab3:
-        st.markdown("<div class='card-header'>MODULE 3: GAMMA & MARKET MAKER HEDGING INTELLIGENCE</div>", unsafe_allow_html=True)
-        gamma_flip = round(spot * 0.96, 2)
-        put_wall = round(spot * 0.90, 2)
-        call_wall = round(spot * 1.08, 2)
-        
-        g1, g2, g3, g4 = st.columns(4)
-        g1.markdown("<div class='metric-box'><div class='metric-label'>Gamma Flip Point</div><div class='metric-val' style='color:#facc15;'>$" + f"{gamma_flip}" + "</div></div>", unsafe_allow_html=True)
-        g2.markdown("<div class='metric-box'><div class='metric-label'>PUT Wall (Support)</div><div class='metric-val' style='color:#4ade80;'>$" + f"{put_wall}" + "</div></div>", unsafe_allow_html=True)
-        g3.markdown("<div class='metric-box'><div class='metric-label'>CALL Wall (Resistance)</div><div class='metric-val' style='color:#f87171;'>$" + f"{call_wall}" + "</div></div>", unsafe_allow_html=True)
-        g4.markdown("<div class='metric-box'><div class='metric-label'>Dealer Gamma Bias</div><div class='metric-val' style='color:#38bdf8;'>Positive (Long)</div></div>", unsafe_allow_html=True)
-
-        st.markdown("<br>", unsafe_allow_html=True)
-        st.markdown("##### 📊 做市商 Gamma 敞口与支撑阻力分布")
-        fig_g = go.Figure([go.Bar(x=dfs["STRIKE"], y=dfs["CALL OI"] - dfs["PUT OI"], name="Net Gamma Exposure", marker_color="#3b82f6")])
-        fig_g.add_vline(x=spot, line_dash="dash", line_color="#facc15", annotation_text=f"Spot: {spot:.2f}")
-        fig_g.add_vline(x=gamma_flip, line_dash="dot", line_color="#eab308", annotation_text=f"Flip: {gamma_flip}")
-        fig_g.update_layout(template="plotly_dark", paper_bgcolor="rgba(6,20,48,0.95)", plot_bgcolor="rgba(4,14,34,0.98)", height=350, margin=dict(l=10, r=10, t=20, b=10))
-        st.plotly_chart(fig_g, use_container_width=True)
-
-    with tab4:
-        st.markdown("<div class='card-header'>MODULE 4: OPEN INTEREST (OI) TRACKER & MAX PAIN</div>", unsafe_allow_html=True)
-        mp_strike = min(strikes, key=lambda k: sum(max(0, k-s)*cf.loc[s,"openInterest"] + max(0, s-k)*pf.loc[s,"openInterest"] for s in strikes))
-        
-        o1, o2, o3 = st.columns(3)
-        o1.markdown("<div class='metric-box'><div class='metric-label'>Theoretical Max Pain</div><div class='metric-val' style='color:#facc15;'>$" + f"{mp_strike:.2f}" + "</div></div>", unsafe_allow_html=True)
-        o2.markdown("<div class='metric-box'><div class='metric-label'>Max PUT OI Strike</div><div class='metric-val' style='color:#4ade80;'>$" + f"{put_wall}" + "</div></div>", unsafe_allow_html=True)
-        o3.markdown("<div class='metric-box'><div class='metric-label'>Max CALL OI Strike</div><div class='metric-val' style='color:#f87171;'>$" + f"{call_wall}" + "</div></div>", unsafe_allow_html=True)
-
-        st.markdown("<br>", unsafe_allow_html=True)
-        fig_oi = go.Figure([go.Bar(x=dfs["STRIKE"], y=dfs["CALL OI"], name="Call OI", marker_color="#22c55e"), go.Bar(x=dfs["STRIKE"], y=dfs["PUT OI"], name="Put OI", marker_color="#ef4444")])
-        fig_oi.add_vline(x=spot, line_dash="dash", line_color="#facc15", annotation_text="Spot: " + f"{spot:.2f}")
-        fig_oi.update_layout(barmode="group", template="plotly_dark", paper_bgcolor="rgba(6,20,48,0.95)", plot_bgcolor="rgba(4,14,34,0.98)", height=350, font=dict(size=16, color="#fff"), margin=dict(l=10, r=10, t=20, b=10))
-        st.plotly_chart(fig_oi, use_container_width=True)
-
-    with tab5:
-        st.markdown("<div class='card-header'>MODULE 5: PRICE & OPTIONS FLOW DIVERGENCE</div>", unsafe_allow_html=True)
+    # ==================== 模块 2：ACCUMULATION 吸筹识别 ====================
+    st.markdown("<div class='module-container'>", unsafe_allow_html=True)
+    st.markdown("<div class='card-header'>MODULE 2: ACCUMULATION & DISTRIBUTION RECOGNITION</div>", unsafe_allow_html=True)
+    d1, d2 = st.columns(2)
+    with d1:
+        st.markdown("#### 🟢 潜在吸筹信号特征 (Accumulation Watch)")
         st.info("""
-        ### 🔍 核心背离侦测模型 (Divergence Engine)
-        * **当前背离状态**：**价格动能与期权成交出现正向背离 (Bullish Divergence)**
-        * **具体表现**：尽管现货价格短期受压回调，但看跌期权（PUT）成交量激增的同时，标的低点已经连续三个交易日不再创新低，且主动买入的CALL订单开始温和放大。
-        * **交易启示**：表明市场虽然恐慌情绪上升（PUT放量），但实质性的抛压正在枯竭，下方存在强有力的机构承接盘。
+        * **价格行为**：股价下跌但动能衰减，跌幅逐波收窄。
+        * **成交反应**：放量但无法创出盘中新低，底部承接盘扎实。
+        * **期权结构**：PUT成交极端活跃但现货价格不再下挫，随后CALL主动买入开始放量。
+        * **当前判定**：**正在监控中** —— 当前标的处于窄幅震荡蓄势区，机构正分批构建低吸敞口。
         """)
+    with d2:
+        st.markdown("#### 🔴 潜在派发风险信号 (Distribution Watch)")
+        st.warning("""
+        * **价格行为**：反弹无力，上涨速度明显放缓。
+        * **成交反应**：量增价平，无法突破关键阻力位。
+        * **期权结构**：CALL放量但价格受阻，PUT主动买入激增，跌破重要支撑。
+        * **当前判定**：**暂未触发** —— 暂未出现系统性机构派发迹象。
+        """)
+    st.markdown("</div>", unsafe_allow_html=True)
 
-    with tab6:
-        st.markdown("<div class='card-header'>MODULE 6: COMPREHENSIVE SIGNAL ENGINE & SCORE</div>", unsafe_allow_html=True)
-        
-        # 评分计算模型
-        score_flow = 22
-        score_div = 23
-        score_gamma = 16
-        score_oi = 12
-        score_iv = 13
-        total_score = score_flow + score_div + score_gamma + score_oi + score_iv
-        
-        s1, s2, s3 = st.columns(3)
-        s1.markdown("<div class='metric-box'><div class='metric-label'>Options Intelligence Score</div><div class='metric-val' style='color:#4ade80;font-size:36px;'>" + f"{total_score} / 100" + "</div></div>", unsafe_allow_html=True)
-        s2.markdown("<div class='metric-box'><div class='metric-label'>System Status State</div><div class='metric-val' style='color:#facc15;'>ACCUMULATION WATCH</div></div>", unsafe_allow_html=True)
-        s3.markdown("<div class='metric-box'><div class='metric-label'>Confidence Level</div><div class='metric-val' style='color:#38bdf8;'>HIGH (B+)</div></div>", unsafe_allow_html=True)
+    # ==================== 模块 3：GAMMA 结构分析 ====================
+    st.markdown("<div class='module-container'>", unsafe_allow_html=True)
+    st.markdown("<div class='card-header'>MODULE 3: GAMMA & MARKET MAKER HEDGING INTELLIGENCE</div>", unsafe_allow_html=True)
+    gamma_flip = round(spot * 0.96, 2)
+    put_wall = round(spot * 0.90, 2)
+    call_wall = round(spot * 1.08, 2)
+    
+    g1, g2, g3, g4 = st.columns(4)
+    g1.markdown("<div class='metric-box'><div class='metric-label'>Gamma Flip Point</div><div class='metric-val' style='color:#facc15;'>$" + f"{gamma_flip}" + "</div></div>", unsafe_allow_html=True)
+    g2.markdown("<div class='metric-box'><div class='metric-label'>PUT Wall (Support)</div><div class='metric-val' style='color:#4ade80;'>$" + f"{put_wall}" + "</div></div>", unsafe_allow_html=True)
+    g3.markdown("<div class='metric-box'><div class='metric-label'>CALL Wall (Resistance)</div><div class='metric-val' style='color:#f87171;'>$" + f"{call_wall}" + "</div></div>", unsafe_allow_html=True)
+    g4.markdown("<div class='metric-box'><div class='metric-label'>Dealer Gamma Bias</div><div class='metric-val' style='color:#38bdf8;'>Positive (Long)</div></div>", unsafe_allow_html=True)
 
-        st.markdown("<br>", unsafe_allow_html=True)
-        st.markdown("##### 📋 模型评分细项权重拆解 (Model Breakdown)")
-        breakdown_df = pd.DataFrame([
-            {"Component": "资金流方向 (Flow Direction)", "Max Weight": "25 pts", "Awarded Score": f"{score_flow} pts", "Status": "🟢 偏向多头承接"},
-            {"Component": "价格与成交背离 (Divergence)", "Max Weight": "25 pts", "Awarded Score": f"{score_div} pts", "Status": "🟢 强背离（跌势衰竭）"},
-            {"Component": "Gamma结构 (Gamma Profile)", "Max Weight": "20 pts", "Awarded Score": f"{score_gamma} pts", "Status": "🟡 接近Flip中性区"},
-            {"Component": "OI 仓位变化 (Open Interest)", "Max Weight": "15 pts", "Awarded Score": f"{score_oi} pts", "Status": "🟢 支撑墙稳固"},
-            {"Component": "IV 与波动率 (Volatility)", "Max Weight": "15 pts", "Awarded Score": f"{score_iv} pts", "Status": "🟡 隐波温和上升"},
-        ])
-        st.dataframe(breakdown_df, use_container_width=True, hide_index=True)
-        st.caption("注：以上综合评分及状态基于 V1.0 本地量化仿真模型实时计算，旨在协助建立多维度交易直觉，不作为绝对投资指令。")
+    st.markdown("<br>##### 📊 做市商 Gamma 敞口与支撑阻力分布", unsafe_allow_html=True)
+    fig_g = go.Figure([go.Bar(x=dfs["STRIKE"], y=dfs["CALL OI"] - dfs["PUT OI"], name="Net Gamma Exposure", marker_color="#3b82f6")])
+    fig_g.add_vline(x=spot, line_dash="dash", line_color="#facc15", annotation_text=f"Spot: {spot:.2f}")
+    fig_g.add_vline(x=gamma_flip, line_dash="dot", line_color="#eab308", annotation_text=f"Flip: {gamma_flip}")
+    fig_g.update_layout(template="plotly_dark", paper_bgcolor="rgba(6,20,48,0.95)", plot_bgcolor="rgba(4,14,34,0.98)", height=320, margin=dict(l=10, r=10, t=20, b=10))
+    st.plotly_chart(fig_g, use_container_width=True)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # ==================== 模块 4：OPEN INTEREST 仓位追踪 ====================
+    st.markdown("<div class='module-container'>", unsafe_allow_html=True)
+    st.markdown("<div class='card-header'>MODULE 4: OPEN INTEREST (OI) TRACKER & MAX PAIN</div>", unsafe_allow_html=True)
+    mp_strike = min(strikes, key=lambda k: sum(max(0, k-s)*cf.loc[s,"openInterest"] + max(0, s-k)*pf.loc[s,"openInterest"] for s in strikes))
+    
+    o1, o2, o3 = st.columns(3)
+    o1.markdown("<div class='metric-box'><div class='metric-label'>Theoretical Max Pain</div><div class='metric-val' style='color:#facc15;'>$" + f"{mp_strike:.2f}" + "</div></div>", unsafe_allow_html=True)
+    o2.markdown("<div class='metric-box'><div class='metric-label'>Max PUT OI Strike</div><div class='metric-val' style='color:#4ade80;'>$" + f"{put_wall}" + "</div></div>", unsafe_allow_html=True)
+    o3.markdown("<div class='metric-box'><div class='metric-label'>Max CALL OI Strike</div><div class='metric-val' style='color:#f87171;'>$" + f"{call_wall}" + "</div></div>", unsafe_allow_html=True)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    fig_oi = go.Figure([go.Bar(x=dfs["STRIKE"], y=dfs["CALL OI"], name="Call OI", marker_color="#22c55e"), go.Bar(x=dfs["STRIKE"], y=dfs["PUT OI"], name="Put OI", marker_color="#ef4444")])
+    fig_oi.add_vline(x=spot, line_dash="dash", line_color="#facc15", annotation_text="Spot: " + f"{spot:.2f}")
+    fig_oi.update_layout(barmode="group", template="plotly_dark", paper_bgcolor="rgba(6,20,48,0.95)", plot_bgcolor="rgba(4,14,34,0.98)", height=320, font=dict(size=16, color="#fff"), margin=dict(l=10, r=10, t=20, b=10))
+    st.plotly_chart(fig_oi, use_container_width=True)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # ==================== 模块 5：DIVERGENCE 价格背离 ====================
+    st.markdown("<div class='module-container'>", unsafe_allow_html=True)
+    st.markdown("<div class='card-header'>MODULE 5: PRICE & OPTIONS FLOW DIVERGENCE</div>", unsafe_allow_html=True)
+    st.info("""
+    ### 🔍 核心背离侦测模型 (Divergence Engine)
+    * **当前背离状态**：**价格动能与期权成交出现正向背离 (Bullish Divergence)**
+    * **具体表现**：尽管现货价格短期受压回调，但看跌期权（PUT）成交量激增的同时，标的低点已经连续三个交易日不再创新低，且主动买入的CALL订单开始温和放大。
+    * **交易启示**：表明市场虽然恐慌情绪上升（PUT放量），但实质性的抛压正在枯竭，下方存在强有力的机构承接盘。
+    """)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # ==================== 模块 6：SIGNALS 综合信号引擎 ====================
+    st.markdown("<div class='module-container'>", unsafe_allow_html=True)
+    st.markdown("<div class='card-header'>MODULE 6: COMPREHENSIVE SIGNAL ENGINE & SCORE</div>", unsafe_allow_html=True)
+    
+    score_flow = 22
+    score_div = 23
+    score_gamma = 16
+    score_oi = 12
+    score_iv = 13
+    total_score = score_flow + score_div + score_gamma + score_oi + score_iv
+    
+    s1, s2, s3 = st.columns(3)
+    s1.markdown("<div class='metric-box'><div class='metric-label'>Options Intelligence Score</div><div class='metric-val' style='color:#4ade80;font-size:34px;'>" + f"{total_score} / 100" + "</div></div>", unsafe_allow_html=True)
+    s2.markdown("<div class='metric-box'><div class='metric-label'>System Status State</div><div class='metric-val' style='color:#facc15;font-size:22px;'>ACCUMULATION WATCH</div></div>", unsafe_allow_html=True)
+    s3.markdown("<div class='metric-box'><div class='metric-label'>Confidence Level</div><div class='metric-val' style='color:#38bdf8;'>HIGH (B+)</div></div>", unsafe_allow_html=True)
+
+    st.markdown("<br>##### 📋 模型评分细项权重拆解 (Model Breakdown)")
+    breakdown_df = pd.DataFrame([
+        {"Component": "资金流方向 (Flow Direction)", "Max Weight": "25 pts", "Awarded Score": f"{score_flow} pts", "Status": "🟢 偏向多头承接"},
+        {"Component": "价格与成交背离 (Divergence)", "Max Weight": "25 pts", "Awarded Score": f"{score_div} pts", "Status": "🟢 强背离（跌势衰竭）"},
+        {"Component": "Gamma结构 (Gamma Profile)", "Max Weight": "20 pts", "Awarded Score": f"{score_gamma} pts", "Status": "🟡 接近Flip中性区"},
+        {"Component": "OI 仓位变化 (Open Interest)", "Max Weight": "15 pts", "Awarded Score": f"{score_oi} pts", "Status": "🟢 支撑墙稳固"},
+        {"Component": "IV 与波动率 (Volatility)", "Max Weight": "15 pts", "Awarded Score": f"{score_iv} pts", "Status": "🟡 隐波温和上升"},
+    ])
+    st.dataframe(breakdown_df, use_container_width=True, hide_index=True)
+    st.caption("注：以上综合评分及状态基于 V1.0 本地量化仿真模型实时计算，旨在协助建立多维度交易直觉，不作为绝对投资指令。")
+    st.markdown("</div>", unsafe_allow_html=True)
