@@ -210,4 +210,144 @@ if st.session_state.page == "Market Watch":
     if del_sym != "选择要删除的代码...":
         st.session_state.tickers.remove(del_sym)
         st.rerun()
-    summary_html = "<div style='text-align:right; padding-top:6px; font-size:19px; font-weight:800;'><span style='color:#4ade80;'>▲ " + str(gainers) + " Gain
+    summary_html = "<div style='text-align:right; padding-top:6px; font-size:19px; font-weight:800;'><span style='color:#4ade80;'>▲ " + str(gainers) + " Gainers</span> | <span style='color:#f87171;'>● " + str(losers) + " Losers</span> | Total: " + str(len(df_watch)) + "</div>"
+    b3.markdown(summary_html, unsafe_allow_html=True)
+
+elif st.session_state.page == "Stock Analysis":
+    t1, t2, t3, t4 = st.columns([2.0, 2.4, 2.2, 1.2])
+    t1.markdown("### Stock Analysis")
+    idx = st.session_state.tickers.index(st.session_state.selected_ticker) if st.session_state.selected_ticker in st.session_state.tickers else 0
+    chosen = t2.selectbox("标的", st.session_state.tickers, index=idx, label_visibility="collapsed")
+    if chosen != st.session_state.selected_ticker:
+        st.session_state.selected_ticker = chosen
+        st.rerun()
+    if t3.button("PUT & CALL OPTIONS DATA >", use_container_width=True):
+        st.session_state.page = "Options Data"
+        st.rerun()
+    if t4.button("← BACK", use_container_width=True):
+        st.session_state.page = "Market Watch"
+        st.rerun()
+
+    sym = st.session_state.selected_ticker
+    m = fetch_stock_metrics(sym, live=st.session_state.use_live_api)
+    col_c, col_l = st.columns([2.5, 1.1])
+    with col_c:
+        card_title_html = "<div class='card-header'>" + sym + " — " + m['name'] + " | Price Chart</div>"
+        st.markdown(card_title_html, unsafe_allow_html=True)
+        periods = ["1日", "1星期", "3星期", "1个月", "6个月", "1年", "全部"]
+        p_cols = st.columns(len(periods))
+        for i, p in enumerate(periods):
+            if p_cols[i].button(p, use_container_width=True, key="p_" + p):
+                st.session_state.chart_period = p
+                st.rerun()
+        hdf = fetch_history_df(sym, st.session_state.chart_period, m["price"])
+        
+        c_min = hdf["Close"].min()
+        c_max = hdf["Close"].max()
+        margin = (c_max - c_min) * 0.05 if c_max != c_min else c_min * 0.01
+        y_min = c_min - margin
+        y_max = c_max + margin
+
+        fig = go.Figure(go.Scatter(x=hdf["Date"], y=hdf["Close"], mode="lines", line=dict(color="#0284c7", width=2.5)))
+        fig.add_hline(y=m["price"], line_dash="dash", line_color="#64748b", annotation_text=" " + str(m['price']) + " ", annotation_position="right", annotation_font=dict(color="#fff", size=15), annotation_bgcolor="#334155")
+        
+        fig.update_layout(
+            template="plotly_white", paper_bgcolor="#fff", plot_bgcolor="#fff",
+            xaxis_rangeslider_visible=False, height=445,
+            font=dict(size=17, color="#1e293b"),
+            margin=dict(l=10, r=70, t=10, b=10), showlegend=False
+        )
+        fig.update_yaxes(side="right", gridcolor="#e2e8f0", range=[y_min, y_max])
+        st.plotly_chart(fig, use_container_width=True)
+
+    with col_l:
+        st.markdown("<div class='card-header'>PRICE LEVEL LADDER</div>", unsafe_allow_html=True)
+        rows_html = ""
+        for pct in [20, 15, 12, 10, 8, 6, 0, -6, -8, -10, -12, -15, -18, -20]:
+            lbl = "CURRENT" if pct == 0 else (("+" + str(pct)) if pct > 0 else str(pct)) + "%"
+            tp = round(m["price"] * (1 + pct / 100.0), 2)
+            bg = "#eab308" if pct == 0 else "#07193d"
+            fg = "#000" if pct == 0 else ("#4ade80" if pct > 0 else "#f87171")
+            fw = "900" if pct == 0 else "700"
+            rows_html += "<tr style='background:" + bg + ";border-bottom:1px solid #1e3a8a;'><td style='padding:9px 10px;color:" + fg + ";font-weight:" + fw + ";font-size:14px;'>" + lbl + "</td><td style='padding:9px 10px;color:" + fg + ";font-weight:" + fw + ";font-size:14px;text-align:right;'>" + f"{tp:.2f}" + "</td></tr>"
+        # 调整为精细的 1px 上边距
+        html_box = "<div style='background:#061430;border:1px solid #2563eb;border-radius:8px;height:510px;overflow-y:auto;padding:1px 2px 2px 2px;'><table style='width:100%;border-collapse:collapse;font-family:sans-serif;'><thead><tr style='border-bottom:2px solid #1e3a8a;color:#93c5fd;font-size:14px;position:sticky;top:0;background:#061430;'><th style='padding:8px 10px;text-align:left;'>LEVEL</th><th style='padding:8px 10px;text-align:right;'>TARGET PRICE</th></tr></thead><tbody>" + rows_html + "</tbody></table></div>"
+        st.components.v1.html(html_box, height=525)
+
+    chg = round(m["price"] - m["prev"], 2)
+    pct_c = round((chg / m["prev"]) * 100, 2) if m["prev"] else 0.0
+    cc = "#4ade80" if chg >= 0 else "#f87171"
+    k1, k2, k3, k4, k5, k6 = st.columns(6)
+    
+    k1.markdown("<div class='metric-box'><div class='metric-label'>Current Price</div><div class='metric-val'>" + f"{m['price']:.2f}" + " <span style='font-size:19px;color:" + cc + ";'>(" + f"{pct_c:+.2f}" + "%)</span></div></div>", unsafe_allow_html=True)
+    k2.markdown("<div class='metric-box'><div class='metric-label'>52W High</div><div class='metric-val'>" + f"{m['high52']:.2f}" + "</div></div>", unsafe_allow_html=True)
+    k3.markdown("<div class='metric-box'><div class='metric-label'>52W Low</div><div class='metric-val'>" + f"{m['low52']:.2f}" + "</div></div>", unsafe_allow_html=True)
+    k4.markdown("<div class='metric-box'><div class='metric-label'>Market Cap</div><div class='metric-val'>" + str(m['mcap']) + "</div></div>", unsafe_allow_html=True)
+    k5.markdown("<div class='metric-box'><div class='metric-label'>P/E / EPS</div><div class='metric-val'>" + (str(m['pe']) if m['pe'] else 'N/A') + " / " + str(m['eps']) + "</div></div>", unsafe_allow_html=True)
+    k6.markdown("<div class='metric-box'><div class='metric-label'>RSI (14)</div><div class='metric-val' style='color:#38bdf8;'>" + f"{m['rsi']:.1f}" + "</div></div>", unsafe_allow_html=True)
+
+elif st.session_state.page == "Options Data":
+    o1, o2, o3, o4 = st.columns([2.3, 2.1, 1.5, 1.5])
+    o1.markdown("### Put & Call Option Data")
+    idx = st.session_state.tickers.index(st.session_state.selected_ticker) if st.session_state.selected_ticker in st.session_state.tickers else 0
+    chosen_o = o2.selectbox("期权标的", st.session_state.tickers, index=idx, label_visibility="collapsed")
+    if chosen_o != st.session_state.selected_ticker:
+        st.session_state.selected_ticker = chosen_o
+        st.rerun()
+    if o3.button("← Stock Analysis", use_container_width=True):
+        st.session_state.page = "Stock Analysis"
+        st.rerun()
+    if o4.button("Market Watch", use_container_width=True):
+        st.session_state.page = "Market Watch"
+        st.rerun()
+
+    sym = st.session_state.selected_ticker
+    spot = fetch_stock_metrics(sym, live=st.session_state.use_live_api)["price"]
+    exps, cdf, pdf = fetch_options_chain(sym, spot)
+    ec, ic = st.columns([1.6, 3.4])
+    ec.selectbox("到期日 (Expiration)", exps, index=0)
+    ic.markdown("<div style='padding-top:26px;font-size:19px;font-weight:700;color:#93c5fd;'>标的现价: <span style='color:#facc15;font-size:28px;'>$" + f"{spot:.2f}" + "</span> | 🟡 量化仿真期权链</div>", unsafe_allow_html=True)
+
+    cdf["dist"] = (cdf["strike"] - spot).abs()
+    strikes = cdf.nsmallest(15, "dist")["strike"].sort_values().tolist()
+    cf = cdf[cdf["strike"].isin(strikes)].set_index("strike")
+    pf = pdf[pdf["strike"].isin(strikes)].set_index("strike")
+    coi = int(cf["openInterest"].sum())
+    poi = int(pf["openInterest"].sum())
+    pcr = round(poi / coi, 2) if coi > 0 else 1.0
+    iv_avg = round(float(cf["impliedVolatility"].mean()) * 100, 1)
+    mp_strike = min(strikes, key=lambda k: sum(max(0, k-s)*cf.loc[s,"openInterest"] + max(0, s-k)*pf.loc[s,"openInterest"] for s in strikes))
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.markdown("<div class='metric-box'><div class='metric-label'>Put / Call OI Ratio</div><div class='metric-val'>" + f"{pcr:.2f}" + "</div></div>", unsafe_allow_html=True)
+    m2.markdown("<div class='metric-box'><div class='metric-label'>Avg IV</div><div class='metric-val' style='color:#38bdf8;'>" + f"{iv_avg:.1f}" + "%</div></div>", unsafe_allow_html=True)
+    m3.markdown("<div class='metric-box'><div class='metric-label'>Max Pain Strike</div><div class='metric-val' style='color:#facc15;'>$" + f"{mp_strike:.2f}" + "</div></div>", unsafe_allow_html=True)
+    m4.markdown("<div class='metric-box'><div class='metric-label'>Total OI (Call / Put)</div><div class='metric-val'>" + f"{coi:,}" + " / " + f"{poi:,}" + "</div></div>", unsafe_allow_html=True)
+
+    atm = min(strikes, key=lambda x: abs(x - spot))
+    s_rows = []
+    for k in strikes:
+        cr = cf.loc[k]
+        pr = pf.loc[k]
+        s_rows.append({"CALL OI": int(cr["openInterest"]), "CALL VOL": int(cr["volume"]), "CALL IV": f"{cr['impliedVolatility']*100:.1f}%", "CALL BID": float(cr["bid"]), "CALL ASK": float(cr["ask"]), "CALL LAST": float(cr["lastPrice"]), "STRIKE": float(k), "PUT LAST": float(pr["lastPrice"]), "PUT BID": float(pr["bid"]), "PUT ASK": float(pr["ask"]), "PUT IV": f"{pr['impliedVolatility']*100:.1f}%", "PUT VOL": int(pr["volume"]), "PUT OI": int(pr["openInterest"])})
+    dfs = pd.DataFrame(s_rows)
+
+    def style_opt(row):
+        is_atm = (row["STRIKE"] == atm)
+        res = []
+        for col in row.index:
+            if col == "STRIKE":
+                res.append("background:#eab308;color:#000;font-size:19px;font-weight:900;" if is_atm else "background:#1e3a8a;color:#fff;font-size:19px;font-weight:800;")
+            elif col.startswith("CALL"):
+                res.append("background:" + ("#0c2b1e" if row["STRIKE"] < spot else "#07193d") + ";color:#86efac;font-size:18px;font-weight:700;")
+            else:
+                res.append("background:" + ("#2d1218" if row["STRIKE"] > spot else "#07193d") + ";color:#fca5a5;font-size:18px;font-weight:700;")
+        return res
+
+    st.markdown("<div class='card-header'>T-SHAPED STRADDLE OPTIONS CHAIN</div>", unsafe_allow_html=True)
+    st.dataframe(dfs.style.apply(style_opt, axis=1).format({"CALL BID": "{:.2f}", "CALL ASK": "{:.2f}", "CALL LAST": "{:.2f}", "STRIKE": "{:.2f}", "PUT LAST": "{:.2f}", "PUT BID": "{:.2f}", "PUT ASK": "{:.2f}"}), use_container_width=True, height=490, row_height=44, hide_index=True)
+
+    fig_oi = go.Figure([go.Bar(x=dfs["STRIKE"], y=dfs["CALL OI"], name="Call OI", marker_color="#22c55e"), go.Bar(x=dfs["STRIKE"], y=dfs["PUT OI"], name="Put OI", marker_color="#ef4444")])
+    fig_oi.add_vline(x=spot, line_dash="dash", line_color="#facc15", annotation_text="Spot: " + f"{spot:.2f}")
+    fig_oi.update_layout(barmode="group", template="plotly_dark", paper_bgcolor="rgba(6,20,48,0.95)", plot_bgcolor="rgba(4,14,34,0.98)", height=310, font=dict(size=16, color="#fff"), margin=dict(l=10, r=10, t=20, b=10))
+    st.plotly_chart(fig_oi, use_container_width=True)
