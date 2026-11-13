@@ -294,9 +294,12 @@ elif st.session_state.page == "Stock Analysis":
 
         fig = go.Figure(go.Scatter(x=hdf["Date"], y=hdf["Close"], mode="lines", line=dict(color="#0284c7", width=2.5), showlegend=False))
         
-        # 恢复 Plotly 官方标准的 add_hline，完美渲染右侧带箭头和价格数字的标准标签与贯穿虚线
+        # 显式加入 xref="paper", x0=0, x1=1，强制虚线从图表最左侧 100% 贯穿延伸到右侧边缘的价格标签处
         fig.add_hline(
             y=cur_price, 
+            xref="paper",
+            x0=0,
+            x1=1,
             line_dash="dash", 
             line_color="#64748b", 
             line_width=2,
