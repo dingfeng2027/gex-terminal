@@ -74,9 +74,35 @@ def fetch_stock_metrics(symbol, live=True):
         if hist.empty or len(hist) < 2:
             return fb
         c = hist["Close"]
+        if isinstance(c, pd.DataFrame):
+            c = c.iloc[:, 0]
+            
+        last_val = c.iloc[-1]
+        if hasattr(last_val, 'item'): last_val = last_val.item()
+        last_price = float(last_val)
+
+        if pd.isna(last_price) or last_price <= 0:
+            return fb
+
+        prev_val = c.iloc[-2]
+        if hasattr(prev_val, 'item'): prev_val = prev_val.item()
+        prev_price = float(prev_val)
+        if pd.isna(prev_price) or prev_price <= 0:
+            prev_price = fb["prev"]
+
+        ma20_val = float(c.tail(20).mean())
+        ma50_val = float(c.tail(50).mean())
+        ma200_val = float(c.tail(200).mean())
+        high_val = float(hist["High"].max())
+        low_val = float(hist["Low"].min())
+        
         delta = c.diff()
         rs = delta.clip(lower=0).rolling(14).mean() / (-delta.clip(upper=0).rolling(14).mean())
-        rsi_val = (100 - 100 / (1 + rs)).iloc[-1]
+        rsi_series = (100 - 100 / (1 + rs))
+        rsi_val = float(rsi_series.iloc[-1])
+        if pd.isna(rsi_val):
+            rsi_val = 50.0
+        
         info = t.info or {}
         pe = info.get("trailingPE")
         eps = info.get("trailingEps")
@@ -84,14 +110,14 @@ def fetch_stock_metrics(symbol, live=True):
         mcap_str = (f"{mc/1e12:.2f}T" if mc >= 1e12 else f"{mc/1e9:.1f}B") if mc else fb["mcap"]
         return {
             "name": info.get("shortName") or fb["name"],
-            "price": round(float(c.iloc[-1]), 2),
-            "prev": round(float(c.iloc[-2]), 2),
-            "ma20": round(float(c.tail(20).mean()), 2),
-            "ma50": round(float(c.tail(50).mean()), 2),
-            "ma200": round(float(c.tail(200).mean()), 2),
-            "high52": round(float(hist["High"].max()), 2),
-            "low52": round(float(hist["Low"].min()), 2),
-            "rsi": round(float(rsi_val), 1) if pd.notna(rsi_val) else 50.0,
+            "price": round(last_price, 2),
+            "prev": round(prev_price, 2),
+            "ma20": round(ma20_val, 2),
+            "ma50": round(ma50_val, 2),
+            "ma200": round(ma200_val, 2),
+            "high52": round(high_val, 2),
+            "low52": round(low_val, 2),
+            "rsi": round(rsi_val, 1),
             "pe": round(float(pe), 2) if (pe and pd.notna(pe)) else fb["pe"],
             "eps": round(float(eps), 2) if (eps and pd.notna(eps)) else fb["eps"],
             "mcap": mcap_str
@@ -100,15 +126,20 @@ def fetch_stock_metrics(symbol, live=True):
         return fb
 
 def fetch_history_df(symbol, period_str, current_price):
-    pmap = {"1日": "1d", "1星期": "5d", "3星期": "1mo", "1个月": "1mo", "6个月": "6mo", "1年": "1y", "全部": "max"}
+    pmap = {"1日": "1d", "1星期": "5d", "1个月": "1mo", "3个月": "3mo", "6个月": "6mo", "1年": "1y", "全部": "max"}
     yfp = pmap.get(period_str, "6mo")
     try:
         hist = yf.Ticker(symbol).history(period=yfp)
         if not hist.empty:
-            return hist.reset_index()
+            df = hist.reset_index()
+            if isinstance(df["Close"], pd.DataFrame):
+                df["Close"] = df["Close"].iloc[:, 0]
+            df = df.dropna(subset=["Close"])
+            if not df.empty:
+                return df
     except Exception:
         pass
-    ndays = {"1d": 2, "5d": 7, "1mo": 21, "6mo": 120}.get(yfp, 250)
+    ndays = {"1d": 2, "5d": 7, "1mo": 21, "3mo": 63, "6mo": 120}.get(yfp, 250)
     np.random.seed(abs(hash(symbol + period_str)) % 10000)
     dates = pd.date_range(end=datetime.today(), periods=ndays, freq="B")
     prices = current_price * np.exp(np.cumsum(np.random.normal(0.0005, 0.015, size=len(dates))))
@@ -230,17 +261,33 @@ elif st.session_state.page == "Stock Analysis":
 
     sym = st.session_state.selected_ticker
     m = fetch_stock_metrics(sym, live=st.session_state.use_live_api)
+    
+    # 严格防护：确保现价绝对不为 nan，若异常则强制读取备用价格
+    fallback_price = FALLBACK_DATA.get(sym, {}).get("price", 177.34)
+    cur_price = float(m["price"]) if (m and "price" in m and pd.notna(m["price"]) and float(m["price"]) > 0) else fallback_price
+    
     col_c, col_l = st.columns([2.5, 1.1])
     with col_c:
-        card_title_html = "<div class='card-header'>" + sym + " — " + m['name'] + " | Price Chart</div>"
+        card_title_html = "<div class='card-header'>" + sym + " — " + m.get('name', sym) + " | Price Chart</div>"
         st.markdown(card_title_html, unsafe_allow_html=True)
-        periods = ["1日", "1星期", "3星期", "1个月", "6个月", "1年", "全部"]
+        
+        active_p = st.session_state.chart_period
+        periods = ["1日", "1星期", "1个月", "3个月", "6个月", "1年", "全部"]
+        
+        style_overrides = "<style>"
+        for p in periods:
+            if p == active_p:
+                style_overrides += f"div[data-testid='stButton'] > button[kind='secondary']:has(p:contains('{p}')) {{ background: linear-gradient(180deg, #facc15, #eab308) !important; color: #000 !important; border: 1px solid #fef08a !important; font-weight: 900 !important; }}"
+        style_overrides += "</style>"
+        st.markdown(style_overrides, unsafe_allow_html=True)
+
         p_cols = st.columns(len(periods))
         for i, p in enumerate(periods):
             if p_cols[i].button(p, use_container_width=True, key="p_" + p):
                 st.session_state.chart_period = p
                 st.rerun()
-        hdf = fetch_history_df(sym, st.session_state.chart_period, m["price"])
+
+        hdf = fetch_history_df(sym, st.session_state.chart_period, cur_price)
         
         c_min = hdf["Close"].min()
         c_max = hdf["Close"].max()
@@ -248,14 +295,32 @@ elif st.session_state.page == "Stock Analysis":
         y_min = c_min - margin
         y_max = c_max + margin
 
-        fig = go.Figure(go.Scatter(x=hdf["Date"], y=hdf["Close"], mode="lines", line=dict(color="#0284c7", width=2.5)))
-        fig.add_hline(y=m["price"], line_dash="dash", line_color="#64748b", annotation_text=" " + str(m['price']) + " ", annotation_position="right", annotation_font=dict(color="#fff", size=15), annotation_bgcolor="#334155")
+        start_date = hdf["Date"].iloc[0]
+        end_date = hdf["Date"].iloc[-1]
+        if isinstance(end_date, pd.Timestamp) or hasattr(end_date, 'to_pydatetime'):
+            extended_end = end_date + timedelta(days=max(1, int((end_date - start_date).days * 0.08)))
+        else:
+            extended_end = end_date
+
+        fig = go.Figure(go.Scatter(x=hdf["Date"], y=hdf["Close"], mode="lines", line=dict(color="#0284c7", width=2.5), showlegend=False))
+        
+        # 使用 Scatter 确保虚线 100% 贯穿图表，右侧带价格标签
+        fig.add_trace(go.Scatter(
+            x=[start_date, extended_end],
+            y=[cur_price, cur_price],
+            mode="lines+text",
+            line=dict(color="#64748b", dash="dash", width=2),
+            text=["", f" {cur_price:.2f} "],
+            textposition="middle right",
+            textfont=dict(color="#fff", size=15),
+            showlegend=False
+        ))
         
         fig.update_layout(
             template="plotly_white", paper_bgcolor="#fff", plot_bgcolor="#fff",
             xaxis_rangeslider_visible=False, height=467,
             font=dict(size=17, color="#1e293b"),
-            margin=dict(l=10, r=70, t=10, b=10), showlegend=False
+            margin=dict(l=10, r=100, t=10, b=10), showlegend=False
         )
         fig.update_yaxes(side="right", gridcolor="#e2e8f0", range=[y_min, y_max])
         st.plotly_chart(fig, use_container_width=True)
@@ -265,26 +330,27 @@ elif st.session_state.page == "Stock Analysis":
         rows_html = ""
         for pct in [20, 15, 12, 10, 8, 6, 0, -6, -8, -10, -12, -15, -18, -20]:
             lbl = "CURRENT" if pct == 0 else (("+" + str(pct)) if pct > 0 else str(pct)) + "%"
-            tp = round(m["price"] * (1 + pct / 100.0), 2)
+            tp = round(cur_price * (1 + pct / 100.0), 2)
             bg = "#eab308" if pct == 0 else "#07193d"
             fg = "#000" if pct == 0 else ("#4ade80" if pct > 0 else "#f87171")
             fw = "900" if pct == 0 else "700"
             rows_html += "<tr style='background:" + bg + ";border-bottom:1px solid #1e3a8a;'><td style='padding:9px 10px;color:" + fg + ";font-weight:" + fw + ";font-size:14px;'>" + lbl + "</td><td style='padding:9px 10px;color:" + fg + ";font-weight:" + fw + ";font-size:14px;text-align:right;'>" + f"{tp:.2f}" + "</td></tr>"
-        # 高度调整为 540px，内部容器设为 525px
-        html_box = "<div style='background:#061430;border:1px solid #2563eb;border-radius:8px;height:525px;overflow-y:auto;padding:1px 2px 2px 2px;'><table style='width:100%;border-collapse:collapse;font-family:sans-serif;'><thead><tr style='border-bottom:2px solid #1e3a8a;color:#93c5fd;font-size:14px;position:sticky;top:0;background:#061430;'><th style='padding:8px 10px;text-align:left;'>LEVEL</th><th style='padding:8px 10px;text-align:right;'>TARGET PRICE</th></tr></thead><tbody>" + rows_html + "</tbody></table></div>"
-        st.components.v1.html(html_box, height=540)
+        
+        html_box = "<div style='background:#061430;border:1px solid #2563eb;border-radius:8px;height:533px;overflow-y:auto;padding:4px 2px 2px 2px;'><table style='width:100%;border-collapse:collapse;font-family:sans-serif;'><thead><tr style='border-bottom:2px solid #1e3a8a;color:#93c5fd;font-size:14px;position:sticky;top:0;background:#061430;'><th style='padding:8px 10px;text-align:left;'>LEVEL</th><th style='padding:8px 10px;text-align:right;'>TARGET PRICE</th></tr></thead><tbody>" + rows_html + "</tbody></table></div>"
+        st.components.v1.html(html_box, height=545)
 
-    chg = round(m["price"] - m["prev"], 2)
-    pct_c = round((chg / m["prev"]) * 100, 2) if m["prev"] else 0.0
+    prev_val = float(m["prev"]) if (m and "prev" in m and pd.notna(m["prev"]) and float(m["prev"]) > 0) else cur_price
+    chg = round(cur_price - prev_val, 2)
+    pct_c = round((chg / prev_val) * 100, 2) if prev_val else 0.0
     cc = "#4ade80" if chg >= 0 else "#f87171"
     k1, k2, k3, k4, k5, k6 = st.columns(6)
     
-    k1.markdown("<div class='metric-box'><div class='metric-label'>Current Price</div><div class='metric-val'>" + f"{m['price']:.2f}" + " <span style='font-size:19px;color:" + cc + ";'>(" + f"{pct_c:+.2f}" + "%)</span></div></div>", unsafe_allow_html=True)
-    k2.markdown("<div class='metric-box'><div class='metric-label'>52W High</div><div class='metric-val'>" + f"{m['high52']:.2f}" + "</div></div>", unsafe_allow_html=True)
-    k3.markdown("<div class='metric-box'><div class='metric-label'>52W Low</div><div class='metric-val'>" + f"{m['low52']:.2f}" + "</div></div>", unsafe_allow_html=True)
-    k4.markdown("<div class='metric-box'><div class='metric-label'>Market Cap</div><div class='metric-val'>" + str(m['mcap']) + "</div></div>", unsafe_allow_html=True)
-    k5.markdown("<div class='metric-box'><div class='metric-label'>P/E / EPS</div><div class='metric-val'>" + (str(m['pe']) if m['pe'] else 'N/A') + " / " + str(m['eps']) + "</div></div>", unsafe_allow_html=True)
-    k6.markdown("<div class='metric-box'><div class='metric-label'>RSI (14)</div><div class='metric-val' style='color:#38bdf8;'>" + f"{m['rsi']:.1f}" + "</div></div>", unsafe_allow_html=True)
+    k1.markdown("<div class='metric-box'><div class='metric-label'>Current Price</div><div class='metric-val'>" + f"{cur_price:.2f}" + " <span style='font-size:19px;color:" + cc + ";'>(" + f"{pct_c:+.2f}" + "%)</span></div></div>", unsafe_allow_html=True)
+    k2.markdown("<div class='metric-box'><div class='metric-label'>52W High</div><div class='metric-val'>" + f"{float(m.get('high52', cur_price)):.2f}" + "</div></div>", unsafe_allow_html=True)
+    k3.markdown("<div class='metric-box'><div class='metric-label'>52W Low</div><div class='metric-val'>" + f"{float(m.get('low52', cur_price)):.2f}" + "</div></div>", unsafe_allow_html=True)
+    k4.markdown("<div class='metric-box'><div class='metric-label'>Market Cap</div><div class='metric-val'>" + str(m.get('mcap', 'N/A')) + "</div></div>", unsafe_allow_html=True)
+    k5.markdown("<div class='metric-box'><div class='metric-label'>P/E / EPS</div><div class='metric-val'>" + (str(m.get('pe', 'N/A')) if m.get('pe') else 'N/A') + " / " + str(m.get('eps', 'N/A')) + "</div></div>", unsafe_allow_html=True)
+    k6.markdown("<div class='metric-box'><div class='metric-label'>RSI (14)</div><div class='metric-val' style='color:#38bdf8;'>" + f"{float(m.get('rsi', 50.0)):.1f}" + "</div></div>", unsafe_allow_html=True)
 
 elif st.session_state.page == "Options Data":
     o1, o2, o3, o4 = st.columns([2.3, 2.1, 1.5, 1.5])
@@ -302,7 +368,9 @@ elif st.session_state.page == "Options Data":
         st.rerun()
 
     sym = st.session_state.selected_ticker
-    spot = fetch_stock_metrics(sym, live=st.session_state.use_live_api)["price"]
+    m_opt = fetch_stock_metrics(sym, live=st.session_state.use_live_api)
+    spot = float(m_opt["price"]) if (m_opt and "price" in m_opt and pd.notna(m_opt["price"]) and float(m_opt["price"]) > 0) else FALLBACK_DATA.get(sym, {}).get("price", 150.0)
+    
     exps, cdf, pdf = fetch_options_chain(sym, spot)
     ec, ic = st.columns([1.6, 3.4])
     ec.selectbox("到期日 (Expiration)", exps, index=0)
