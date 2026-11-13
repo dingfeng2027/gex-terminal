@@ -283,8 +283,20 @@ elif st.session_state.page == "Stock Analysis":
         y_min = c_min - margin
         y_max = c_max + margin
 
-        fig = go.Figure(go.Scatter(x=hdf["Date"], y=hdf["Close"], mode="lines", line=dict(color="#0284c7", width=2.5)))
-        fig.add_hline(y=cur_price, line_dash="dash", line_color="#64748b", annotation_text=" " + str(cur_price) + " ", annotation_position="right", annotation_font=dict(color="#fff", size=15), annotation_bgcolor="#334155")
+        fig = go.Figure()
+        # 主股价曲线
+        fig.add_trace(go.Scatter(x=hdf["Date"], y=hdf["Close"], mode="lines", line=dict(color="#0284c7", width=2.5), showlegend=False))
+        # 严格用数据点连成绝对水平的虚线
+        fig.add_trace(go.Scatter(
+            x=[hdf["Date"].iloc[0], hdf["Date"].iloc[-1]],
+            y=[cur_price, cur_price],
+            mode="lines+text",
+            line=dict(color="#64748b", dash="dash", width=2),
+            text=["", f" {cur_price} "],
+            textposition="top right",
+            textfont=dict(color="#fff", size=15),
+            showlegend=False
+        ))
         
         fig.update_layout(
             template="plotly_white", paper_bgcolor="#fff", plot_bgcolor="#fff",
@@ -306,8 +318,8 @@ elif st.session_state.page == "Stock Analysis":
             fw = "900" if pct == 0 else "700"
             rows_html += "<tr style='background:" + bg + ";border-bottom:1px solid #1e3a8a;'><td style='padding:9px 10px;color:" + fg + ";font-weight:" + fw + ";font-size:14px;'>" + lbl + "</td><td style='padding:9px 10px;color:" + fg + ";font-weight:" + fw + ";font-size:14px;text-align:right;'>" + f"{tp:.2f}" + "</td></tr>"
         
-        # 内边距调整为 4px，组件高度精确设为 545px
-        html_box = "<div style='background:#061430;border:1px solid #2563eb;border-radius:8px;height:530px;overflow-y:auto;padding:4px 2px 2px 2px;'><table style='width:100%;border-collapse:collapse;font-family:sans-serif;'><thead><tr style='border-bottom:2px solid #1e3a8a;color:#93c5fd;font-size:14px;position:sticky;top:0;background:#061430;'><th style='padding:8px 10px;text-align:left;'>LEVEL</th><th style='padding:8px 10px;text-align:right;'>TARGET PRICE</th></tr></thead><tbody>" + rows_html + "</tbody></table></div>"
+        # 内边距 4px，iframe 高度 545px，内部容器高度 533px 完美契合底部
+        html_box = "<div style='background:#061430;border:1px solid #2563eb;border-radius:8px;height:533px;overflow-y:auto;padding:4px 2px 2px 2px;'><table style='width:100%;border-collapse:collapse;font-family:sans-serif;'><thead><tr style='border-bottom:2px solid #1e3a8a;color:#93c5fd;font-size:14px;position:sticky;top:0;background:#061430;'><th style='padding:8px 10px;text-align:left;'>LEVEL</th><th style='padding:8px 10px;text-align:right;'>TARGET PRICE</th></tr></thead><tbody>" + rows_html + "</tbody></table></div>"
         st.components.v1.html(html_box, height=545)
 
     chg = round(cur_price - float(m["prev"]), 2)
