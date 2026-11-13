@@ -294,29 +294,23 @@ elif st.session_state.page == "Stock Analysis":
 
         fig = go.Figure(go.Scatter(x=hdf["Date"], y=hdf["Close"], mode="lines", line=dict(color="#0284c7", width=2.5), showlegend=False))
         
-        # 使用 shape 绘制一条从图表左边缘(0)完美贯穿到右边缘(1)的水平虚线
-        fig.add_shape(
-            type="line",
-            xref="paper", x0=0, x1=1,
-            yref="y", y0=cur_price, y1=cur_price,
-            line=dict(color="#64748b", dash="dash", width=2)
-        )
-        
-        # 在右侧边缘精确添加价格数字标签，与虚线完美衔接
-        fig.add_annotation(
-            xref="paper", x=1.0, y=cur_price,
-            xanchor="left", yanchor="middle",
-            text=f" {cur_price} ",
-            showarrow=False,
-            font=dict(color="#fff", size=15),
-            bgcolor="#334155"
+        # 恢复 Plotly 官方标准的 add_hline，完美渲染右侧带箭头和价格数字的标准标签与贯穿虚线
+        fig.add_hline(
+            y=cur_price, 
+            line_dash="dash", 
+            line_color="#64748b", 
+            line_width=2,
+            annotation_text=f" {cur_price} ", 
+            annotation_position="right", 
+            annotation_font=dict(color="#fff", size=15), 
+            annotation_bgcolor="#334155"
         )
         
         fig.update_layout(
             template="plotly_white", paper_bgcolor="#fff", plot_bgcolor="#fff",
             xaxis_rangeslider_visible=False, height=467,
             font=dict(size=17, color="#1e293b"),
-            margin=dict(l=10, r=100, t=10, b=10), showlegend=False
+            margin=dict(l=10, r=70, t=10, b=10), showlegend=False
         )
         fig.update_yaxes(side="right", gridcolor="#e2e8f0", range=[y_min, y_max])
         st.plotly_chart(fig, use_container_width=True)
