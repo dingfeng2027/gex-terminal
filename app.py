@@ -30,7 +30,7 @@ st.markdown("""
 DEFAULT_TICKERS = ["NVDA", "GOOGL", "TSM", "AMD", "MSFT", "META", "AMZN", "AAPL", "ASML", "TSLA", "CEG", "SMCI", "MPWR", "MRVL", "NFLX", "QQQ", "VUAG.L", "EQQQ.L"]
 
 FALLBACK_DATA = {
-    "NG.L"
+    "NG.L": {"name": "National Grid", "price": 1279.00, "prev": 1267.00, "ma20": 1250.0, "ma50": 1220.0, "ma200": 1150.0, "pe": 16.1, "high52": 1428.5, "low52": 1096.5, "rsi": 54.0, "eps": 0.79, "mcap": "85.3B"}
     "NVDA": {"name": "NVIDIA", "price": 177.34, "prev": 186.64, "ma20": 209.1, "ma50": 219.0, "ma200": 204.6, "pe": 22.4, "high52": 195.9, "low52": 86.6, "rsi": 38.7, "eps": 8.31, "mcap": "4.60T"},
     "GOOGL": {"name": "Alphabet", "price": 288.93, "prev": 284.78, "ma20": 314.2, "ma50": 331.7, "ma200": 339.3, "pe": 15.1, "high52": 303.1, "low52": 142.6, "rsi": 55.9, "eps": 19.14, "mcap": "3.54T"},
     "TSM": {"name": "TSMC", "price": 391.23, "prev": 375.44, "ma20": 413.7, "ma50": 431.1, "ma200": 401.7, "pe": 25.4, "high52": 475.5, "low52": 260.5, "rsi": 62.3, "eps": 15.42, "mcap": "2.02T"},
