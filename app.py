@@ -27,10 +27,10 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-DEFAULT_TICKERS = ["NVDA", "GOOGL", "TSM", "AMD", "MSFT", "META", "AMZN", "AAPL", "ASML", "TSLA", "CEG", "SMCI", "MPWR", "MRVL", "NFLX", "QQQ", "VUAG.L", "EQQQ.L"]
+DEFAULT_TICKERS = ["NVDA", "GOOGL", "TSM", "AMD", "MSFT", "META", "AMZN", "AAPL", "ASML", "TSLA", "CEG", "SMCI", "MPWR", "MRVL", "NFLX", "QQQ", "VUAG.L", "EQQQ.L", "NG.L"]
 
 FALLBACK_DATA = {
-    "NG.L": {"name": "National Grid", "price": 1279.00, "prev": 1267.00, "ma20": 1250.0, "ma50": 1220.0, "ma200": 1150.0, "pe": 16.1, "high52": 1428.5, "low52": 1096.5, "rsi": 54.0, "eps": 0.79, "mcap": "85.3B"}
+    "NG.L": {"name": "National Grid", "price": 1279.00, "prev": 1267.00, "ma20": 1250.0, "ma50": 1220.0, "ma200": 1150.0, "pe": 16.1, "high52": 1428.5, "low52": 1096.5, "rsi": 54.0, "eps": 0.79, "mcap": "85.3B"},
     "NVDA": {"name": "NVIDIA", "price": 177.34, "prev": 186.64, "ma20": 209.1, "ma50": 219.0, "ma200": 204.6, "pe": 22.4, "high52": 195.9, "low52": 86.6, "rsi": 38.7, "eps": 8.31, "mcap": "4.60T"},
     "GOOGL": {"name": "Alphabet", "price": 288.93, "prev": 284.78, "ma20": 314.2, "ma50": 331.7, "ma200": 339.3, "pe": 15.1, "high52": 303.1, "low52": 142.6, "rsi": 55.9, "eps": 19.14, "mcap": "3.54T"},
     "TSM": {"name": "TSMC", "price": 391.23, "prev": 375.44, "ma20": 413.7, "ma50": 431.1, "ma200": 401.7, "pe": 25.4, "high52": 475.5, "low52": 260.5, "rsi": 62.3, "eps": 15.42, "mcap": "2.02T"},
@@ -54,17 +54,25 @@ FALLBACK_DATA = {
 if "page" not in st.session_state:
     st.session_state["page"] = "Market Watch"
 
+# 从网址参数中读取已保存的自选股列表，防止刷新丢失
 if "tickers" not in st.session_state:
-    st.session_state["tickers"] = DEFAULT_TICKERS.copy()
+    saved_t = st.query_params.get("watchlist", "")
+    if saved_t:
+        st.session_state["tickers"] = [x.strip().upper() for x in saved_t.split(",") if x.strip()]
+    else:
+        st.session_state["tickers"] = DEFAULT_TICKERS.copy()
 
 if "selected_ticker" not in st.session_state:
-    st.session_state["selected_ticker"] = "NVDA"
+    st.session_state["selected_ticker"] = st.session_state["tickers"][0] if st.session_state["tickers"] else "NVDA"
 
 if "use_live_api" not in st.session_state:
     st.session_state["use_live_api"] = True
 
 if "chart_period" not in st.session_state:
     st.session_state["chart_period"] = "6个月"
+
+def sync_watchlist_to_url():
+    st.query_params["watchlist"] = ",".join(st.session_state.tickers)
 
 def fetch_stock_metrics(symbol, live=True):
     fb = FALLBACK_DATA.get(symbol, {"name": symbol, "price": 150.0, "prev": 148.0, "ma20": 145.0, "ma50": 140.0, "ma200": 130.0, "pe": 25.0, "high52": 180.0, "low52": 100.0, "rsi": 55.0, "eps": 6.0, "mcap": "120B"})
@@ -187,9 +195,10 @@ st.markdown("<div style='border-bottom: 1px solid #1e3a8a; margin: 6px 0 8px 0;'
 if st.session_state.page == "Market Watch":
     c1, c2, c3, c4 = st.columns([2.0, 2.2, 1.2, 1.3])
     c1.markdown("### Market Watch")
-    new_t = c2.text_input("Add", placeholder="输入代码 (如 SMCI, MRVL)", label_visibility="collapsed").strip().upper()
+    new_t = c2.text_input("Add", placeholder="输入任意代码 (美股如 AVGO，英股如 SHEL.L)", label_visibility="collapsed").strip().upper()
     if c3.button("ADD TICKER", use_container_width=True) and new_t and new_t not in st.session_state.tickers:
         st.session_state.tickers.append(new_t)
+        sync_watchlist_to_url()
         st.rerun()
     if c4.button("UPDATE ALL", use_container_width=True):
         st.rerun()
@@ -242,9 +251,11 @@ if st.session_state.page == "Market Watch":
     del_sym = b2.selectbox("移除", ["选择要删除的代码..."] + st.session_state.tickers, label_visibility="collapsed")
     if del_sym != "选择要删除的代码...":
         st.session_state.tickers.remove(del_sym)
+        sync_watchlist_to_url()
         st.rerun()
     summary_html = "<div style='text-align:right; padding-top:6px; font-size:19px; font-weight:800;'><span style='color:#4ade80;'>▲ " + str(gainers) + " Gainers</span> | <span style='color:#f87171;'>● " + str(losers) + " Losers</span> | Total: " + str(len(df_watch)) + "</div>"
     b3.markdown(summary_html, unsafe_allow_html=True)
+    st.caption("💡 提示：新添加或删除的股票会自动保存在当前网页地址栏中。将当前网址加入书签即可永久保留你的专属自选列表。")
 
 elif st.session_state.page == "Stock Analysis":
     t1, t2, t3, t4 = st.columns([2.0, 2.4, 2.2, 1.2])
@@ -346,7 +357,6 @@ elif st.session_state.page == "Stock Analysis":
     k6.markdown("<div class='metric-box'><div class='metric-label'>RSI (14)</div><div class='metric-val' style='color:#38bdf8;'>" + f"{float(m.get('rsi', 50.0)):.1f}" + "</div></div>", unsafe_allow_html=True)
 
 elif st.session_state.page == "Options Intelligence":
-    # 顶部导航与标的选择栏
     o1, o2, o3, o4 = st.columns([2.3, 2.1, 1.5, 1.5])
     o1.markdown("### CAPITAL QUANT — OPTIONS INTELLIGENCE V1.0")
     idx = st.session_state.tickers.index(st.session_state.selected_ticker) if st.session_state.selected_ticker in st.session_state.tickers else 0
