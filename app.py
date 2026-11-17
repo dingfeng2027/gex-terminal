@@ -309,9 +309,18 @@ elif st.session_state.page == "Stock Analysis":
 
         hdf = fetch_history_df(sym, st.session_state.chart_period, cur_price)
         
-        c_min = hdf["Close"].min()
-        c_max = hdf["Close"].max()
-        margin = (c_max - c_min) * 0.05 if c_max != c_min else c_min * 0.01
+        # 修复：将期权通道的上下极限也纳入 Y 轴计算，防止绿色墙体和标签被挤出视图窗口
+        if st.session_state.show_walls:
+            rolling_mid = hdf['Close'].rolling(window=5, min_periods=1).mean()
+            call_wall_tmp = rolling_mid * 1.08
+            put_wall_tmp = rolling_mid * 0.90
+            c_min = min(hdf["Close"].min(), put_wall_tmp.min())
+            c_max = max(hdf["Close"].max(), call_wall_tmp.max())
+        else:
+            c_min = hdf["Close"].min()
+            c_max = hdf["Close"].max()
+
+        margin = (c_max - c_min) * 0.08 if c_max != c_min else c_min * 0.01
         y_min = c_min - margin
         y_max = c_max + margin
 
@@ -539,7 +548,7 @@ elif st.session_state.page == "Options Intelligence":
     mp_strike = min(strikes, key=lambda k: sum(max(0, k-s)*cf.loc[s,"openInterest"] + max(0, s-k)*pf.loc[s,"openInterest"] for s in strikes))
     
     o1, o2, o3 = st.columns(3)
-    o1.markdown("<div class='metric-box'><div class='metric-label'>Theoretical Max Pain</div><div class='metric-val' style='color:#facc15;'>$" + f"{mp_strike:.2f}" + "</div></div>", unsafe_allow_html=True)
+    o1.markdown("<div class='metric-box'><div class='metric-label'>Theoretical Max Pain</div><div class='metric-val' style='color:#facc15;'>" + f"${mp_strike:.2f}" + "</div></div>", unsafe_allow_html=True)
     o2.markdown("<div class='metric-box'><div class='metric-label'>Max PUT OI Strike</div><div class='metric-val' style='color:#4ade80;'>" + f"${put_wall}" + "</div></div>", unsafe_allow_html=True)
     o3.markdown("<div class='metric-box'><div class='metric-label'>Max CALL OI Strike</div><div class='metric-val' style='color:#f87171;'>" + f"${call_wall}" + "</div></div>", unsafe_allow_html=True)
 
