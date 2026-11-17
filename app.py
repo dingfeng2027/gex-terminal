@@ -27,7 +27,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-DEFAULT_TICKERS = ["NVDA", "GOOGL", "TSM", "AMD", "MSFT", "META", "AMZN", "AAPL", "ASML", "TSLA", "CEG", "SMCI", "MPWR", "MRVL", "NFLX", "QQQ", "VUAG.L", "EQQQ.L", "NG.L"]
+DEFAULT_TICKERS = ["NVDA", "GOOGL", "TSM", "AMD", "MSFT", "META", "AMZN", "AAPL", "ASML", "TSLA", "CBRS", "SPCX", "CEG", "SMCI", "MPWR", "MRVL", "NFLX", "QQQ", "VUAG.L", "EQQQ.L", "NG.L"]
 
 FALLBACK_DATA = {
     "NG.L": {"name": "National Grid", "price": 1279.00, "prev": 1267.00, "ma20": 1250.0, "ma50": 1220.0, "ma200": 1150.0, "pe": 16.1, "high52": 1428.5, "low52": 1096.5, "rsi": 54.0, "eps": 0.79, "mcap": "85.3B"},
@@ -41,6 +41,8 @@ FALLBACK_DATA = {
     "AAPL": {"name": "Apple", "price": 351.39, "prev": 342.37, "ma20": 343.9, "ma50": 336.6, "ma200": 299.3, "pe": 39.1, "high52": 377.4, "low52": 169.2, "rsi": 61.6, "eps": 8.98, "mcap": "5.31T"},
     "ASML": {"name": "ASML", "price": 1517.98, "prev": 1424.75, "ma20": 1587.9, "ma50": 1673.6, "ma200": 1600.7, "pe": 37.3, "high52": 1823.5, "low52": 946.1, "rsi": 66.2, "eps": 40.65, "mcap": "605B"},
     "TSLA": {"name": "Tesla", "price": 381.01, "prev": 358.22, "ma20": 380.5, "ma50": 372.7, "ma200": 383.5, "pe": 418.7, "high52": 488.5, "low52": 217.2, "rsi": 58.5, "eps": 0.91, "mcap": "1.21T"},
+    "CBRS": {"name": "Cerebras Systems", "price": 106.00, "prev": 97.75, "ma20": 102.0, "ma50": 105.0, "ma200": 110.0, "pe": None, "high52": 386.34, "low52": 77.84, "rsi": 52.0, "eps": -2.82, "mcap": "24.5B"},
+    "SPCX": {"name": "SpaceX", "price": 137.36, "prev": 137.36, "ma20": 138.0, "ma50": 140.0, "ma200": 150.0, "pe": 233.0, "high52": 225.64, "low52": 104.83, "rsi": 50.0, "eps": 0.32, "mcap": "1.87T"},
     "CEG": {"name": "Constellation", "price": 265.50, "prev": 258.00, "ma20": 260.0, "ma50": 250.0, "ma200": 220.0, "pe": 32.5, "high52": 290.0, "low52": 150.0, "rsi": 58.0, "eps": 8.15, "mcap": "85B"},
     "SMCI": {"name": "Super Micro", "price": 28.88, "prev": 27.50, "ma20": 30.1, "ma50": 35.2, "ma200": 45.0, "pe": 14.2, "high52": 118.8, "low52": 17.2, "rsi": 46.5, "eps": 2.03, "mcap": "16B"},
     "MPWR": {"name": "Monolithic", "price": 1190.46, "prev": 1160.00, "ma20": 1150.0, "ma50": 1100.0, "ma200": 950.0, "pe": 78.4, "high52": 1300.0, "low52": 650.0, "rsi": 60.1, "eps": 15.20, "mcap": "57B"},
@@ -199,7 +201,7 @@ st.markdown("<div style='border-bottom: 1px solid #1e3a8a; margin: 6px 0 8px 0;'
 def render_market_watch_fragment():
     c1, c2, c3, c4 = st.columns([2.0, 2.2, 1.2, 1.3])
     c1.markdown("### Market Watch (Live 10s)")
-    new_t = c2.text_input("Add", placeholder="输入任意代码 (美股如 AVGO，英股如 SHEL.L)", label_visibility="collapsed").strip().upper()
+    new_t = c2.text_input("Add", placeholder="输入任意代码 (美股如 CBRS, SPCX，英股如 NG.L)", label_visibility="collapsed").strip().upper()
     if c3.button("ADD TICKER", use_container_width=True) and new_t:
         if new_t not in st.session_state.tickers:
             st.session_state.tickers.append(new_t)
@@ -315,7 +317,6 @@ elif st.session_state.page == "Stock Analysis":
 
         hdf = fetch_history_df(sym, st.session_state.chart_period, cur_price)
         
-        # 修复：将期权通道的上下极限也纳入 Y 轴计算，防止绿色墙体和标签被挤出视图窗口
         if st.session_state.show_walls:
             rolling_mid = hdf['Close'].rolling(window=5, min_periods=1).mean()
             call_wall_tmp = rolling_mid * 1.08
