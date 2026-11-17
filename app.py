@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 import plotly.graph_objects as go
+import json
 from datetime import datetime, timedelta
 
 st.set_page_config(page_title="CAPITAL QUANT v2", layout="wide", initial_sidebar_state="collapsed")
@@ -53,6 +54,15 @@ FALLBACK_DATA = {
     "EQQQ.L": {"name": "Invesco EQQQ", "price": 405.70, "prev": 402.15, "ma20": 416.3, "ma50": 415.8, "ma200": 392.1, "pe": None, "high52": 427.6, "low52": 331.2, "rsi": 54.7, "eps": 0.0, "mcap": "ETF"}
 }
 
+# 处理通过点击无闪烁 HTML 表格行触发的跳转参数
+if "goto_sym" in st.query_params:
+    target_sym = st.query_params["goto_sym"].strip().upper()
+    if target_sym:
+        st.session_state["selected_ticker"] = target_sym
+        st.session_state["page"] = "Stock Analysis"
+    del st.query_params["goto_sym"]
+    st.rerun()
+
 if "page" not in st.session_state:
     st.session_state["page"] = "Market Watch"
 
@@ -78,6 +88,7 @@ if "show_walls" not in st.session_state:
 def sync_watchlist_to_url():
     st.query_params["watchlist"] = ",".join(st.session_state.tickers)
 
+@st.cache_data(ttl=25, show_spinner=False)
 def fetch_stock_metrics(symbol, live=True):
     fb = FALLBACK_DATA.get(symbol, {"name": symbol, "price": 150.0, "prev": 148.0, "ma20": 145.0, "ma50": 140.0, "ma200": 130.0, "pe": 25.0, "high52": 180.0, "low52": 100.0, "rsi": 55.0, "eps": 6.0, "mcap": "120B"})
     if not live:
@@ -139,6 +150,7 @@ def fetch_stock_metrics(symbol, live=True):
     except Exception:
         return fb
 
+@st.cache_data(ttl=60, show_spinner=False)
 def fetch_history_df(symbol, period_str, current_price):
     pmap = {"1日": "1d", "1星期": "5d", "1个月": "1mo", "3个月": "3mo", "6个月": "6mo", "1年": "1y", "全部": "max"}
     yfp = pmap.get(period_str, "6mo")
@@ -179,7 +191,7 @@ def fetch_options_chain(symbol, spot):
     pdf = pd.DataFrame(p_rows)
     return exps, cdf, pdf
 
-top_bar_html = "<div class='top-bar'><div class='brand-title'>CAPITAL QUANT v2</div><div class='live-badge'>Live (Auto 30s) | " + datetime.now().strftime('%b %d, %Y %H:%M:%S') + " | UK Institutional Terminal</div></div>"
+top_bar_html = "<div class='top-bar'><div class='brand-title'>CAPITAL QUANT v2</div><div class='live-badge'>Live (Zero-Flicker 30s) | " + datetime.now().strftime('%b %d, %Y %H:%M:%S') + " | UK Institutional Terminal</div></div>"
 st.markdown(top_bar_html, unsafe_allow_html=True)
 
 n1, n2, n3, n4 = st.columns([1.3, 1.3, 1.6, 2.2])
@@ -196,11 +208,10 @@ st.session_state.use_live_api = n4.toggle("启用实时 Yahoo Finance 行情接�
 
 st.markdown("<div style='border-bottom: 1px solid #1e3a8a; margin: 6px 0 8px 0;'></div>", unsafe_allow_html=True)
 
-# 定义 Market Watch 局部自动刷新模块（每 30 秒静默轮询一次，兼顾稳定与流畅）
-@st.fragment(run_every=30)
-def render_market_watch_fragment():
+# ==================== PAGE 1: MARKET WATCH (前端无闪烁 DOM 局部数字跳动引擎) ====================
+if st.session_state.page == "Market Watch":
     c1, c2, c3, c4 = st.columns([2.0, 2.2, 1.2, 1.3])
-    c1.markdown("### Market Watch (Live 30s)")
+    c1.markdown("### Market Watch")
     new_t = c2.text_input("Add", placeholder="输入任意代码 (美股如 CBRS, SPCX，英股如 NG.L)", label_visibility="collapsed").strip().upper()
     if c3.button("ADD TICKER", use_container_width=True) and new_t:
         if new_t not in st.session_state.tickers:
@@ -210,10 +221,11 @@ def render_market_watch_fragment():
             st.rerun()
         else:
             st.warning("该代码已存在自选列表中！")
-    if c4.button("UPDATE ALL", use_container_width=True):
+    if c4.button("FORCE SYNC", use_container_width=True):
+        st.cache_data.clear()
         st.rerun()
 
-    rows = []
+    initial_rows = []
     gainers = 0
     losers = 0
     for sym in st.session_state.tickers:
@@ -224,35 +236,276 @@ def render_market_watch_fragment():
             gainers += 1
         elif chg < 0:
             losers += 1
-        rows.append({"COMPANY CODE": sym, "TODAY PRICE": d["price"], "YESTERDAY PRICE": d["prev"], "CHANGE": chg, "% CHANGE": pct, "MA20": d["ma20"], "MA50": d["ma50"], "MA200": d["ma200"], "PE RATE": str(d['pe']) if d['pe'] else "None", "YEARLY HIGH": d["high52"], "YEARLY LOW": d["low52"], "RSI (14)": d["rsi"]})
+        initial_rows.append({
+            "sym": sym,
+            "price": d["price"],
+            "prev": d["prev"],
+            "chg": chg,
+            "pct": pct,
+            "ma20": d["ma20"],
+            "ma50": d["ma50"],
+            "ma200": d["ma200"],
+            "pe": str(d['pe']) if d['pe'] else "None",
+            "high52": d["high52"],
+            "low52": d["low52"],
+            "rsi": d["rsi"]
+        })
 
-    df_watch = pd.DataFrame(rows)
-    def style_watch(val, col):
-        base = "background-color: #07193d; font-size: 20px; font-weight: 700;"
-        if col in ["CHANGE", "% CHANGE"]:
-            color_str = "#4ade80" if val > 0 else ("#f87171" if val < 0 else "#fff")
-            return base + " color: " + color_str + ";"
-        if col == "RSI (14)":
-            bg_col = "#dc2626" if val >= 70 else ("#eab308" if val <= 40 else "#16a34a")
-            fg_col = "#000" if val <= 40 else "#fff"
-            return "background-color: " + bg_col + "; color: " + fg_col + "; font-size: 20px; font-weight: 800;"
-        if col == "COMPANY CODE":
-            return base + " color: #60a5fa; font-weight: 900;"
-        if col == "TODAY PRICE":
-            return base + " color: #facc15; font-weight: 800;"
-        return base + " color: #fff;"
+    rows_json = json.dumps(initial_rows)
+    live_flag = "true" if st.session_state.use_live_api else "false"
 
-    fmt = {"TODAY PRICE": "{:.2f}", "YESTERDAY PRICE": "{:.2f}", "CHANGE": "{:+.2f}", "% CHANGE": "{:+.2f}%", "MA20": "{:.2f}", "MA50": "{:.2f}", "MA200": "{:.2f}", "YEARLY HIGH": "{:.2f}", "YEARLY LOW": "{:.2f}", "RSI (14)": "{:.1f}"}
-    styled_df = df_watch.style.apply(lambda c: [style_watch(v, c.name) for v in c], axis=0).format(fmt)
-    
-    event = st.dataframe(styled_df, use_container_width=True, height=650, row_height=45, hide_index=True, on_select="rerun", selection_mode="single-row")
-    
-    if event and event.selection and "rows" in event.selection and len(event.selection.rows) > 0:
-        selected_idx = event.selection.rows[0]
-        if selected_idx < len(df_watch):
-            st.session_state.selected_ticker = df_watch.iloc[selected_idx]["COMPANY CODE"]
-            st.session_state.page = "Stock Analysis"
-            st.rerun()
+    # 纯前端定制 HTML/JS 终端表格：页面完全静止，每30秒仅后台静默替换数字 DOM 并触发高亮闪烁
+    custom_table_html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+    <style>
+        * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+        body {{
+            background-color: transparent;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            color: #fff;
+            overflow-x: auto;
+        }}
+        .status-strip {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: #061430;
+            border: 1px solid #1e3a8a;
+            border-bottom: none;
+            border-radius: 8px 8px 0 0;
+            padding: 8px 14px;
+            font-size: 15px;
+            color: #93c5fd;
+        }}
+        .pulse-dot {{
+            display: inline-block;
+            width: 9px;
+            height: 9px;
+            background-color: #4ade80;
+            border-radius: 50%;
+            margin-right: 6px;
+            box-shadow: 0 0 8px #4ade80;
+        }}
+        .table-wrapper {{
+            width: 100%;
+            max-height: 640px;
+            overflow-y: auto;
+            border: 1px solid #2563eb;
+            border-radius: 0 0 8px 8px;
+            background-color: #061430;
+        }}
+        table {{
+            width: 100%;
+            border-collapse: collapse;
+            text-align: right;
+            font-size: 19px;
+            font-weight: 700;
+        }}
+        thead th {{
+            position: sticky;
+            top: 0;
+            background-color: #091d47;
+            color: #93c5fd;
+            font-size: 15px;
+            font-weight: 800;
+            padding: 12px 10px;
+            border-bottom: 2px solid #2563eb;
+            z-index: 10;
+            white-space: nowrap;
+        }}
+        thead th:first-child {{ text-align: left; padding-left: 16px; }}
+        tbody tr {{
+            background-color: #07193d;
+            border-bottom: 1px solid #1e3a8a;
+            cursor: pointer;
+            transition: background-color 0.15s ease;
+        }}
+        tbody tr:hover {{ background-color: #0f2c6b; }}
+        td {{
+            padding: 11px 10px;
+            white-space: nowrap;
+            transition: background-color 0.6s ease, color 0.3s ease;
+        }}
+        td:first-child {{
+            text-align: left;
+            padding-left: 16px;
+            color: #60a5fa;
+            font-weight: 900;
+        }}
+        .price-cell {{ color: #facc15; font-weight: 800; }}
+        .pos {{ color: #4ade80; }}
+        .neg {{ color: #f87171; }}
+        .neu {{ color: #ffffff; }}
+        .rsi-high {{ background-color: #dc2626; color: #fff; font-weight: 800; text-align: center; }}
+        .rsi-low  {{ background-color: #eab308; color: #000; font-weight: 800; text-align: center; }}
+        .rsi-mid  {{ background-color: #16a34a; color: #fff; font-weight: 800; text-align: center; }}
+        
+        /* 价格跳动瞬间的无感高亮微光 */
+        @keyframes flashUp {{
+            0% {{ background-color: rgba(74, 222, 128, 0.45); }}
+            100% {{ background-color: transparent; }}
+        }}
+        @keyframes flashDown {{
+            0% {{ background-color: rgba(248, 113, 113, 0.45); }}
+            100% {{ background-color: transparent; }}
+        }}
+        .tick-up {{ animation: flashUp 1.2s ease-out; }}
+        .tick-down {{ animation: flashDown 1.2s ease-out; }}
+    </style>
+    </head>
+    <body>
+        <div class="status-strip">
+            <div><span class="pulse-dot"></span><strong>DOM 静默实时引擎已激活</strong>（页面保持静止，每 30 秒后台无感刷新数字）</div>
+            <div id="sync-timer">上次同步: 刚刚 | 点击任意行进入深度分析 &gt;</div>
+        </div>
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>COMPANY CODE</th>
+                        <th>TODAY PRICE</th>
+                        <th>YESTERDAY</th>
+                        <th>CHANGE</th>
+                        <th>% CHANGE</th>
+                        <th>MA20</th>
+                        <th>MA50</th>
+                        <th>MA200</th>
+                        <th>PE RATE</th>
+                        <th>YEARLY HIGH</th>
+                        <th>YEARLY LOW</th>
+                        <th style="text-align:center;">RSI (14)</th>
+                    </tr>
+                </thead>
+                <tbody id="watch-body"></tbody>
+            </table>
+        </div>
+
+        <script>
+            let stockData = {rows_json};
+            const liveEnabled = {live_flag};
+
+            function getRsiClass(rsi) {{
+                if (rsi >= 70) return 'rsi-high';
+                if (rsi <= 40) return 'rsi-low';
+                return 'rsi-mid';
+            }}
+
+            function getChgClass(val) {{
+                if (val > 0) return 'pos';
+                if (val < 0) return 'neg';
+                return 'neu';
+            }}
+
+            function formatSign(val, isPct=false) {{
+                const sign = val > 0 ? '+' : '';
+                return sign + val.toFixed(2) + (isPct ? '%' : '');
+            }}
+
+            function openAnalysis(sym) {{
+                const url = new URL(window.parent.location.href);
+                url.searchParams.set('goto_sym', sym);
+                window.parent.location.href = url.toString();
+            }}
+
+            // 首次渲染 DOM 骨架
+            function initTable() {{
+                const tbody = document.getElementById('watch-body');
+                tbody.innerHTML = '';
+                stockData.forEach(item => {{
+                    const tr = document.createElement('tr');
+                    tr.id = 'row-' + item.sym;
+                    tr.onclick = () => openAnalysis(item.sym);
+                    
+                    const chgClass = getChgClass(item.chg);
+                    const rsiClass = getRsiClass(item.rsi);
+
+                    tr.innerHTML = `
+                        <td>${{item.sym}}</td>
+                        <td class="price-cell" id="price-${{item.sym}}">${{item.price.toFixed(2)}}</td>
+                        <td id="prev-${{item.sym}}">${{item.prev.toFixed(2)}}</td>
+                        <td class="${{chgClass}}" id="chg-${{item.sym}}">${{formatSign(item.chg, false)}}</td>
+                        <td class="${{chgClass}}" id="pct-${{item.sym}}">${{formatSign(item.pct, true)}}</td>
+                        <td>${{item.ma20.toFixed(2)}}</td>
+                        <td>${{item.ma50.toFixed(2)}}</td>
+                        <td>${{item.ma200.toFixed(2)}}</td>
+                        <td>${{item.pe}}</td>
+                        <td>${{item.high52.toFixed(2)}}</td>
+                        <td>${{item.low52.toFixed(2)}}</td>
+                        <td class="${{rsiClass}}">${{item.rsi.toFixed(1)}}</td>
+                    `;
+                    tbody.appendChild(tr);
+                }});
+            }}
+
+            // 后台静默拉取最新报价并仅更新变化的数字节点
+            async function pollLivePrices() {{
+                if (!liveEnabled || stockData.length === 0) return;
+                const symbols = stockData.map(s => s.sym).join(',');
+                const timerEl = document.getElementById('sync-timer');
+                
+                try {{
+                    // 通过公开行情代理静默获取最新价格（不触发整页重载）
+                    const targetUrl = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${{encodeURIComponent(symbols)}}`;
+                    const proxyUrl = `https://api.allorigins.win/get?url=${{encodeURIComponent(targetUrl)}}`;
+                    const res = await fetch(proxyUrl);
+                    const wrapper = await res.json();
+                    const parsed = JSON.parse(wrapper.contents);
+                    const quotes = parsed?.quoteResponse?.result || [];
+
+                    quotes.forEach(q => {{
+                        const sym = q.symbol;
+                        const newPrice = q.regularMarketPrice;
+                        const prevClose = q.regularMarketPreviousClose;
+                        if (!newPrice) return;
+
+                        const existing = stockData.find(s => s.sym === sym);
+                        if (!existing) return;
+
+                        const oldPrice = existing.price;
+                        const basePrev = prevClose || existing.prev;
+                        const newChg = +(newPrice - basePrev).toFixed(2);
+                        const newPct = basePrev ? +((newChg / basePrev) * 100).toFixed(2) : 0.0;
+
+                        const priceEl = document.getElementById('price-' + sym);
+                        const chgEl = document.getElementById('chg-' + sym);
+                        const pctEl = document.getElementById('pct-' + sym);
+
+                        if (priceEl && newPrice !== oldPrice) {{
+                            priceEl.textContent = newPrice.toFixed(2);
+                            priceEl.classList.remove('tick-up', 'tick-down');
+                            void priceEl.offsetWidth; // 触发重绘动画
+                            priceEl.classList.add(newPrice > oldPrice ? 'tick-up' : 'tick-down');
+                            existing.price = newPrice;
+                        }}
+
+                        if (chgEl && pctEl) {{
+                            const cClass = getChgClass(newChg);
+                            chgEl.className = cClass;
+                            pctEl.className = cClass;
+                            chgEl.textContent = formatSign(newChg, false);
+                            pctEl.textContent = formatSign(newPct, true);
+                        }}
+                    }});
+
+                    const nowStr = new Date().toLocaleTimeString();
+                    timerEl.textContent = `上次后台静默更新: ${{nowStr}} (每30秒自动更新) | 点击任意行进入分析 >`;
+                }} catch (err) {{
+                    const nowStr = new Date().toLocaleTimeString();
+                    timerEl.textContent = `后台心跳保持中 (${{nowStr}}) | 点击任意行进入分析 >`;
+                }}
+            }}
+
+            initTable();
+            // 每 30 秒静默执行一次局部数字更新，绝不重绘或黑屏
+            setInterval(pollLivePrices, 30000);
+        </script>
+    </body>
+    </html>
+    """
+
+    st.components.v1.html(custom_table_html, height=695)
 
     b1, b2, b3 = st.columns([2.4, 2.2, 2.4])
     if b1.button("OPEN COMPANY ANALYSIS (" + st.session_state.selected_ticker + ") >", use_container_width=True):
@@ -263,14 +516,11 @@ def render_market_watch_fragment():
         st.session_state.tickers.remove(del_sym)
         sync_watchlist_to_url()
         st.rerun()
-    summary_html = "<div style='text-align:right; padding-top:6px; font-size:19px; font-weight:800;'><span style='color:#4ade80;'>▲ " + str(gainers) + " Gainers</span> | <span style='color:#f87171;'>● " + str(losers) + " Losers</span> | Total: " + str(len(df_watch)) + "</div>"
+    summary_html = "<div style='text-align:right; padding-top:6px; font-size:19px; font-weight:800;'><span style='color:#4ade80;'>▲ " + str(gainers) + " Gainers</span> | <span style='color:#f87171;'>● " + str(losers) + " Losers</span> | Total: " + str(len(initial_rows)) + "</div>"
     b3.markdown(summary_html, unsafe_allow_html=True)
-    st.caption("💡 提示：Market Watch 现已优化为每 30 秒自动后台更新价格，网页保持平稳不跳动。新添加或删除的股票会自动保存在当前网页地址栏中。")
+    st.caption("💡 提示：已启用纯前端无感刷新技术，页面和滚动位置将完全保持静止，仅价格数字在后台静默跳动。将当前网址加入书签即可永久保留自选列表。")
 
-
-if st.session_state.page == "Market Watch":
-    render_market_watch_fragment()
-
+# ==================== PAGE 2: STOCK ANALYSIS ====================
 elif st.session_state.page == "Stock Analysis":
     t1, t2, t3, t4 = st.columns([2.0, 2.4, 2.2, 1.2])
     t1.markdown("### Stock Analysis")
@@ -341,7 +591,6 @@ elif st.session_state.page == "Stock Analysis":
             latest_call_val = float(call_wall_series.iloc[-1])
             latest_put_val = float(put_wall_series.iloc[-1])
             
-            # 1. 红色 CALL Wall
             fig.add_trace(go.Scatter(
                 x=hdf["Date"], y=call_wall_series, mode='lines',
                 name=f"CALL Wall: ${latest_call_val:.2f}",
@@ -354,7 +603,6 @@ elif st.session_state.page == "Stock Analysis":
                 font=dict(color="#ef4444", size=13, family="sans-serif")
             )
 
-            # 2. 绿色 PUT Wall
             fig.add_trace(go.Scatter(
                 x=hdf["Date"], y=put_wall_series, mode='lines',
                 name=f"PUT Wall: ${latest_put_val:.2f}",
@@ -415,6 +663,7 @@ elif st.session_state.page == "Stock Analysis":
     k5.markdown("<div class='metric-box'><div class='metric-label'>P/E / EPS</div><div class='metric-val'>" + (str(m.get('pe', 'N/A')) if m.get('pe') else 'N/A') + " / " + str(m.get('eps', 'N/A')) + "</div></div>", unsafe_allow_html=True)
     k6.markdown("<div class='metric-box'><div class='metric-label'>RSI (14)</div><div class='metric-val' style='color:#38bdf8;'>" + f"{float(m.get('rsi', 50.0)):.1f}" + "</div></div>", unsafe_allow_html=True)
 
+# ==================== PAGE 3: OPTIONS INTELLIGENCE ====================
 elif st.session_state.page == "Options Intelligence":
     o1, o2, o3, o4 = st.columns([2.3, 2.1, 1.5, 1.5])
     o1.markdown("### CAPITAL QUANT — OPTIONS INTELLIGENCE V1.0")
@@ -438,7 +687,6 @@ elif st.session_state.page == "Options Intelligence":
     
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # ==================== 模块 1：FLOW 资金流监控 ====================
     st.markdown("<div class='module-container'>", unsafe_allow_html=True)
     st.markdown("<div class='card-header'>MODULE 1: OPTIONS FLOW & UNUSUAL ACTIVITY MONITOR</div>", unsafe_allow_html=True)
     coi = int(cdf["openInterest"].sum())
@@ -476,7 +724,6 @@ elif st.session_state.page == "Options Intelligence":
     st.dataframe(dfs, use_container_width=True, height=350, hide_index=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # ==================== 模块 2：ACCUMULATION 吸筹识别 ====================
     st.markdown("<div class='module-container'>", unsafe_allow_html=True)
     st.markdown("<div class='card-header'>MODULE 2: ACCUMULATION & DISTRIBUTION RECOGNITION</div>", unsafe_allow_html=True)
     d1, d2 = st.columns(2)
@@ -498,7 +745,6 @@ elif st.session_state.page == "Options Intelligence":
         """)
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # ==================== 模块 3：GAMMA 结构分析 ====================
     st.markdown("<div class='module-container'>", unsafe_allow_html=True)
     st.markdown("<div class='card-header'>MODULE 3: GAMMA & MARKET MAKER HEDGING INTELLIGENCE</div>", unsafe_allow_html=True)
     gamma_flip = round(spot * 0.96, 2)
@@ -549,7 +795,6 @@ elif st.session_state.page == "Options Intelligence":
     st.plotly_chart(fig_wall_trend, use_container_width=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # ==================== 模块 4：OPEN INTEREST 仓位追踪 ====================
     st.markdown("<div class='module-container'>", unsafe_allow_html=True)
     st.markdown("<div class='card-header'>MODULE 4: OPEN INTEREST (OI) TRACKER & MAX PAIN</div>", unsafe_allow_html=True)
     mp_strike = min(strikes, key=lambda k: sum(max(0, k-s)*cf.loc[s,"openInterest"] + max(0, s-k)*pf.loc[s,"openInterest"] for s in strikes))
@@ -566,7 +811,6 @@ elif st.session_state.page == "Options Intelligence":
     st.plotly_chart(fig_oi, use_container_width=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # ==================== 模块 5：DIVERGENCE 价格背离 ====================
     st.markdown("<div class='module-container'>", unsafe_allow_html=True)
     st.markdown("<div class='card-header'>MODULE 5: PRICE & OPTIONS FLOW DIVERGENCE</div>", unsafe_allow_html=True)
     st.info("""
@@ -577,7 +821,6 @@ elif st.session_state.page == "Options Intelligence":
     """)
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # ==================== 模块 6：SIGNALS 综合信号引擎 ====================
     st.markdown("<div class='module-container'>", unsafe_allow_html=True)
     st.markdown("<div class='card-header'>MODULE 6: COMPREHENSIVE SIGNAL ENGINE & SCORE</div>", unsafe_allow_html=True)
     
