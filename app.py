@@ -54,18 +54,6 @@ FALLBACK_DATA = {
     "EQQQ.L": {"name": "Invesco EQQQ", "price": 405.70, "prev": 402.15, "ma20": 416.3, "ma50": 415.8, "ma200": 392.1, "pe": None, "high52": 427.6, "low52": 331.2, "rsi": 54.7, "eps": 0.0, "mcap": "ETF"}
 }
 
-# 处理通过点击无闪烁 HTML 表格行触发的跳转参数
-if "goto_sym" in st.query_params:
-    target_sym = st.query_params["goto_sym"].strip().upper()
-    if target_sym:
-        st.session_state["selected_ticker"] = target_sym
-        st.session_state["page"] = "Stock Analysis"
-    del st.query_params["goto_sym"]
-    st.rerun()
-
-if "page" not in st.session_state:
-    st.session_state["page"] = "Market Watch"
-
 if "tickers" not in st.session_state:
     saved_t = st.query_params.get("watchlist", "")
     if saved_t:
@@ -75,6 +63,17 @@ if "tickers" not in st.session_state:
 
 if "selected_ticker" not in st.session_state:
     st.session_state["selected_ticker"] = st.session_state["tickers"][0] if st.session_state["tickers"] else "NVDA"
+
+if "page" not in st.session_state:
+    st.session_state["page"] = "Market Watch"
+
+# 捕获通过顶部链接或表格行点击传递的跳转参数
+if "goto_sym" in st.query_params:
+    target_sym = st.query_params["goto_sym"].strip().upper()
+    if target_sym:
+        st.session_state["selected_ticker"] = target_sym
+        st.session_state["page"] = "Stock Analysis"
+    del st.query_params["goto_sym"]
 
 if "use_live_api" not in st.session_state:
     st.session_state["use_live_api"] = True
@@ -208,7 +207,7 @@ st.session_state.use_live_api = n4.toggle("启用实时 Yahoo Finance 行情接�
 
 st.markdown("<div style='border-bottom: 1px solid #1e3a8a; margin: 6px 0 8px 0;'></div>", unsafe_allow_html=True)
 
-# ==================== PAGE 1: MARKET WATCH (前端无闪烁 DOM 局部数字跳动引擎) ====================
+# ==================== PAGE 1: MARKET WATCH (无闪烁 v8 实时报价 + 顶层安全跳转) ====================
 if st.session_state.page == "Market Watch":
     c1, c2, c3, c4 = st.columns([2.0, 2.2, 1.2, 1.3])
     c1.markdown("### Market Watch")
@@ -253,8 +252,8 @@ if st.session_state.page == "Market Watch":
 
     rows_json = json.dumps(initial_rows)
     live_flag = "true" if st.session_state.use_live_api else "false"
+    watchlist_param = ",".join(st.session_state.tickers)
 
-    # 纯前端定制 HTML/JS 终端表格：页面完全静止，每30秒仅后台静默替换数字 DOM 并触发高亮闪烁
     custom_table_html = f"""
     <!DOCTYPE html>
     <html>
@@ -326,7 +325,6 @@ if st.session_state.page == "Market Watch":
         td {{
             padding: 11px 10px;
             white-space: nowrap;
-            transition: background-color 0.6s ease, color 0.3s ease;
         }}
         td:first-child {{
             text-align: left;
@@ -342,23 +340,22 @@ if st.session_state.page == "Market Watch":
         .rsi-low  {{ background-color: #eab308; color: #000; font-weight: 800; text-align: center; }}
         .rsi-mid  {{ background-color: #16a34a; color: #fff; font-weight: 800; text-align: center; }}
         
-        /* 价格跳动瞬间的无感高亮微光 */
         @keyframes flashUp {{
-            0% {{ background-color: rgba(74, 222, 128, 0.45); }}
+            0% {{ background-color: rgba(74, 222, 128, 0.55); }}
             100% {{ background-color: transparent; }}
         }}
         @keyframes flashDown {{
-            0% {{ background-color: rgba(248, 113, 113, 0.45); }}
+            0% {{ background-color: rgba(248, 113, 113, 0.55); }}
             100% {{ background-color: transparent; }}
         }}
-        .tick-up {{ animation: flashUp 1.2s ease-out; }}
-        .tick-down {{ animation: flashDown 1.2s ease-out; }}
+        .tick-up {{ animation: flashUp 1.4s ease-out; }}
+        .tick-down {{ animation: flashDown 1.4s ease-out; }}
     </style>
     </head>
     <body>
         <div class="status-strip">
             <div><span class="pulse-dot"></span><strong>DOM 静默实时引擎已激活</strong>（页面保持静止，每 30 秒后台无感刷新数字）</div>
-            <div id="sync-timer">上次同步: 刚刚 | 点击任意行进入深度分析 &gt;</div>
+            <div id="sync-timer">准备后台同步... | 点击任意行进入深度分析 &gt;</div>
         </div>
         <div class="table-wrapper">
             <table>
@@ -385,6 +382,7 @@ if st.session_state.page == "Market Watch":
         <script>
             let stockData = {rows_json};
             const liveEnabled = {live_flag};
+            const currentWatchlist = "{watchlist_param}";
 
             function getRsiClass(rsi) {{
                 if (rsi >= 70) return 'rsi-high';
@@ -403,13 +401,25 @@ if st.session_state.page == "Market Watch":
                 return sign + val.toFixed(2) + (isPct ? '%' : '');
             }}
 
+            // 安全顶层跳转：使用 <a target="_top"> 绕过浏览器对 iframe 修改 parent.location 的沙盒拦截
             function openAnalysis(sym) {{
-                const url = new URL(window.parent.location.href);
-                url.searchParams.set('goto_sym', sym);
-                window.parent.location.href = url.toString();
+                try {{
+                    const baseHref = window.parent.location.href.split('?')[0];
+                    const targetUrl = `${{baseHref}}?watchlist=${{encodeURIComponent(currentWatchlist)}}&goto_sym=${{encodeURIComponent(sym)}}`;
+                    const a = document.createElement('a');
+                    a.href = targetUrl;
+                    a.target = '_top';
+                    document.body.appendChild(a);
+                    a.click();
+                }} catch (e) {{
+                    const a = document.createElement('a');
+                    a.href = `?watchlist=${{encodeURIComponent(currentWatchlist)}}&goto_sym=${{encodeURIComponent(sym)}}`;
+                    a.target = '_top';
+                    document.body.appendChild(a);
+                    a.click();
+                }}
             }}
 
-            // 首次渲染 DOM 骨架
             function initTable() {{
                 const tbody = document.getElementById('watch-body');
                 tbody.innerHTML = '';
@@ -422,7 +432,7 @@ if st.session_state.page == "Market Watch":
                     const rsiClass = getRsiClass(item.rsi);
 
                     tr.innerHTML = `
-                        <td>${{item.sym}}</td>
+                        <td>${{item.sym}} ↗</td>
                         <td class="price-cell" id="price-${{item.sym}}">${{item.price.toFixed(2)}}</td>
                         <td id="prev-${{item.sym}}">${{item.prev.toFixed(2)}}</td>
                         <td class="${{chgClass}}" id="chg-${{item.sym}}">${{formatSign(item.chg, false)}}</td>
@@ -439,66 +449,65 @@ if st.session_state.page == "Market Watch":
                 }});
             }}
 
-            // 后台静默拉取最新报价并仅更新变化的数字节点
-            async function pollLivePrices() {{
-                if (!liveEnabled || stockData.length === 0) return;
-                const symbols = stockData.map(s => s.sym).join(',');
-                const timerEl = document.getElementById('sync-timer');
-                
+            // 使用免 Crumb 校验的 Yahoo Finance v8 chart 接口逐个静默刷新报价
+            async function fetchSingleQuoteV8(item) {{
                 try {{
-                    // 通过公开行情代理静默获取最新价格（不触发整页重载）
-                    const targetUrl = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${{encodeURIComponent(symbols)}}`;
-                    const proxyUrl = `https://api.allorigins.win/get?url=${{encodeURIComponent(targetUrl)}}`;
+                    const chartUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${{encodeURIComponent(item.sym)}}?interval=1m&range=1d`;
+                    const proxyUrl = `https://corsproxy.io/?${{encodeURIComponent(chartUrl)}}`;
                     const res = await fetch(proxyUrl);
-                    const wrapper = await res.json();
-                    const parsed = JSON.parse(wrapper.contents);
-                    const quotes = parsed?.quoteResponse?.result || [];
+                    if (!res.ok) return;
+                    const data = await res.json();
+                    const meta = data?.chart?.result?.[0]?.meta;
+                    if (!meta || !meta.regularMarketPrice) return;
 
-                    quotes.forEach(q => {{
-                        const sym = q.symbol;
-                        const newPrice = q.regularMarketPrice;
-                        const prevClose = q.regularMarketPreviousClose;
-                        if (!newPrice) return;
+                    const newPrice = Number(meta.regularMarketPrice);
+                    const basePrev = Number(meta.chartPreviousClose || meta.previousClose || item.prev);
+                    const oldPrice = item.price;
 
-                        const existing = stockData.find(s => s.sym === sym);
-                        if (!existing) return;
+                    const newChg = +(newPrice - basePrev).toFixed(2);
+                    const newPct = basePrev ? +((newChg / basePrev) * 100).toFixed(2) : 0.0;
 
-                        const oldPrice = existing.price;
-                        const basePrev = prevClose || existing.prev;
-                        const newChg = +(newPrice - basePrev).toFixed(2);
-                        const newPct = basePrev ? +((newChg / basePrev) * 100).toFixed(2) : 0.0;
+                    const priceEl = document.getElementById('price-' + item.sym);
+                    const chgEl = document.getElementById('chg-' + item.sym);
+                    const pctEl = document.getElementById('pct-' + item.sym);
 
-                        const priceEl = document.getElementById('price-' + sym);
-                        const chgEl = document.getElementById('chg-' + sym);
-                        const pctEl = document.getElementById('pct-' + sym);
-
-                        if (priceEl && newPrice !== oldPrice) {{
-                            priceEl.textContent = newPrice.toFixed(2);
+                    if (priceEl) {{
+                        priceEl.textContent = newPrice.toFixed(2);
+                        if (newPrice !== oldPrice) {{
                             priceEl.classList.remove('tick-up', 'tick-down');
-                            void priceEl.offsetWidth; // 触发重绘动画
+                            void priceEl.offsetWidth;
                             priceEl.classList.add(newPrice > oldPrice ? 'tick-up' : 'tick-down');
-                            existing.price = newPrice;
                         }}
+                        item.price = newPrice;
+                    }}
 
-                        if (chgEl && pctEl) {{
-                            const cClass = getChgClass(newChg);
-                            chgEl.className = cClass;
-                            pctEl.className = cClass;
-                            chgEl.textContent = formatSign(newChg, false);
-                            pctEl.textContent = formatSign(newPct, true);
-                        }}
-                    }});
-
-                    const nowStr = new Date().toLocaleTimeString();
-                    timerEl.textContent = `上次后台静默更新: ${{nowStr}} (每30秒自动更新) | 点击任意行进入分析 >`;
+                    if (chgEl && pctEl) {{
+                        const cClass = getChgClass(newChg);
+                        chgEl.className = cClass;
+                        pctEl.className = cClass;
+                        chgEl.textContent = formatSign(newChg, false);
+                        pctEl.textContent = formatSign(newPct, true);
+                    }}
                 }} catch (err) {{
-                    const nowStr = new Date().toLocaleTimeString();
-                    timerEl.textContent = `后台心跳保持中 (${{nowStr}}) | 点击任意行进入分析 >`;
+                    // 静默忽略单只标的波动
                 }}
             }}
 
+            async function pollLivePrices() {{
+                if (!liveEnabled || stockData.length === 0) return;
+                const timerEl = document.getElementById('sync-timer');
+                timerEl.textContent = '正在静默同步最新盘口报价...';
+
+                // 并发请求所有股票的最新报价
+                await Promise.allSettled(stockData.map(item => fetchSingleQuoteV8(item)));
+
+                const nowStr = new Date().toLocaleTimeString();
+                timerEl.textContent = `上次静默更新: ${{nowStr}} (每30秒自动更新) | 点击任意行进入分析 >`;
+            }}
+
             initTable();
-            // 每 30 秒静默执行一次局部数字更新，绝不重绘或黑屏
+            // 页面加载 3 秒后立即做一次首次校对，之后每 30 秒静默更新
+            setTimeout(pollLivePrices, 3000);
             setInterval(pollLivePrices, 30000);
         </script>
     </body>
@@ -518,7 +527,7 @@ if st.session_state.page == "Market Watch":
         st.rerun()
     summary_html = "<div style='text-align:right; padding-top:6px; font-size:19px; font-weight:800;'><span style='color:#4ade80;'>▲ " + str(gainers) + " Gainers</span> | <span style='color:#f87171;'>● " + str(losers) + " Losers</span> | Total: " + str(len(initial_rows)) + "</div>"
     b3.markdown(summary_html, unsafe_allow_html=True)
-    st.caption("💡 提示：已启用纯前端无感刷新技术，页面和滚动位置将完全保持静止，仅价格数字在后台静默跳动。将当前网址加入书签即可永久保留自选列表。")
+    st.caption("💡 提示：已启用免密钥 v8 实时行引擎，页面和滚动位置完全保持静止，仅价格数字在后台静默跳动；点击任意股票行即可直接进入分析图表。")
 
 # ==================== PAGE 2: STOCK ANALYSIS ====================
 elif st.session_state.page == "Stock Analysis":
