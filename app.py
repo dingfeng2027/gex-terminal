@@ -335,11 +335,10 @@ elif st.session_state.page == "Stock Analysis":
                 x=hdf["Date"].iloc[-1], y=latest_call_val,
                 text=f" 🔴 ${latest_call_val:.2f} ",
                 showarrow=False, xanchor="left", yanchor="middle",
-                font=dict(color="#ef4444", size=13, family="sans-serif"),
-                cliponaxis=False
+                font=dict(color="#ef4444", size=13, family="sans-serif")
             )
 
-            # 2. 绿色 PUT Wall（增加 cliponaxis=False 确保在右侧气泡标签不被图表边缘裁剪）
+            # 2. 绿色 PUT Wall
             fig.add_trace(go.Scatter(
                 x=hdf["Date"], y=put_wall_series, mode='lines',
                 name=f"PUT Wall: ${latest_put_val:.2f}",
@@ -350,8 +349,7 @@ elif st.session_state.page == "Stock Analysis":
                 x=hdf["Date"].iloc[-1], y=latest_put_val,
                 text=f" 🟢 ${latest_put_val:.2f} ",
                 showarrow=False, xanchor="left", yanchor="middle",
-                font=dict(color="#22c55e", size=13, family="sans-serif"),
-                cliponaxis=False
+                font=dict(color="#22c55e", size=13, family="sans-serif")
             )
 
         fig.add_hline(
@@ -362,8 +360,7 @@ elif st.session_state.page == "Stock Analysis":
             annotation_text=f" {cur_price:.2f} ", 
             annotation_position="right", 
             annotation_font=dict(color="#fff", size=15), 
-            annotation_bgcolor="#334155",
-            cliponaxis=False
+            annotation_bgcolor="#334155"
         )
         
         fig.update_layout(
@@ -473,7 +470,7 @@ elif st.session_state.page == "Options Intelligence":
         * **价格行为**：股价下跌但动能衰减，跌幅逐波收窄。
         * **成交反应**：放量但无法创出盘中新低，底部承接盘扎实。
         * **期权结构**：PUT成交极端活跃但现货价格不再下挫，随后CALL主动买入开始放量。
-        * **当前判定**：**正在监控中** —— 当前标D处于窄幅震荡蓄势区，机构正分批构建低吸敞口。
+        * **当前判定**：**正在监控中** —— 当前标的处于窄幅震荡蓄势区，机构正分批构建低吸敞口。
         """)
     with d2:
         st.markdown("#### 🔴 潜在派发风险信号 (Distribution Watch)")
@@ -559,7 +556,7 @@ elif st.session_state.page == "Options Intelligence":
     st.info("""
     ### 🔍 核心背离侦测模型 (Divergence Engine)
     * **当前背离状态**：**价格动能与期权成交出现正向背离 (Bullish Divergence)**
-    * **具体表现**：尽管现货价格短期受压回调，但看跌期权（PUT）成交量激增的同时，标D低点已经连续三个交易日不再创新低，且主动买入的CALL订单开始温和放大。
+    * **具体表现**：尽管现货价格短期受压回调，但看跌期权（PUT）成交量激增的同时，标的低点已经连续三个交易日不再创新低，且主动买入的CALL订单开始温和放大。
     * **交易启示**：表明市场虽然恐慌情绪上升（PUT放量），但实质性的抛压正在枯竭，下方存在强有力的机构承接盘。
     """)
     st.markdown("</div>", unsafe_allow_html=True)
