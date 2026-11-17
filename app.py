@@ -177,7 +177,7 @@ def fetch_options_chain(symbol, spot):
     pdf = pd.DataFrame(p_rows)
     return exps, cdf, pdf
 
-top_bar_html = "<div class='top-bar'><div class='brand-title'>CAPITAL QUANT v2</div><div class='live-badge'>Live (Auto) | " + datetime.now().strftime('%b %d, %Y %H:%M:%S') + " | UK Institutional Terminal</div></div>"
+top_bar_html = "<div class='top-bar'><div class='brand-title'>CAPITAL QUANT v2</div><div class='live-badge'>Live (Auto 10s) | " + datetime.now().strftime('%b %d, %Y %H:%M:%S') + " | UK Institutional Terminal</div></div>"
 st.markdown(top_bar_html, unsafe_allow_html=True)
 
 n1, n2, n3, n4 = st.columns([1.3, 1.3, 1.6, 2.2])
@@ -194,9 +194,11 @@ st.session_state.use_live_api = n4.toggle("启用实时 Yahoo Finance 行情接�
 
 st.markdown("<div style='border-bottom: 1px solid #1e3a8a; margin: 6px 0 8px 0;'></div>", unsafe_allow_html=True)
 
-if st.session_state.page == "Market Watch":
+# 定义 Market Watch 局部自动刷新模块（每 10 秒静默轮询一次）
+@st.fragment(run_every=10)
+def render_market_watch_fragment():
     c1, c2, c3, c4 = st.columns([2.0, 2.2, 1.2, 1.3])
-    c1.markdown("### Market Watch")
+    c1.markdown("### Market Watch (Live 10s)")
     new_t = c2.text_input("Add", placeholder="输入任意代码 (美股如 AVGO，英股如 SHEL.L)", label_visibility="collapsed").strip().upper()
     if c3.button("ADD TICKER", use_container_width=True) and new_t:
         if new_t not in st.session_state.tickers:
@@ -261,7 +263,11 @@ if st.session_state.page == "Market Watch":
         st.rerun()
     summary_html = "<div style='text-align:right; padding-top:6px; font-size:19px; font-weight:800;'><span style='color:#4ade80;'>▲ " + str(gainers) + " Gainers</span> | <span style='color:#f87171;'>● " + str(losers) + " Losers</span> | Total: " + str(len(df_watch)) + "</div>"
     b3.markdown(summary_html, unsafe_allow_html=True)
-    st.caption("💡 提示：新添加或删除的股票会自动保存在当前网页地址栏中。将当前网址加入书签即可永久保留你的专属自选列表。")
+    st.caption("💡 提示：Market Watch 现已开启每 10 秒自动静默刷新。新添加或删除的股票会自动保存在当前网页地址栏中。")
+
+
+if st.session_state.page == "Market Watch":
+    render_market_watch_fragment()
 
 elif st.session_state.page == "Stock Analysis":
     t1, t2, t3, t4 = st.columns([2.0, 2.4, 2.2, 1.2])
