@@ -31,7 +31,7 @@ DEFAULT_TICKERS = ["NVDA", "GOOGL", "TSM", "AMD", "MSFT", "META", "AMZN", "AAPL"
 
 FALLBACK_DATA = {
     "NG.L": {"name": "National Grid", "price": 1279.00, "prev": 1267.00, "ma20": 1250.0, "ma50": 1220.0, "ma200": 1150.0, "pe": 16.1, "high52": 1428.5, "low52": 1096.5, "rsi": 54.0, "eps": 0.79, "mcap": "85.3B"},
-    "NVDA": {"name": "NVIDIA", "price": 177.34, "prev": 186.64, "ma20": 209.1, "ma50": 219.0, "ma200": 204.6, "pe": 22.4, "high52": 195.9, "low52": 86.6, "rsi": 38.7, "eps": 8.31, "mcap": "4.60T"},
+    "NVDA": {"name": "NVIDIA", "price": 156.14, "prev": 162.85, "ma20": 195.64, "ma50": 219.0, "ma200": 204.6, "pe": 22.4, "high52": 243.37, "low52": 148.80, "rsi": 38.7, "eps": 7.91, "mcap": "3.77T"},
     "GOOGL": {"name": "Alphabet", "price": 288.93, "prev": 284.78, "ma20": 314.2, "ma50": 331.7, "ma200": 339.3, "pe": 15.1, "high52": 303.1, "low52": 142.6, "rsi": 55.9, "eps": 19.14, "mcap": "3.54T"},
     "TSM": {"name": "TSMC", "price": 391.23, "prev": 375.44, "ma20": 413.7, "ma50": 431.1, "ma200": 401.7, "pe": 25.4, "high52": 475.5, "low52": 260.5, "rsi": 62.3, "eps": 15.42, "mcap": "2.02T"},
     "AMD": {"name": "AMD", "price": 509.52, "prev": 449.04, "ma20": 523.0, "ma50": 547.6, "ma200": 417.2, "pe": 108.8, "high52": 607.3, "low52": 128.2, "rsi": 72.5, "eps": 4.68, "mcap": "825B"},
@@ -54,7 +54,6 @@ FALLBACK_DATA = {
 if "page" not in st.session_state:
     st.session_state["page"] = "Market Watch"
 
-# 从网址参数或 session 中安全恢复自选股列表与记忆
 if "tickers" not in st.session_state:
     saved_t = st.query_params.get("watchlist", "")
     if saved_t:
@@ -306,7 +305,6 @@ elif st.session_state.page == "Stock Analysis":
                 st.session_state.chart_period = p
                 st.rerun()
                 
-        # 新增功能 1：在主图上方加入期权防守通道开关按钮
         st.session_state.show_walls = p_cols[-1].toggle("期权防守通道 (Wall)", value=st.session_state.show_walls)
 
         hdf = fetch_history_df(sym, st.session_state.chart_period, cur_price)
@@ -319,23 +317,38 @@ elif st.session_state.page == "Stock Analysis":
 
         fig = go.Figure(go.Scatter(x=hdf["Date"], y=hdf["Close"], mode="lines", line=dict(color="#0284c7", width=2.5), showlegend=False))
         
-        # 新增功能 1：叠加期权防守通道 (CALL Wall 阻力轨与 PUT Wall 支撑轨)
         if st.session_state.show_walls:
             rolling_mid = hdf['Close'].rolling(window=5, min_periods=1).mean()
             call_wall_series = rolling_mid * 1.08
             put_wall_series = rolling_mid * 0.90
             
+            latest_call_val = float(call_wall_series.iloc[-1])
+            latest_put_val = float(put_wall_series.iloc[-1])
+            
             fig.add_trace(go.Scatter(
                 x=hdf["Date"], y=call_wall_series, mode='lines',
-                name=f"CALL Wall 阻力轨",
+                name=f"CALL Wall: ${latest_call_val:.2f}",
                 line=dict(color='#ef4444', width=2, dash='dash')
             ))
+            fig.add_annotation(
+                x=hdf["Date"].iloc[-1], y=latest_call_val,
+                text=f" 🔴 ${latest_call_val:.2f} ",
+                showarrow=False, xanchor="left", yanchor="middle",
+                font=dict(color="#ef4444", size=13, family="sans-serif")
+            )
+
             fig.add_trace(go.Scatter(
                 x=hdf["Date"], y=put_wall_series, mode='lines',
-                name=f"PUT Wall 支撑轨",
+                name=f"PUT Wall: ${latest_put_val:.2f}",
                 line=dict(color='#22c55e', width=2, dash='dash'),
                 fill='tonexty', fillcolor='rgba(34, 197, 94, 0.04)'
             ))
+            fig.add_annotation(
+                x=hdf["Date"].iloc[-1], y=latest_put_val,
+                text=f" 🟢 ${latest_put_val:.2f} ",
+                showarrow=False, xanchor="left", yanchor="middle",
+                font=dict(color="#22c55e", size=13, family="sans-serif")
+            )
 
         fig.add_hline(
             y=cur_price, 
@@ -487,7 +500,6 @@ elif st.session_state.page == "Options Intelligence":
     fig_g.update_layout(template="plotly_dark", paper_bgcolor="rgba(6,20,48,0.95)", plot_bgcolor="rgba(4,14,34,0.98)", height=320, margin=dict(l=10, r=10, t=20, b=10))
     st.plotly_chart(fig_g, use_container_width=True)
 
-    # 新增功能 2：在第三模块底部加入近 30 日 PUT/CALL Wall 演变历史轨迹图
     st.markdown("<br>##### 📈 近 30 日机构防守线 (PUT Wall) 与阻力线 (CALL Wall) 演变轨迹", unsafe_allow_html=True)
     hist_30 = fetch_history_df(sym, "1个月", spot).tail(30).copy()
     rolling_m30 = hist_30['Close'].rolling(window=5, min_periods=1).mean()
