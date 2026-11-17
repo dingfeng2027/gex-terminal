@@ -325,6 +325,7 @@ elif st.session_state.page == "Stock Analysis":
             latest_call_val = float(call_wall_series.iloc[-1])
             latest_put_val = float(put_wall_series.iloc[-1])
             
+            # 1. 红色 CALL Wall
             fig.add_trace(go.Scatter(
                 x=hdf["Date"], y=call_wall_series, mode='lines',
                 name=f"CALL Wall: ${latest_call_val:.2f}",
@@ -337,6 +338,7 @@ elif st.session_state.page == "Stock Analysis":
                 font=dict(color="#ef4444", size=13, family="sans-serif")
             )
 
+            # 2. 绿色 PUT Wall（单独微调锚点和文字样式，确保在下方清晰显示）
             fig.add_trace(go.Scatter(
                 x=hdf["Date"], y=put_wall_series, mode='lines',
                 name=f"PUT Wall: ${latest_put_val:.2f}",
