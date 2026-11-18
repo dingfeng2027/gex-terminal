@@ -21,7 +21,6 @@ st.markdown("""
     div.stButton > button { background: linear-gradient(180deg, #2563eb, #1d4ed8) !important; color: #fff !important; border: 1px solid #60a5fa !important; border-radius: 6px !important; font-size: 19px !important; font-weight: 700 !important; padding: 8px 14px !important; }
     .stTextInput input, div[data-baseweb="select"] > div { background-color: #07193d !important; color: #fff !important; border: 1px solid #3b82f6 !important; font-size: 19px !important; }
     
-    /* 强制将数据表格背景改为白色，文字为深色，提升清晰度 */
     div[data-testid="stDataFrame"] { border: 1px solid #2563eb !important; border-radius: 8px !important; background-color: #ffffff !important; }
     div[data-testid="stDataFrame"] iframe { background-color: #ffffff !important; }
     
@@ -195,18 +194,21 @@ def fetch_options_chain(symbol, spot):
     exps = [(datetime.today() + timedelta(days=7 * i)).strftime("%Y-%m-%d") for i in range(1, 7)]
     step = 5.0 if spot > 100 else 2.5
     base = round(spot / step) * step
-    strikes = [round(base + i * step, 2) for i in range(-8, 9)]
+    strikes = [round(base + i * step, 2) for i in range(-10, 11)]
     c_rows = []
     p_rows = []
+    np.random.seed(abs(hash(symbol)) % 10000)
     for k in strikes:
-        m_val = (spot - k) / spot
-        iv = round(0.32 + abs(m_val) * 0.45, 4)
-        cp = round(max(0.15, (spot - k) + spot * iv * 0.08), 2)
-        pp = round(max(0.15, (k - spot) + spot * iv * 0.08), 2)
-        cv = int(max(50, 4500 * np.exp(-12 * m_val * m_val)))
-        pv = int(max(50, 4100 * np.exp(-12 * m_val * m_val)))
-        c_rows.append({"strike": k, "lastPrice": cp, "bid": round(cp*0.98, 2), "ask": round(cp*1.02, 2), "volume": cv, "openInterest": cv*4, "impliedVolatility": iv})
-        p_rows.append({"strike": k, "lastPrice": pp, "bid": round(pp*0.98, 2), "ask": round(pp*1.02, 2), "volume": pv, "openInterest": pv*4, "impliedVolatility": iv})
+        m_val = (spot - k) / spot  # 正数代表ITM Call / OTM Put
+        iv = round(0.30 + abs(m_val) * 0.25, 4)
+        # 严格区分 Call 与 Put 定价，避免价格雷同
+        cp = round(max(0.10, (spot - k) + spot * iv * 0.09 + np.random.uniform(0.5, 2.0)), 2) if k < spot * 1.1 else round(max(0.10, spot * 0.05 * np.exp(-abs(m_val))), 2)
+        pp = round(max(0.10, (k - spot) + spot * iv * 0.09 + np.random.uniform(0.5, 2.0)), 2) if k > spot * 0.9 else round(max(0.10, spot * 0.05 * np.exp(-abs(m_val))), 2)
+        
+        cv = int(max(100, 5000 * np.exp(-8 * abs(spot * 1.05 - k) / spot)))
+        pv = int(max(100, 4800 * np.exp(-8 * abs(spot * 0.95 - k) / spot)))
+        c_rows.append({"strike": k, "lastPrice": cp, "bid": round(cp*0.98, 2), "ask": round(cp*1.02, 2), "volume": cv, "openInterest": cv*5, "impliedVolatility": iv})
+        p_rows.append({"strike": k, "lastPrice": pp, "bid": round(pp*0.98, 2), "ask": round(pp*1.02, 2), "volume": pv, "openInterest": pv*5, "impliedVolatility": iv})
     cdf = pd.DataFrame(c_rows)
     pdf = pd.DataFrame(p_rows)
     return exps, cdf, pdf
@@ -388,26 +390,26 @@ elif st.session_state.page == "Stock Analysis":
             fig.add_trace(go.Scatter(
                 x=hdf["Date"], y=call_wall_series, mode='lines',
                 name=f"CALL Wall: ${latest_call_val:.2f}",
-                line=dict(color='#22c55e', width=2, dash='dash')
+                line=dict(color='#16a34a', width=2, dash='dash')
             ))
             fig.add_annotation(
                 x=hdf["Date"].iloc[-1], y=latest_call_val,
                 text=f" 🟢 CALL Wall: ${latest_call_val:.2f} ",
                 showarrow=False, xanchor="left", yanchor="middle",
-                font=dict(color="#22c55e", size=13, family="sans-serif")
+                font=dict(color="#16a34a", size=13, family="sans-serif")
             )
 
             fig.add_trace(go.Scatter(
                 x=hdf["Date"], y=put_wall_series, mode='lines',
                 name=f"PUT Wall: ${latest_put_val:.2f}",
-                line=dict(color='#ef4444', width=2, dash='dash'),
-                fill='tonexty', fillcolor='rgba(239, 68, 68, 0.04)'
+                line=dict(color='#dc2626', width=2, dash='dash'),
+                fill='tonexty', fillcolor='rgba(22, 163, 74, 0.04)'
             ))
             fig.add_annotation(
                 x=hdf["Date"].iloc[-1], y=latest_put_val,
                 text=f" 🔴 PUT Wall: ${latest_put_val:.2f} ",
                 showarrow=False, xanchor="left", yanchor="middle",
-                font=dict(color="#ef4444", size=13, family="sans-serif")
+                font=dict(color="#dc2626", size=13, family="sans-serif")
             )
 
         fig.add_hline(
@@ -457,7 +459,7 @@ elif st.session_state.page == "Stock Analysis":
     k5.markdown("<div class='metric-box'><div class='metric-label'>P/E / EPS</div><div class='metric-val'>" + (str(m.get('pe', 'N/A')) if m.get('pe') else 'N/A') + " / " + str(m.get('eps', 'N/A')) + "</div></div>", unsafe_allow_html=True)
     k6.markdown("<div class='metric-box'><div class='metric-label'>RSI (14)</div><div class='metric-val' style='color:#38bdf8;'>" + f"{float(m.get('rsi', 50.0)):.1f}" + "</div></div>", unsafe_allow_html=True)
 
-# ==================== PAGE 3: OPTIONS INTELLIGENCE (纯白背景 + 四色规范 + 上下矩阵) ====================
+# ==================== PAGE 3: OPTIONS INTELLIGENCE (完美还原草图排版) ====================
 elif st.session_state.page == "Options Intelligence":
     o1, o2, o3, o4 = st.columns([2.3, 2.1, 1.5, 1.5])
     o1.markdown("### CAPITAL QUANT — OPTIONS INTELLIGENCE V2.0")
@@ -482,7 +484,30 @@ elif st.session_state.page == "Options Intelligence":
     st.markdown("<br>", unsafe_allow_html=True)
 
     # -------------------------------------------------------------------------
-    # 核心看板：多维时间轴走势图（严格白色背景、四色区分）
+    # 1. 顶部直接显示：Top 3 Call Wall (上方压力位) 矩阵
+    # -------------------------------------------------------------------------
+    st.markdown("<div class='module-container'>", unsafe_allow_html=True)
+    st.markdown("<div class='card-header'>🟢 上方防守阻力：Top 3 Call Wall Strikes (压力位与到期挂单矩阵)</div>", unsafe_allow_html=True)
+    
+    top_calls = cdf.nlargest(3, "openInterest").sort_values(by="strike", ascending=False)
+    call_table_data = []
+    for _, row in top_calls.iterrows():
+        strike_p = row["strike"]
+        oi_val = int(row["openInterest"])
+        pct_diff = ((strike_p - spot) / spot) * 100
+        call_table_data.append({
+            "Strike 行权价": f"${strike_p:.2f}",
+            "权利金价格 (Last)": f"${row['lastPrice']:.2f}",
+            "距离现价 (%)": f"{pct_diff:+.2f}%",
+            "未平仓量 (OI)": f"{oi_val:,}",
+            "挂单建议": "🟢 分批指价挂空/止盈" if pct_diff > 0 else "⚪ 已经历突破"
+        })
+    df_call_table = pd.DataFrame(call_table_data)
+    st.markdown(df_call_table.to_html(index=False, classes="table-white"), unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # -------------------------------------------------------------------------
+    # 2. 中间核心看板：多维期权墙与走势轨迹图 (纯白背景，四色线条)
     # -------------------------------------------------------------------------
     st.markdown("<div class='module-container'>", unsafe_allow_html=True)
     st.markdown("<div class='card-header'>🎯 挂单决策核心看板：多维期权墙与走势轨迹 (Past 3 Expiries → Next 30 Days)</div>", unsafe_allow_html=True)
@@ -525,7 +550,6 @@ elif st.session_state.page == "Options Intelligence":
         name='Spot Price (现实股价 - 黑)', line=dict(color='#0f172a', width=3.5), marker=dict(size=8, color='#0f172a')
     ))
 
-    # 严格采用白色背景模板 (template='plotly_white')
     fig_multi.update_layout(
         template='plotly_white', height=430,
         paper_bgcolor='#ffffff', plot_bgcolor='#ffffff',
@@ -538,51 +562,27 @@ elif st.session_state.page == "Options Intelligence":
     st.markdown("</div>", unsafe_allow_html=True)
 
     # -------------------------------------------------------------------------
-    # 上下方精细化数据面板：Top 3 最高 Call / Put Wall 结构（纯白背景表格）
+    # 3. 底部直接显示：Top 3 Put Wall (下方支撑位) 矩阵
     # -------------------------------------------------------------------------
-    col_top_call, col_top_put = st.columns(2)
-
-    with col_top_call:
-        st.markdown("<div class='module-container'>", unsafe_allow_html=True)
-        st.markdown("<div class='card-header'>🟢 上方防守阻力：Top 3 Call Wall Strikes (压力位)</div>", unsafe_allow_html=True)
-        
-        top_calls = cdf.nlargest(3, "openInterest").sort_values(by="strike", ascending=False)
-        call_table_data = []
-        for _, row in top_calls.iterrows():
-            strike_p = row["strike"]
-            oi_val = int(row["openInterest"])
-            pct_diff = ((strike_p - spot) / spot) * 100
-            call_table_data.append({
-                "Strike 行权价": f"${strike_p:.2f}",
-                "距离现价 (%)": f"{pct_diff:+.2f}%",
-                "未平仓量 (OI)": f"{oi_val:,}",
-                "挂单建议": "🟢 分批指价挂空/止盈" if pct_diff > 0 else "⚪ 已经历突破"
-            })
-        
-        df_call_table = pd.DataFrame(call_table_data)
-        st.markdown(df_call_table.to_html(index=False, classes="table-white"), unsafe_allow_html=True)
-        st.markdown("</div>", unsafe_allow_html=True)
-
-    with col_top_put:
-        st.markdown("<div class='module-container'>", unsafe_allow_html=True)
-        st.markdown("<div class='card-header'>🔴 下方强力支撑：Top 3 Put Wall Strikes (防守位)</div>", unsafe_allow_html=True)
-        
-        top_puts = pdf.nlargest(3, "openInterest").sort_values(by="strike", ascending=True)
-        put_table_data = []
-        for _, row in top_puts.iterrows():
-            strike_p = row["strike"]
-            oi_val = int(row["openInterest"])
-            pct_diff = ((strike_p - spot) / spot) * 100
-            put_table_data.append({
-                "Strike 行权价": f"${strike_p:.2f}",
-                "距离现价 (%)": f"{pct_diff:+.2f}%",
-                "未平仓量 (OI)": f"{oi_val:,}",
-                "挂单建议": "🟢 支撑位逢低限价买入 (Buy the Dip)" if pct_diff < 0 else "⚪ 处于上方高位"
-            })
-        
-        df_put_table = pd.DataFrame(put_table_data)
-        st.markdown(df_put_table.to_html(index=False, classes="table-white"), unsafe_allow_html=True)
-        st.markdown("</div>", unsafe_allow_html=True)
+    st.markdown("<div class='module-container'>", unsafe_allow_html=True)
+    st.markdown("<div class='card-header'>🔴 下方强力支撑：Top 3 Put Wall Strikes (防守位与到期挂单矩阵)</div>", unsafe_allow_html=True)
+    
+    top_puts = pdf.nlargest(3, "openInterest").sort_values(by="strike", ascending=True)
+    put_table_data = []
+    for _, row in top_puts.iterrows():
+        strike_p = row["strike"]
+        oi_val = int(row["openInterest"])
+        pct_diff = ((strike_p - spot) / spot) * 100
+        put_table_data.append({
+            "Strike 行权价": f"${strike_p:.2f}",
+            "权利金价格 (Last)": f"${row['lastPrice']:.2f}",
+            "距离现价 (%)": f"{pct_diff:+.2f}%",
+            "未平仓量 (OI)": f"{oi_val:,}",
+            "挂单建议": "🟢 支撑位逢低限价买入 (Buy the Dip)" if pct_diff < 0 else "⚪ 处于上方高位"
+        })
+    df_put_table = pd.DataFrame(put_table_data)
+    st.markdown(df_put_table.to_html(index=False, classes="table-white"), unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
 
     # 注入白底表格样式
     st.markdown("""
@@ -633,7 +633,7 @@ elif st.session_state.page == "Options Intelligence":
     m1, m2, m3, m4 = st.columns(4)
     m1.markdown("<div class='metric-box'><div class='metric-label'>Call / Put Volume</div><div class='metric-val'>" + f"{cvol:,} / {pvol:,}" + "</div></div>", unsafe_allow_html=True)
     m2.markdown("<div class='metric-box'><div class='metric-label'>Put / Call OI Ratio</div><div class='metric-val' style='color:#facc15;'>" + f"{pcr:.2f}" + "</div></div>", unsafe_allow_html=True)
-    m3.markdown("<div class='metric-box'><div class='metric-label'>Spot Price (现价)</div><div class='metric-val' style='color:#38bdf8;'>$" + f"{spot:.2f}" + "</div></div>", unsafe_allow_html=True)
+    m3.markdown("<div class='metric-box'><div class='metric-label'>Spot Price (现价)</div><div class='metric-val' style='color:#38bdf8;'>" + f"${spot:.2f}" + "</div></div>", unsafe_allow_html=True)
     m4.markdown("<div class='metric-box'><div class='metric-label'>挂单信号状态</div><div class='metric-val' style='color:#4ade80;'>回踩支撑限价买入</div></div>", unsafe_allow_html=True)
 
     st.markdown("<br>##### 📋 近期到期日核心行权价对比 (Strike Chain Table)", unsafe_allow_html=True)
@@ -645,7 +645,13 @@ elif st.session_state.page == "Options Intelligence":
     for k in strikes:
         cr = cf.loc[k]
         pr = pf.loc[k]
-        s_rows.append({"CALL OI": int(cr["openInterest"]), "CALL VOL": int(cr["volume"]), "CALL IV": f"{cr['impliedVolatility']*100:.1f}%", "STRIKE": float(k), "PUT VOL": int(pr["volume"]), "PUT OI": int(pr["openInterest"])})
+        s_rows.append({
+            "CALL OI": int(cr["openInterest"]), 
+            "CALL 权利金": f"${cr['lastPrice']:.2f}",
+            "STRIKE": float(k), 
+            "PUT 权利金": f"${pr['lastPrice']:.2f}",
+            "PUT OI": int(pr["openInterest"])
+        })
     dfs = pd.DataFrame(s_rows)
     st.dataframe(dfs, use_container_width=True, height=280, hide_index=True)
     st.markdown("</div>", unsafe_allow_html=True)
