@@ -211,14 +211,12 @@ def fetch_options_chain(symbol, spot):
 
 def build_custom_option_matrix_html(symbol, spot):
     """
-    优化版一体纯白底期权矩阵 + 四色折线走势图：
-    - 今天前面缩减为精准 3 天（大前天、前天、昨天）
-    - 后面延续未来一个月的多个到期日（+2天、+5天、+9天、+14天、+21天、+28天）
-    - 保证黑线（现实/预期股价轨迹）全程清晰穿透每一列（包括 02/12）
+    优化版：今天之前保留精准 2 天（前天、昨天），今天 (0)，随后延续未来一个月的到期日。
+    同时确保黑线（现实/预期股价轨迹）全程置顶、完美贯穿所有列（包括 02/12 等未来列）。
     """
     today = datetime.today()
-    # 精准时间轴：今天前 3 天 (-3, -2, -1) -> 今天 (0) -> 未来一个月到期日 (+2, +5, +9, +14, +21, +28)
-    offsets = [-3, -2, -1, 0, 2, 5, 9, 14, 21, 28]
+    # 今天前保留 2 天 (-2, -1) -> 今天 (0) -> 未来到期日 (+2, +5, +9, +14, +21, +28)
+    offsets = [-2, -1, 0, 2, 5, 9, 14, 21, 28]
     dates_info = []
     for off in offsets:
         dt = today + timedelta(days=off)
@@ -229,8 +227,6 @@ def build_custom_option_matrix_html(symbol, spot):
             tag = "昨天"
         elif off == -2:
             tag = "前天"
-        elif off == -3:
-            tag = "大前天"
         else:
             tag = f"+{off}天"
         dates_info.append({"date_str": d_str, "tag": tag, "offset": off, "is_today": (off == 0)})
@@ -239,25 +235,23 @@ def build_custom_option_matrix_html(symbol, spot):
     np.random.seed(abs(hash(symbol)) % 10000)
 
     cols_data = []
-    # 生成平缓连续的价格轨迹，确保在今天严格锚定真实的 spot 价格
     n_total = len(dates_info)
     today_idx = offsets.index(0)
     spot_series = [0.0] * n_total
     spot_series[today_idx] = spot
 
-    # 往回推 3 天
+    # 往回推 2 天
     for i in range(today_idx - 1, -1, -1):
-        spot_series[i] = round(spot_series[i + 1] * (1 - np.random.uniform(-0.008, 0.012)), 2)
+        spot_series[i] = round(spot_series[i + 1] * (1 - np.random.uniform(-0.007, 0.011)), 2)
 
     # 往后推未来 1 个月
     for i in range(today_idx + 1, n_total):
-        spot_series[i] = round(spot_series[i - 1] * (1 + np.random.uniform(-0.006, 0.014)), 2)
+        spot_series[i] = round(spot_series[i - 1] * (1 + np.random.uniform(-0.005, 0.013)), 2)
 
     for i, info in enumerate(dates_info):
         curr_p = spot_series[i]
         base_k = round(curr_p / step) * step
         
-        # 上3档 Call Wall (行权价从高到低排列)
         c1_k = round(base_k + step * 3, 2)
         c2_k = round(base_k + step * 2, 2)
         c3_k = round(base_k + step * 1, 2)
@@ -268,7 +262,6 @@ def build_custom_option_matrix_html(symbol, spot):
         call_candidates = [(c1_k, c1_oi), (c2_k, c2_oi), (c3_k, c3_oi)]
         call_wall_val = max(call_candidates, key=lambda x: x[1])[0]
 
-        # 下3档 Put Wall (行权价从低到高排列)
         p1_k = round(base_k - step * 3, 2)
         p2_k = round(base_k - step * 2, 2)
         p3_k = round(base_k - step * 1, 2)
@@ -279,7 +272,6 @@ def build_custom_option_matrix_html(symbol, spot):
         put_candidates = [(p1_k, p1_oi), (p2_k, p2_oi), (p3_k, p3_oi)]
         put_wall_val = max(put_candidates, key=lambda x: x[1])[0]
 
-        # Max Pain 理论最大痛点（略微错开现实股价，避免数字与黑线完全重叠导致视觉遮挡）
         raw_mp = round((curr_p * 0.55 + call_wall_val * 0.25 + put_wall_val * 0.20), 2)
         if abs(raw_mp - curr_p) < step * 0.25:
             raw_mp = round(curr_p + step * 0.35, 2)
@@ -296,7 +288,6 @@ def build_custom_option_matrix_html(symbol, spot):
             "put_wall": put_wall_val
         })
 
-    # 计算中间 SVG 区域的 Y 轴缩放范围
     all_vals = []
     for c in cols_data:
         all_vals.extend([c["call_wall"], c["max_pain"], c["spot"], c["put_wall"]])
@@ -306,7 +297,7 @@ def build_custom_option_matrix_html(symbol, spot):
     y_low = v_min - v_span * 0.22
     y_high = v_max + v_span * 0.22
 
-    col_w = 130
+    col_w = 135
     left_axis_w = 85
     n_cols = len(cols_data)
     total_chart_w = n_cols * col_w
@@ -318,7 +309,6 @@ def build_custom_option_matrix_html(symbol, spot):
 
     svg_elements = ""
     
-    # 1. 横向价格刻度虚线 & 左侧 Y 轴标签
     y_ticks_html = ""
     num_ticks = 6
     for t_i in range(num_ticks + 1):
@@ -327,14 +317,12 @@ def build_custom_option_matrix_html(symbol, spot):
         svg_elements += f"<line x1='0' y1='{ty}' x2='{total_chart_w}' y2='{ty}' stroke='#e2e8f0' stroke-width='1' stroke-dasharray='4,4' />"
         y_ticks_html += f"<div style='position:absolute; top:{ty - 9}px; right:8px; font-size:13px; font-weight:700; color:#475569;'>{tick_val:.1f}</div>"
 
-    # 2. 纵向日期分割线 & 今日高亮背景
     for idx, c in enumerate(cols_data):
         x_left = idx * col_w
         if c["is_today"]:
             svg_elements += f"<rect x='{x_left}' y='0' width='{col_w}' height='{svg_h}' fill='rgba(250, 204, 21, 0.16)' />"
         svg_elements += f"<line x1='{x_left + col_w}' y1='0' x2='{x_left + col_w}' y2='{svg_h}' stroke='#cbd5e1' stroke-width='1' />"
 
-    # 3. 提取四条线坐标串（注意顺序：确保黑线最后绘制，永远处于最顶层不被遮挡）
     pts_call, pts_mp, pts_spot, pts_put = [], [], [], []
     for idx, c in enumerate(cols_data):
         cx = round(idx * col_w + col_w / 2, 1)
@@ -351,33 +339,27 @@ def build_custom_option_matrix_html(symbol, spot):
     svg_elements += draw_polyline(pts_call, "#16a34a", 3.0)          # 绿色: Call Wall
     svg_elements += draw_polyline(pts_put, "#dc2626", 3.0)           # 红色: Put Wall
     svg_elements += draw_polyline(pts_mp, "#2563eb", 2.4, "5,3")     # 蓝色: Max Pain
-    svg_elements += draw_polyline(pts_spot, "#0f172a", 3.6)          # 黑色: 现实股价（加粗置顶，全程清晰穿透所有日期列）
+    svg_elements += draw_polyline(pts_spot, "#0f172a", 3.8)          # 黑色: 现实股价（加粗置顶，完美贯穿所有列）
 
-    # 4. 绘制每个折点圆圈与数字标签
     for idx in range(n_cols):
-        # Call Wall (绿色)
         cx, cy, val = pts_call[idx]
         svg_elements += f"<circle cx='{cx}' cy='{cy}' r='4.5' fill='#16a34a' stroke='#fff' stroke-width='1.5' />"
         svg_elements += f"<text x='{cx}' y='{cy - 8}' text-anchor='middle' font-size='13' font-weight='800' fill='#15803d'>{val:g}</text>"
 
-        # Put Wall (红色)
         px, py, pval = pts_put[idx]
         svg_elements += f"<circle cx='{px}' cy='{py}' r='4.5' fill='#dc2626' stroke='#fff' stroke-width='1.5' />"
         svg_elements += f"<text x='{px}' y='{py + 16}' text-anchor='middle' font-size='13' font-weight='800' fill='#b91c1c'>{pval:g}</text>"
 
-        # Max Pain (蓝色 - 标签放在线上方)
         mx, my, mval = pts_mp[idx]
         svg_elements += f"<circle cx='{mx}' cy='{my}' r='3.8' fill='#2563eb' />"
         svg_elements += f"<text x='{mx}' y='{my - 8}' text-anchor='middle' font-size='12' font-weight='700' fill='#1d4ed8'>{mval:g}</text>"
 
-        # 现实股价 Spot (黑色 - 置顶绘制，标签放在线下方避免与蓝字打架)
         sx, sy, sval = pts_spot[idx]
-        svg_elements += f"<circle cx='{sx}' cy='{sy}' r='5.0' fill='#0f172a' stroke='#facc15' stroke-width='1.8' />"
+        svg_elements += f"<circle cx='{sx}' cy='{sy}' r='5.2' fill='#0f172a' stroke='#facc15' stroke-width='1.8' />"
         svg_elements += f"<text x='{sx}' y='{sy + 17}' text-anchor='middle' font-size='13' font-weight='900' fill='#0f172a'>{sval:g}</text>"
 
     html = f"""
     <div style="background:#ffffff; border:2px solid #1e293b; border-radius:8px; padding:12px; font-family:sans-serif; color:#0f172a; overflow-x:auto;">
-        <!-- 顶部图例说明栏 -->
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; padding-bottom:8px; border-bottom:2px solid #cbd5e1; min-width:{left_axis_w + total_chart_w}px;">
             <div style="font-size:17px; font-weight:900; color:#0f172a;">
                 📊 {symbol} 期权墙与到期日挂单矩阵 (现价: <span style="background:#fef08a; padding:2px 6px; border-radius:4px;">${spot:.2f}</span>)
@@ -391,7 +373,6 @@ def build_custom_option_matrix_html(symbol, spot):
         </div>
 
         <div style="display:flex; min-width:{left_axis_w + total_chart_w}px;">
-            <!-- 左侧固定标签列 -->
             <div style="width:{left_axis_w}px; flex-shrink:0; border-right:2px solid #1e293b; display:flex; flex-direction:column;">
                 <div style="height:46px; border-bottom:1px solid #94a3b8; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:13px; background:#f8fafc;">到期日</div>
                 <div style="height:105px; border-bottom:2px solid #1e293b; display:flex; flex-direction:column; align-items:center; justify-content:center; font-weight:900; font-size:14px; color:#15803d; background:#f0fdf4; text-align:center;">
@@ -410,9 +391,7 @@ def build_custom_option_matrix_html(symbol, spot):
                 <div style="height:42px; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:13px; background:#f8fafc;">日期轴</div>
             </div>
 
-            <!-- 右侧主体网格区 -->
             <div style="width:{total_chart_w}px; flex-shrink:0;">
-                <!-- 1. 顶部日期表头 -->
                 <div style="display:flex; height:46px; border-bottom:1px solid #94a3b8; background:#f8fafc;">
     """
 
@@ -428,7 +407,6 @@ def build_custom_option_matrix_html(symbol, spot):
     html += """
                 </div>
 
-                <!-- 2. 上 3 档 Call Wall 格子区 -->
                 <div style="display:flex; height:105px; border-bottom:2px solid #1e293b; background:#ffffff;">
     """
 
@@ -450,14 +428,12 @@ def build_custom_option_matrix_html(symbol, spot):
     html += f"""
                 </div>
 
-                <!-- 3. 中间纯白底四线折线图区 -->
                 <div style="height:{svg_h}px; border-bottom:2px solid #1e293b; background:#ffffff;">
                     <svg width="{total_chart_w}" height="{svg_h}" xmlns="http://www.w3.org/2000/svg">
                         {svg_elements}
                     </svg>
                 </div>
 
-                <!-- 4. 下 3 档 Put Wall 格子区 -->
                 <div style="display:flex; height:105px; border-bottom:1px solid #94a3b8; background:#ffffff;">
     """
 
@@ -479,7 +455,6 @@ def build_custom_option_matrix_html(symbol, spot):
     html += """
                 </div>
 
-                <!-- 5. 底部日期轴 -->
                 <div style="display:flex; height:42px; background:#f8fafc;">
     """
 
@@ -769,13 +744,9 @@ elif st.session_state.page == "Options Intelligence":
     
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # 渲染优化版纯白底矩阵折线看板（今天前3天 + 全程黑线置顶）
     matrix_html = build_custom_option_matrix_html(sym, spot)
     st.components.v1.html(matrix_html, height=670, scrolling=True)
 
-    # -------------------------------------------------------------------------
-    # 辅助模块：期权链与数据汇总（白底表格）
-    # -------------------------------------------------------------------------
     st.markdown("<div class='module-container'>", unsafe_allow_html=True)
     st.markdown("<div class='card-header'>📊 近期到期日核心行权价明细 (Call vs Put 权利金与未平仓对比)</div>", unsafe_allow_html=True)
     
