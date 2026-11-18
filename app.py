@@ -20,7 +20,11 @@ st.markdown("""
     .module-container { background: rgba(6, 20, 48, 0.85); border: 1px solid #2563eb; border-radius: 10px; padding: 18px; margin-bottom: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
     div.stButton > button { background: linear-gradient(180deg, #2563eb, #1d4ed8) !important; color: #fff !important; border: 1px solid #60a5fa !important; border-radius: 6px !important; font-size: 19px !important; font-weight: 700 !important; padding: 8px 14px !important; }
     .stTextInput input, div[data-baseweb="select"] > div { background-color: #07193d !important; color: #fff !important; border: 1px solid #3b82f6 !important; font-size: 19px !important; }
-    div[data-testid="stDataFrame"] { border: 1px solid #2563eb !important; border-radius: 8px !important; background-color: #061430 !important; }
+    
+    /* 强制将数据表格背景改为白色，文字为深色，提升清晰度 */
+    div[data-testid="stDataFrame"] { border: 1px solid #2563eb !important; border-radius: 8px !important; background-color: #ffffff !important; }
+    div[data-testid="stDataFrame"] iframe { background-color: #ffffff !important; }
+    
     .metric-box { background: #061430; border: 1px solid #2563eb; border-radius: 8px; padding: 11px 15px; text-align: center; }
     .metric-label { font-size: 17px !important; color: #93c5fd; margin-bottom: 3px; font-weight: 700; }
     .metric-val { font-size: 28px !important; font-weight: 900; color: #fff; }
@@ -359,8 +363,8 @@ elif st.session_state.page == "Stock Analysis":
         
         if st.session_state.show_walls:
             rolling_mid = hdf['Close'].rolling(window=5, min_periods=1).mean()
-            call_wall_tmp = rolling_mid * 1.08
-            put_wall_tmp = rolling_mid * 0.90
+            call_wall_tmp = rolling_mid * 1.07
+            put_wall_tmp = rolling_mid * 0.93
             c_min = min(hdf["Close"].min(), put_wall_tmp.min())
             c_max = max(hdf["Close"].max(), call_wall_tmp.max())
         else:
@@ -375,8 +379,8 @@ elif st.session_state.page == "Stock Analysis":
         
         if st.session_state.show_walls:
             rolling_mid = hdf['Close'].rolling(window=5, min_periods=1).mean()
-            call_wall_series = rolling_mid * 1.08
-            put_wall_series = rolling_mid * 0.90
+            call_wall_series = rolling_mid * 1.07
+            put_wall_series = rolling_mid * 0.93
             
             latest_call_val = float(call_wall_series.iloc[-1])
             latest_put_val = float(put_wall_series.iloc[-1])
@@ -453,7 +457,7 @@ elif st.session_state.page == "Stock Analysis":
     k5.markdown("<div class='metric-box'><div class='metric-label'>P/E / EPS</div><div class='metric-val'>" + (str(m.get('pe', 'N/A')) if m.get('pe') else 'N/A') + " / " + str(m.get('eps', 'N/A')) + "</div></div>", unsafe_allow_html=True)
     k6.markdown("<div class='metric-box'><div class='metric-label'>RSI (14)</div><div class='metric-val' style='color:#38bdf8;'>" + f"{float(m.get('rsi', 50.0)):.1f}" + "</div></div>", unsafe_allow_html=True)
 
-# ==================== PAGE 3: OPTIONS INTELLIGENCE (重构升级版期权挂单决策看板) ====================
+# ==================== PAGE 3: OPTIONS INTELLIGENCE ====================
 elif st.session_state.page == "Options Intelligence":
     o1, o2, o3, o4 = st.columns([2.3, 2.1, 1.5, 1.5])
     o1.markdown("### CAPITAL QUANT — OPTIONS INTELLIGENCE V2.0")
@@ -478,15 +482,12 @@ elif st.session_state.page == "Options Intelligence":
     st.markdown("<br>", unsafe_allow_html=True)
 
     # -------------------------------------------------------------------------
-    # 核心看板：多维时间轴走势图（过去3个期权日 + 今日/明后天 + 未来1个月走势）
-    # 颜色规范：Call Wall=绿色(#22c55e), Put Wall=红色(#ef4444), Spot=黑色/高亮(#ffffff), Max Pain=蓝色(#3b82f6)
+    # 核心看板：多维时间轴走势图（Call Wall 在上绿色，Put Wall 在下红色）
     # -------------------------------------------------------------------------
     st.markdown("<div class='module-container'>", unsafe_allow_html=True)
     st.markdown("<div class='card-header'>🎯 挂单决策核心看板：多维期权墙与走势轨迹 (Past 3 Expiries → Next 30 Days)</div>", unsafe_allow_html=True)
 
-    # 构造横跨过去3个周/月期权日到未来1个月的时间序列
     today_dt = datetime.today()
-    # 模拟过去3个期权到期日（例如每隔7天往前推）与未来30天
     timeline_dates = [today_dt - timedelta(days=21), today_dt - timedelta(days=14), today_dt - timedelta(days=7),
                       today_dt - timedelta(days=2), today_dt - timedelta(days=1), today_dt,
                       today_dt + timedelta(days=1), today_dt + timedelta(days=2), today_dt + timedelta(days=7),
@@ -497,17 +498,18 @@ elif st.session_state.page == "Options Intelligence":
     noise = np.random.normal(0, spot * 0.01, len(timeline_dates))
     
     history_spot = base_trend + noise
+    # 修正：Call Wall 设在上方（绿色），Put Wall 设在下方（红色）
     call_wall_line = history_spot * 1.07 + spot * 0.02
     put_wall_line = history_spot * 0.93 - spot * 0.02
     max_pain_line = history_spot * 0.99 + spot * 0.005
 
     fig_multi = go.Figure()
-    # 1. Call Wall 阻力线 (绿色)
+    # 1. Call Wall 阻力线 (绿色 - 上方)
     fig_multi.add_trace(go.Scatter(
         x=timeline_dates, y=call_wall_line, mode='lines+markers',
         name='Call Wall (上方阻力 - 绿)', line=dict(color='#22c55e', width=3), marker=dict(size=6)
     ))
-    # 2. Put Wall 支撑线 (红色)
+    # 2. Put Wall 支撑线 (红色 - 下方)
     fig_multi.add_trace(go.Scatter(
         x=timeline_dates, y=put_wall_line, mode='lines+markers',
         name='Put Wall (下方支撑 - 红)', line=dict(color='#ef4444', width=3), marker=dict(size=6),
@@ -518,10 +520,10 @@ elif st.session_state.page == "Options Intelligence":
         x=timeline_dates, y=max_pain_line, mode='lines',
         name='Max Pain (最大痛点 - 蓝)', line=dict(color='#3b82f6', width=2.5, dash='dash')
     ))
-    # 4. 现实股票价格 Spot (高亮黑白线)
+    # 4. 现实股票价格 Spot (高亮白线)
     fig_multi.add_trace(go.Scatter(
         x=timeline_dates, y=history_spot, mode='lines+markers',
-        name='Spot Price (现实股价 - 黑/白)', line=dict(color='#ffffff', width=3.5), marker=dict(size=8, color='#facc15')
+        name='Spot Price (现实股价 - 白)', line=dict(color='#ffffff', width=3.5), marker=dict(size=8, color='#facc15')
     ))
 
     fig_multi.update_layout(
@@ -536,7 +538,7 @@ elif st.session_state.page == "Options Intelligence":
     st.markdown("</div>", unsafe_allow_html=True)
 
     # -------------------------------------------------------------------------
-    # 上下方精细化数据面板：Top 3 最高 Call / Put Wall 结构及未平仓量（OI）和百分比
+    # 上下方精细化数据面板：Top 3 最高 Call / Put Wall 结构（背景已改为白色）
     # -------------------------------------------------------------------------
     col_top_call, col_top_put = st.columns(2)
 
@@ -544,7 +546,6 @@ elif st.session_state.page == "Options Intelligence":
         st.markdown("<div class='module-container'>", unsafe_allow_html=True)
         st.markdown("<div class='card-header'>🟢 上方防守阻力：Top 3 Call Wall Strikes (压力位)</div>", unsafe_allow_html=True)
         
-        # 提取当前期权链中 Call OI 最高的前 3 个 Strike
         top_calls = cdf.nlargest(3, "openInterest").sort_values(by="strike", ascending=False)
         call_table_data = []
         for _, row in top_calls.iterrows():
@@ -557,14 +558,19 @@ elif st.session_state.page == "Options Intelligence":
                 "未平仓量 (OI)": f"{oi_val:,}",
                 "挂单建议": "🟢 分批指价挂空/止盈" if pct_diff > 0 else "⚪ 已经历突破"
             })
-        st.dataframe(pd.DataFrame(call_table_data), use_container_width=True, hide_index=True)
+        
+        df_call_table = pd.DataFrame(call_table_data)
+        # 用 HTML/CSS 包装白底表格，确保在深色容器中完美呈现白底黑字
+        st.markdown(
+            df_call_table.to_html(index=False, classes="table-white"),
+            unsafe_allow_html=True
+        )
         st.markdown("</div>", unsafe_allow_html=True)
 
     with col_top_put:
         st.markdown("<div class='module-container'>", unsafe_allow_html=True)
         st.markdown("<div class='card-header'>🔴 下方强力支撑：Top 3 Put Wall Strikes (防守位)</div>", unsafe_allow_html=True)
         
-        # 提取当前期权链中 Put OI 最高的前 3 个 Strike
         top_puts = pdf.nlargest(3, "openInterest").sort_values(by="strike", ascending=True)
         put_table_data = []
         for _, row in top_puts.iterrows():
@@ -577,11 +583,50 @@ elif st.session_state.page == "Options Intelligence":
                 "未平仓量 (OI)": f"{oi_val:,}",
                 "挂单建议": "🟢 支撑位逢低限价买入 (Buy the Dip)" if pct_diff < 0 else "⚪ 处于上方高位"
             })
-        st.dataframe(pd.DataFrame(put_table_data), use_container_width=True, hide_index=True)
+        
+        df_put_table = pd.DataFrame(put_table_data)
+        st.markdown(
+            df_put_table.to_html(index=False, classes="table-white"),
+            unsafe_allow_html=True
+        )
         st.markdown("</div>", unsafe_allow_html=True)
 
+    # 注入全局白底表格样式
+    st.markdown("""
+    <style>
+        table.table-white {
+            width: 100%;
+            background-color: #ffffff !important;
+            color: #0f172a !important;
+            border-collapse: collapse;
+            font-family: sans-serif;
+            border-radius: 6px;
+            overflow: hidden;
+        }
+        table.table-white th {
+            background-color: #f1f5f9 !important;
+            color: #1e293b !important;
+            font-weight: 800;
+            padding: 10px 12px;
+            border-bottom: 2px solid #cbd5e1;
+            text-align: left;
+        }
+        table.table-white td {
+            background-color: #ffffff !important;
+            color: #0f172a !important;
+            padding: 9px 12px;
+            border-bottom: 1px solid #e2e8f0;
+            font-size: 16px;
+            font-weight: 600;
+        }
+        table.table-white tr:hover td {
+            background-color: #f8fafc !important;
+        }
+    </style>
+    """, unsafe_allow_html=True)
+
     # -------------------------------------------------------------------------
-    # 辅助模块：期权异动、Gamma 结构及综合挂单评分
+    # 辅助模块：期权链与数据汇总
     # -------------------------------------------------------------------------
     st.markdown("<div class='module-container'>", unsafe_allow_html=True)
     st.markdown("<div class='card-header'>📊 详细期权链与挂单策略建议 (T-Shaped Options Intelligence)</div>", unsafe_allow_html=True)
