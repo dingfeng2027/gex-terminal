@@ -211,44 +211,71 @@ def fetch_options_chain(symbol, spot):
 
 def build_custom_option_matrix_html(symbol, spot):
     """
-    严格限制总列数正好为 10 天：
-    - 从前天开始：前天(-2), 昨天(-1), 今天(0), +1天, +2天, +3天, +4天, +5天, +6天, +7天（共正好 10 列）
-    - 上3档锁定 155, 160, 165，下3档锁定 140, 145, 150
+    真实期权到期日对齐：
+    - 自动生成总共 10 个节点，且严格筛选过滤为“周一、周三、周五”（真实期权到期日/交易日节奏）。
+    - 上3档锁定 155, 160, 165，下3档锁定 140, 145, 150 阶梯标准。
+    - 黑线（现实股价）全程置顶贯穿。
     """
     today = datetime.today()
-    # 严格固定 10 个时间节点
-    offsets = [-2, -1, 0, 1, 2, 3, 4, 5, 6, 7]
-    dates_info = []
-    for off in offsets:
-        dt = today + timedelta(days=off)
-        d_str = dt.strftime("%d/%m")
-        if off == 0:
+    
+    # 向前和向后扫描，找出恰好 10 个属于 周一(0)、周三(2)、周五(4) 的真实日期
+    target_dates = []
+    # 从今天往前找前置交易日
+    d_cursor = today - timedelta(days=1)
+    past_candidates = []
+    while len(past_candidates) < 3: # 找前 3 个期权日/交易日
+        if d_cursor.weekday() in [0, 2, 4]: # 周一、周三、周五
+            past_candidates.insert(0, d_cursor)
+        d_cursor -= timedelta(days=1)
+        
+    target_dates.extend(past_candidates)
+    target_dates.append(today) # 今天
+    
+    # 从今天往后找后续的期权到期日 (周一、周三、周五)
+    d_cursor = today + timedelta(days=1)
+    while len(target_dates) < 10:
+        if d_cursor.weekday() in [0, 2, 4]:
+            target_dates.append(d_cursor)
+        d_cursor += timedelta(days=1)
+
+    cols_data = []
+    for dt in target_dates:
+        # 计算相对今天的偏移天数，用于后续生成对应的股价轨迹波动
+        delta_days = (dt.date() - today.date()).days
+        if delta_days == 0:
             tag = "今天"
-        elif off == -1:
-            tag = "昨天"
-        elif off == -2:
-            tag = "前天"
+            is_today = True
+        elif delta_days < 0:
+            tag = f"{abs(delta_days)}天前"
+            is_today = False
         else:
-            tag = f"+{off}天"
-        dates_info.append({"date_str": d_str, "tag": tag, "offset": off, "is_today": (off == 0)})
+            tag = f"到期 +{delta_days}天"
+            is_today = False
+            
+        d_str = dt.strftime("%d/%m")
+        cols_data.append({
+            "date": dt,
+            "date_str": d_str,
+            "tag": tag,
+            "is_today": is_today,
+            "delta": delta_days
+        })
 
     np.random.seed(abs(hash(symbol)) % 10000)
 
-    cols_data = []
-    n_total = len(dates_info)
-    today_idx = offsets.index(0)
+    # 按照时间先后顺序生成平滑的现价轨迹
+    n_total = len(cols_data)
+    today_idx = next(i for i, c in enumerate(cols_data) if c["is_today"])
     spot_series = [0.0] * n_total
     spot_series[today_idx] = spot
 
-    # 往回推前天、昨天
     for i in range(today_idx - 1, -1, -1):
         spot_series[i] = round(spot_series[i + 1] * (1 - np.random.uniform(-0.005, 0.009)), 2)
 
-    # 往后推至 +7 天
     for i in range(today_idx + 1, n_total):
         spot_series[i] = round(spot_series[i - 1] * (1 + np.random.uniform(-0.004, 0.011)), 2)
 
-    for i, info in enumerate(dates_info):
+    for i, c_info in enumerate(cols_data):
         curr_p = spot_series[i]
         
         # 锁定行权价档位：上3档 (155, 160, 165) / 下3档 (140, 145, 150)
@@ -272,17 +299,12 @@ def build_custom_option_matrix_html(symbol, spot):
         if abs(raw_mp - curr_p) < 2.0:
             raw_mp = round(curr_p + 3.5, 2)
 
-        cols_data.append({
-            "date_str": info["date_str"],
-            "tag": info["tag"],
-            "is_today": info["is_today"],
-            "c_top": [(c1_k, c1_oi), (c2_k, c2_oi), (c3_k, c3_oi)],
-            "p_bot": [(p1_k, p1_oi), (p2_k, p2_oi), (p3_k, p3_oi)],
-            "call_wall": call_wall_val,
-            "max_pain": raw_mp,
-            "spot": curr_p,
-            "put_wall": put_wall_val
-        })
+        c_info["c_top"] = [(c1_k, c1_oi), (c2_k, c2_oi), (c3_k, c3_oi)]
+        c_info["p_bot"] = [(p1_k, p1_oi), (p2_k, p2_oi), (p3_k, p3_oi)]
+        c_info["call_wall"] = call_wall_val
+        c_info["max_pain"] = raw_mp
+        c_info["spot"] = curr_p
+        c_info["put_wall"] = put_wall_val
 
     all_vals = []
     for c in cols_data:
@@ -358,7 +380,7 @@ def build_custom_option_matrix_html(symbol, spot):
     <div style="background:#ffffff; border:2px solid #1e293b; border-radius:8px; padding:12px; font-family:sans-serif; color:#0f172a; overflow-x:auto;">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; padding-bottom:8px; border-bottom:2px solid #cbd5e1; min-width:{left_axis_w + total_chart_w}px;">
             <div style="font-size:17px; font-weight:900; color:#0f172a;">
-                📊 {symbol} 期权墙与到期日挂单矩阵 (共 10 天窗口 | 现价: <span style="background:#fef08a; padding:2px 6px; border-radius:4px;">${spot:.2f}</span>)
+                📊 {symbol} 期权墙与到期日挂单矩阵 (真实 1/3/5 期权日排期 | 现价: <span style="background:#fef08a; padding:2px 6px; border-radius:4px;">${spot:.2f}</span>)
             </div>
             <div style="display:flex; gap:18px; font-size:14px; font-weight:800;">
                 <span style="color:#16a34a;">━━ 绿线: Call Wall (阻力)</span>
