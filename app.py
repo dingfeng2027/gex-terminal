@@ -211,12 +211,14 @@ def fetch_options_chain(symbol, spot):
 
 def build_custom_option_matrix_html(symbol, spot):
     """
-    优化版：今天之前保留精准 2 天（前天、昨天），今天 (0)，随后延续未来一个月的到期日。
-    同时确保黑线（现实/预期股价轨迹）全程置顶、完美贯穿所有列（包括 02/12 等未来列）。
+    优化版：
+    - 时间轴：今天前保留 2 天 (-2, -1) -> 今天 (0) -> 未来最高到 9 天 (+2, +4, +6, +9)
+    - 价格档位：上3档锁定 155, 160, 165，下3档锁定 140, 145, 150 阶梯标准
+    - 黑线（现实股价）全程置顶、完美贯穿所有列
     """
     today = datetime.today()
-    # 今天前保留 2 天 (-2, -1) -> 今天 (0) -> 未来到期日 (+2, +5, +9, +14, +21, +28)
-    offsets = [-2, -1, 0, 2, 5, 9, 14, 21, 28]
+    # 时间轴：前天(-2)、昨天(-1)、今天(0)、未来至 9 天内的到期日节点 (+2, +4, +6, +9)
+    offsets = [-2, -1, 0, 2, 4, 6, 9]
     dates_info = []
     for off in offsets:
         dt = today + timedelta(days=off)
@@ -231,7 +233,6 @@ def build_custom_option_matrix_html(symbol, spot):
             tag = f"+{off}天"
         dates_info.append({"date_str": d_str, "tag": tag, "offset": off, "is_today": (off == 0)})
 
-    step = 5.0 if spot > 100 else (2.5 if spot > 30 else 1.0)
     np.random.seed(abs(hash(symbol)) % 10000)
 
     cols_data = []
@@ -242,39 +243,35 @@ def build_custom_option_matrix_html(symbol, spot):
 
     # 往回推 2 天
     for i in range(today_idx - 1, -1, -1):
-        spot_series[i] = round(spot_series[i + 1] * (1 - np.random.uniform(-0.007, 0.011)), 2)
+        spot_series[i] = round(spot_series[i + 1] * (1 - np.random.uniform(-0.006, 0.010)), 2)
 
-    # 往后推未来 1 个月
+    # 往后推至 9 天
     for i in range(today_idx + 1, n_total):
-        spot_series[i] = round(spot_series[i - 1] * (1 + np.random.uniform(-0.005, 0.013)), 2)
+        spot_series[i] = round(spot_series[i - 1] * (1 + np.random.uniform(-0.004, 0.012)), 2)
 
     for i, info in enumerate(dates_info):
         curr_p = spot_series[i]
-        base_k = round(curr_p / step) * step
         
-        c1_k = round(base_k + step * 3, 2)
-        c2_k = round(base_k + step * 2, 2)
-        c3_k = round(base_k + step * 1, 2)
-        c1_oi = int(np.random.randint(18000, 32000))
-        c2_oi = int(np.random.randint(20000, 35000))
-        c3_oi = int(np.random.randint(15000, 29000))
+        # 严格固定您要求的行权价档位：上3档 (155, 160, 165) / 下3档 (140, 145, 150)
+        c1_k, c2_k, c3_k = 165.0, 160.0, 155.0
+        c1_oi = int(np.random.randint(22000, 31000))
+        c2_oi = int(np.random.randint(25000, 34000))
+        c3_oi = int(np.random.randint(18000, 28000))
         
         call_candidates = [(c1_k, c1_oi), (c2_k, c2_oi), (c3_k, c3_oi)]
         call_wall_val = max(call_candidates, key=lambda x: x[1])[0]
 
-        p1_k = round(base_k - step * 3, 2)
-        p2_k = round(base_k - step * 2, 2)
-        p3_k = round(base_k - step * 1, 2)
-        p1_oi = int(np.random.randint(14000, 26000))
-        p2_oi = int(np.random.randint(17000, 29000))
-        p3_oi = int(np.random.randint(16000, 28000))
+        p1_k, p2_k, p3_k = 140.0, 145.0, 150.0
+        p1_oi = int(np.random.randint(15000, 25000))
+        p2_oi = int(np.random.randint(18000, 28000))
+        p3_oi = int(np.random.randint(16000, 26000))
         
         put_candidates = [(p1_k, p1_oi), (p2_k, p2_oi), (p3_k, p3_oi)]
         put_wall_val = max(put_candidates, key=lambda x: x[1])[0]
 
         raw_mp = round((curr_p * 0.55 + call_wall_val * 0.25 + put_wall_val * 0.20), 2)
-        if abs(raw_mp - curr_p) < step * 0.25:
-            raw_mp = round(curr_p + step * 0.35, 2)
+        if abs(raw_mp - curr_p) < 2.0:
+            raw_mp = round(curr_p + 3.5, 2)
 
         cols_data.append({
             "date_str": info["date_str"],
@@ -294,10 +291,10 @@ def build_custom_option_matrix_html(symbol, spot):
     v_min = min(all_vals)
     v_max = max(all_vals)
     v_span = (v_max - v_min) if v_max != v_min else 10.0
-    y_low = v_min - v_span * 0.22
-    y_high = v_max + v_span * 0.22
+    y_low = v_min - v_span * 0.25
+    y_high = v_max + v_span * 0.25
 
-    col_w = 135
+    col_w = 140
     left_axis_w = 85
     n_cols = len(cols_data)
     total_chart_w = n_cols * col_w
@@ -339,7 +336,7 @@ def build_custom_option_matrix_html(symbol, spot):
     svg_elements += draw_polyline(pts_call, "#16a34a", 3.0)          # 绿色: Call Wall
     svg_elements += draw_polyline(pts_put, "#dc2626", 3.0)           # 红色: Put Wall
     svg_elements += draw_polyline(pts_mp, "#2563eb", 2.4, "5,3")     # 蓝色: Max Pain
-    svg_elements += draw_polyline(pts_spot, "#0f172a", 3.8)          # 黑色: 现实股价（加粗置顶，完美贯穿所有列）
+    svg_elements += draw_polyline(pts_spot, "#0f172a", 3.8)          # 黑色: 现实股价（加粗置顶）
 
     for idx in range(n_cols):
         cx, cy, val = pts_call[idx]
@@ -378,7 +375,7 @@ def build_custom_option_matrix_html(symbol, spot):
                 <div style="height:105px; border-bottom:2px solid #1e293b; display:flex; flex-direction:column; align-items:center; justify-content:center; font-weight:900; font-size:14px; color:#15803d; background:#f0fdf4; text-align:center;">
                     <span>上 3 档</span>
                     <span style="font-size:11px; font-weight:700;">Call Wall</span>
-                    <span style="font-size:10px; color:#475569;">(价 / OI)</span>
+                    <span style="font-size:10px; color:#475569;">(155-165)</span>
                 </div>
                 <div style="height:{svg_h}px; position:relative; border-bottom:2px solid #1e293b; background:#ffffff;">
                     {y_ticks_html}
@@ -386,7 +383,7 @@ def build_custom_option_matrix_html(symbol, spot):
                 <div style="height:105px; border-bottom:1px solid #94a3b8; display:flex; flex-direction:column; align-items:center; justify-content:center; font-weight:900; font-size:14px; color:#b91c1c; background:#fef2f2; text-align:center;">
                     <span>下 3 档</span>
                     <span style="font-size:11px; font-weight:700;">Put Wall</span>
-                    <span style="font-size:10px; color:#475569;">(价 / OI)</span>
+                    <span style="font-size:10px; color:#475569;">(140-150)</span>
                 </div>
                 <div style="height:42px; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:13px; background:#f8fafc;">日期轴</div>
             </div>
@@ -417,7 +414,7 @@ def build_custom_option_matrix_html(symbol, spot):
             is_max_c = (k_val == c["call_wall"])
             hi_style = "background:#dcfce7; font-weight:900; color:#14532d;" if is_max_c else "font-weight:700; color:#1e293b;"
             rows_str += f"""
-                <div style="height:35px; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between; align-items:center; padding:0 6px; font-size:13px; {hi_style}">
+                <div style="height:35px; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between; align-items:center; padding:0 8px; font-size:13px; {hi_style}">
                     <span>{k_val:g}</span>
                     <span style="color:#cbd5e1;">|</span>
                     <span>{oi_val:,}</span>
@@ -444,7 +441,7 @@ def build_custom_option_matrix_html(symbol, spot):
             is_max_p = (k_val == c["put_wall"])
             hi_style = "background:#fee2e2; font-weight:900; color:#7f1d1d;" if is_max_p else "font-weight:700; color:#1e293b;"
             rows_str += f"""
-                <div style="height:35px; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between; align-items:center; padding:0 6px; font-size:13px; {hi_style}">
+                <div style="height:35px; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between; align-items:center; padding:0 8px; font-size:13px; {hi_style}">
                     <span>{k_val:g}</span>
                     <span style="color:#cbd5e1;">|</span>
                     <span>{oi_val:,}</span>
