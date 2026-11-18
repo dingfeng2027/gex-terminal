@@ -20,10 +20,7 @@ st.markdown("""
     .module-container { background: rgba(6, 20, 48, 0.85); border: 1px solid #2563eb; border-radius: 10px; padding: 18px; margin-bottom: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
     div.stButton > button { background: linear-gradient(180deg, #2563eb, #1d4ed8) !important; color: #fff !important; border: 1px solid #60a5fa !important; border-radius: 6px !important; font-size: 19px !important; font-weight: 700 !important; padding: 8px 14px !important; }
     .stTextInput input, div[data-baseweb="select"] > div { background-color: #07193d !important; color: #fff !important; border: 1px solid #3b82f6 !important; font-size: 19px !important; }
-    
     div[data-testid="stDataFrame"] { border: 1px solid #2563eb !important; border-radius: 8px !important; background-color: #ffffff !important; }
-    div[data-testid="stDataFrame"] iframe { background-color: #ffffff !important; }
-    
     .metric-box { background: #061430; border: 1px solid #2563eb; border-radius: 8px; padding: 11px 15px; text-align: center; }
     .metric-label { font-size: 17px !important; color: #93c5fd; margin-bottom: 3px; font-weight: 700; }
     .metric-val { font-size: 28px !important; font-weight: 900; color: #fff; }
@@ -199,9 +196,8 @@ def fetch_options_chain(symbol, spot):
     p_rows = []
     np.random.seed(abs(hash(symbol)) % 10000)
     for k in strikes:
-        m_val = (spot - k) / spot  # 正数代表ITM Call / OTM Put
+        m_val = (spot - k) / spot
         iv = round(0.30 + abs(m_val) * 0.25, 4)
-        # 严格区分 Call 与 Put 定价，避免价格雷同
         cp = round(max(0.10, (spot - k) + spot * iv * 0.09 + np.random.uniform(0.5, 2.0)), 2) if k < spot * 1.1 else round(max(0.10, spot * 0.05 * np.exp(-abs(m_val))), 2)
         pp = round(max(0.10, (k - spot) + spot * iv * 0.09 + np.random.uniform(0.5, 2.0)), 2) if k > spot * 0.9 else round(max(0.10, spot * 0.05 * np.exp(-abs(m_val))), 2)
         
@@ -212,6 +208,290 @@ def fetch_options_chain(symbol, spot):
     cdf = pd.DataFrame(c_rows)
     pdf = pd.DataFrame(p_rows)
     return exps, cdf, pdf
+
+def build_custom_option_matrix_html(symbol, spot):
+    """
+    严格按照手绘草图样式构建一体化的纯白底期权矩阵 + 四色折线走势图：
+    - 顶部：日期表头 + 每个到期日对应的【上3档 Call Wall (Strike / OI)】
+    - 中部：纯白底 SVG 折线图（绿=Call Wall, 蓝=Max Pain, 黑=现实股价, 红=Put Wall），每个点带数值标签
+    - 底部：每个到期日对应的【下3档 Put Wall (Strike / OI)】 + 日期底标
+    """
+    today = datetime.today()
+    # 构造时间轴：过去3个期权日 -> 昨天 -> 今天 -> 未来多个到期日（覆盖1个月）
+    offsets = [-21, -14, -7, -2, -1, 0, 2, 5, 9, 14, 21, 28]
+    dates_info = []
+    for off in offsets:
+        dt = today + timedelta(days=off)
+        d_str = dt.strftime("%d/%m")
+        if off == 0:
+            tag = "今天"
+        elif off == -1:
+            tag = "昨天"
+        elif off == -2:
+            tag = "前天"
+        elif off < 0:
+            tag = "历史到期"
+        else:
+            tag = f"+{off}天"
+        dates_info.append({"date_str": d_str, "tag": tag, "offset": off, "is_today": (off == 0)})
+
+    step = 5.0 if spot > 100 else (2.5 if spot > 30 else 1.0)
+    np.random.seed(abs(hash(symbol)) % 10000)
+
+    cols_data = []
+    curr_p = spot * 0.96
+    for i, info in enumerate(dates_info):
+        if info["offset"] == 0:
+            curr_p = spot
+        else:
+            curr_p = curr_p * (1 + np.random.normal(0.003, 0.015))
+        
+        base_k = round(curr_p / step) * step
+        
+        # 上3档 Call Wall (行权价从高到低排列)
+        c1_k = round(base_k + step * 3, 2)
+        c2_k = round(base_k + step * 2, 2)
+        c3_k = round(base_k + step * 1, 2)
+        c1_oi = int(np.random.randint(18000, 32000))
+        c2_oi = int(np.random.randint(20000, 35000))
+        c3_oi = int(np.random.randint(15000, 29000))
+        
+        # 找出 OI 最高的那一档作为绿线 Call Wall 点
+        call_candidates = [(c1_k, c1_oi), (c2_k, c2_oi), (c3_k, c3_oi)]
+        call_wall_val = max(call_candidates, key=lambda x: x[1])[0]
+
+        # 下3档 Put Wall (行权价从低到高排列，贴合草图 140 / 145 / 150 顺序)
+        p1_k = round(base_k - step * 3, 2)
+        p2_k = round(base_k - step * 2, 2)
+        p3_k = round(base_k - step * 1, 2)
+        p1_oi = int(np.random.randint(14000, 26000))
+        p2_oi = int(np.random.randint(17000, 29000))
+        p3_oi = int(np.random.randint(16000, 28000))
+        
+        # 找出 OI 最高的那一档作为红线 Put Wall 点
+        put_candidates = [(p1_k, p1_oi), (p2_k, p2_oi), (p3_k, p3_oi)]
+        put_wall_val = max(put_candidates, key=lambda x: x[1])[0]
+
+        # Max Pain 理论最大痛点（介于 Spot 与主要墙之间）
+        max_pain_val = round((curr_p * 0.6 + call_wall_val * 0.2 + put_wall_val * 0.2), 2)
+
+        cols_data.append({
+            "date_str": info["date_str"],
+            "tag": info["tag"],
+            "is_today": info["is_today"],
+            "c_top": [(c1_k, c1_oi), (c2_k, c2_oi), (c3_k, c3_oi)],
+            "p_bot": [(p1_k, p1_oi), (p2_k, p2_oi), (p3_k, p3_oi)],
+            "call_wall": call_wall_val,
+            "max_pain": max_pain_val,
+            "spot": round(curr_p, 2),
+            "put_wall": put_wall_val
+        })
+
+    # 计算中间 SVG 区域的 Y 轴缩放范围
+    all_vals = []
+    for c in cols_data:
+        all_vals.extend([c["call_wall"], c["max_pain"], c["spot"], c["put_wall"]])
+    v_min = min(all_vals)
+    v_max = max(all_vals)
+    v_span = (v_max - v_min) if v_max != v_min else 10.0
+    y_low = v_min - v_span * 0.22
+    y_high = v_max + v_span * 0.22
+
+    col_w = 125
+    left_axis_w = 85
+    n_cols = len(cols_data)
+    total_chart_w = n_cols * col_w
+    svg_h = 330
+
+    def val_to_y(v):
+        ratio = (v - y_low) / (y_high - y_low)
+        return round(svg_h - (ratio * (svg_h - 50) + 25), 1)
+
+    # 构建 SVG 内部元素（网格线、四条折线、圆点、数值标注）
+    svg_elements = ""
+    
+    # 1. 横向价格刻度虚线 & 左侧 Y 轴标签
+    y_ticks_html = ""
+    num_ticks = 6
+    for t_i in range(num_ticks + 1):
+        tick_val = y_low + (y_high - y_low) * (t_i / num_ticks)
+        ty = val_to_y(tick_val)
+        svg_elements += f"<line x1='0' y1='{ty}' x2='{total_chart_w}' y2='{ty}' stroke='#e2e8f0' stroke-width='1' stroke-dasharray='4,4' />"
+        y_ticks_html += f"<div style='position:absolute; top:{ty - 9}px; right:8px; font-size:13px; font-weight:700; color:#475569;'>{tick_val:.1f}</div>"
+
+    # 2. 纵向日期分割线 & 今日高亮背景
+    for idx, c in enumerate(cols_data):
+        x_left = idx * col_w
+        x_mid = x_left + col_w / 2
+        if c["is_today"]:
+            svg_elements += f"<rect x='{x_left}' y='0' width='{col_w}' height='{svg_h}' fill='rgba(250, 204, 21, 0.14)' />"
+        svg_elements += f"<line x1='{x_left + col_w}' y1='0' x2='{x_left + col_w}' y2='{svg_h}' stroke='#cbd5e1' stroke-width='1' />"
+
+    # 3. 提取四条线坐标串
+    pts_call, pts_mp, pts_spot, pts_put = [], [], [], []
+    for idx, c in enumerate(cols_data):
+        cx = round(idx * col_w + col_w / 2, 1)
+        pts_call.append((cx, val_to_y(c["call_wall"]), c["call_wall"]))
+        pts_mp.append((cx, val_to_y(c["max_pain"]), c["max_pain"]))
+        pts_spot.append((cx, val_to_y(c["spot"]), c["spot"]))
+        pts_put.append((cx, val_to_y(c["put_wall"]), c["put_wall"]))
+
+    def draw_polyline(pts, color, width=2.8, dash=""):
+        p_str = " ".join([f"{x},{y}" for x, y, _ in pts])
+        dash_attr = f"stroke-dasharray='{dash}'" if dash else ""
+        return f"<polyline fill='none' stroke='{color}' stroke-width='{width}' {dash_attr} points='{p_str}' />"
+
+    svg_elements += draw_polyline(pts_call, "#16a34a", 3.0)          # 绿色: Call Wall
+    svg_elements += draw_polyline(pts_mp, "#2563eb", 2.4, "5,3")     # 蓝色: Max Pain
+    svg_elements += draw_polyline(pts_spot, "#0f172a", 3.2)          # 黑色: 现实股价
+    svg_elements += draw_polyline(pts_put, "#dc2626", 3.0)           # 红色: Put Wall
+
+    # 4. 绘制每个折点圆圈与正上方数字标签
+    for idx in range(n_cols):
+        # Call Wall (绿色)
+        cx, cy, val = pts_call[idx]
+        svg_elements += f"<circle cx='{cx}' cy='{cy}' r='4.5' fill='#16a34a' stroke='#fff' stroke-width='1.5' />"
+        svg_elements += f"<text x='{cx}' y='{cy - 8}' text-anchor='middle' font-size='13' font-weight='800' fill='#15803d'>{val:g}</text>"
+
+        # Max Pain (蓝色)
+        mx, my, mval = pts_mp[idx]
+        svg_elements += f"<circle cx='{mx}' cy='{my}' r='3.5' fill='#2563eb' />"
+        svg_elements += f"<text x='{mx}' y='{my - 7}' text-anchor='middle' font-size='12' font-weight='700' fill='#1d4ed8'>{mval:g}</text>"
+
+        # 现实股价 Spot (黑色)
+        sx, sy, sval = pts_spot[idx]
+        svg_elements += f"<circle cx='{sx}' cy='{sy}' r='4.5' fill='#0f172a' stroke='#facc15' stroke-width='1.5' />"
+        svg_elements += f"<text x='{sx}' y='{sy + 16}' text-anchor='middle' font-size='13' font-weight='900' fill='#0f172a'>{sval:g}</text>"
+
+        # Put Wall (红色)
+        px, py, pval = pts_put[idx]
+        svg_elements += f"<circle cx='{px}' cy='{py}' r='4.5' fill='#dc2626' stroke='#fff' stroke-width='1.5' />"
+        svg_elements += f"<text x='{px}' y='{py - 8}' text-anchor='middle' font-size='13' font-weight='800' fill='#b91c1c'>{pval:g}</text>"
+
+    # 构建完整 HTML 表格框架（纯白底黑框，严格对应草图结构）
+    html = f"""
+    <div style="background:#ffffff; border:2px solid #1e293b; border-radius:8px; padding:12px; font-family:sans-serif; color:#0f172a; overflow-x:auto;">
+        <!-- 顶部图例说明栏 -->
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; padding-bottom:8px; border-bottom:2px solid #cbd5e1; min-width:{left_axis_w + total_chart_w}px;">
+            <div style="font-size:17px; font-weight:900; color:#0f172a;">
+                📊 {symbol} 期权墙与到期日挂单矩阵 (现价: <span style="background:#fef08a; padding:2px 6px; border-radius:4px;">${spot:.2f}</span>)
+            </div>
+            <div style="display:flex; gap:18px; font-size:14px; font-weight:800;">
+                <span style="color:#16a34a;">━━ 绿线: Call Wall (阻力)</span>
+                <span style="color:#2563eb;">╌╌ 蓝线: Max Pain (痛点)</span>
+                <span style="color:#0f172a;">━━ 黑线: 现实股价 (Spot)</span>
+                <span style="color:#dc2626;">━━ 红线: Put Wall (支撑)</span>
+            </div>
+        </div>
+
+        <div style="display:flex; min-width:{left_axis_w + total_chart_w}px;">
+            <!-- 左侧固定标签列 -->
+            <div style="width:{left_axis_w}px; flex-shrink:0; border-right:2px solid #1e293b; display:flex; flex-direction:column;">
+                <div style="height:46px; border-bottom:1px solid #94a3b8; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:13px; background:#f8fafc;">到期日</div>
+                <div style="height:105px; border-bottom:2px solid #1e293b; display:flex; flex-direction:column; align-items:center; justify-content:center; font-weight:900; font-size:14px; color:#15803d; background:#f0fdf4; text-align:center;">
+                    <span>上 3 档</span>
+                    <span style="font-size:11px; font-weight:700;">Call Wall</span>
+                    <span style="font-size:10px; color:#475569;">(价 / OI)</span>
+                </div>
+                <div style="height:{svg_h}px; position:relative; border-bottom:2px solid #1e293b; background:#ffffff;">
+                    {y_ticks_html}
+                </div>
+                <div style="height:105px; border-bottom:1px solid #94a3b8; display:flex; flex-direction:column; align-items:center; justify-content:center; font-weight:900; font-size:14px; color:#b91c1c; background:#fef2f2; text-align:center;">
+                    <span>下 3 档</span>
+                    <span style="font-size:11px; font-weight:700;">Put Wall</span>
+                    <span style="font-size:10px; color:#475569;">(价 / OI)</span>
+                </div>
+                <div style="height:42px; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:13px; background:#f8fafc;">日期轴</div>
+            </div>
+
+            <!-- 右侧主体网格区 -->
+            <div style="width:{total_chart_w}px; flex-shrink:0;">
+                <!-- 1. 顶部日期表头 -->
+                <div style="display:flex; height:46px; border-bottom:1px solid #94a3b8; background:#f8fafc;">
+    """
+
+    for c in cols_data:
+        bg_today = "background:#fef08a;" if c["is_today"] else ""
+        html += f"""
+                    <div style="width:{col_w}px; border-right:1px solid #cbd5e1; display:flex; flex-direction:column; align-items:center; justify-content:center; {bg_today}">
+                        <span style="font-size:15px; font-weight:900; color:#0f172a;">{c['date_str']}</span>
+                        <span style="font-size:11px; font-weight:700; color:#475569;">{c['tag']}</span>
+                    </div>
+        """
+
+    html += """
+                </div>
+
+                <!-- 2. 上 3 档 Call Wall 格子区 (每格3行: 行权价 / OI) -->
+                <div style="display:flex; height:105px; border-bottom:2px solid #1e293b; background:#ffffff;">
+    """
+
+    for c in cols_data:
+        bg_today = "background:rgba(254,240,138,0.25);" if c["is_today"] else ""
+        rows_str = ""
+        for k_val, oi_val in c["c_top"]:
+            is_max_c = (k_val == c["call_wall"])
+            hi_style = "background:#dcfce7; font-weight:900; color:#14532d;" if is_max_c else "font-weight:700; color:#1e293b;"
+            rows_str += f"""
+                <div style="height:35px; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between; align-items:center; padding:0 6px; font-size:13px; {hi_style}">
+                    <span>{k_val:g}</span>
+                    <span style="color:#cbd5e1;">|</span>
+                    <span>{oi_val:,}</span>
+                </div>
+            """
+        html += f"<div style='width:{col_w}px; border-right:1px solid #94a3b8; {bg_today}'>{rows_str}</div>"
+
+    html += f"""
+                </div>
+
+                <!-- 3. 中间纯白底四线折线图区 -->
+                <div style="height:{svg_h}px; border-bottom:2px solid #1e293b; background:#ffffff;">
+                    <svg width="{total_chart_w}" height="{svg_h}" xmlns="http://www.w3.org/2000/svg">
+                        {svg_elements}
+                    </svg>
+                </div>
+
+                <!-- 4. 下 3 档 Put Wall 格子区 (每格3行: 行权价 / OI) -->
+                <div style="display:flex; height:105px; border-bottom:1px solid #94a3b8; background:#ffffff;">
+    """
+
+    for c in cols_data:
+        bg_today = "background:rgba(254,240,138,0.25);" if c["is_today"] else ""
+        rows_str = ""
+        for k_val, oi_val in c["p_bot"]:
+            is_max_p = (k_val == c["put_wall"])
+            hi_style = "background:#fee2e2; font-weight:900; color:#7f1d1d;" if is_max_p else "font-weight:700; color:#1e293b;"
+            rows_str += f"""
+                <div style="height:35px; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between; align-items:center; padding:0 6px; font-size:13px; {hi_style}">
+                    <span>{k_val:g}</span>
+                    <span style="color:#cbd5e1;">|</span>
+                    <span>{oi_val:,}</span>
+                </div>
+            """
+        html += f"<div style='width:{col_w}px; border-right:1px solid #94a3b8; {bg_today}'>{rows_str}</div>"
+
+    html += """
+                </div>
+
+                <!-- 5. 底部日期轴 -->
+                <div style="display:flex; height:42px; background:#f8fafc;">
+    """
+
+    for c in cols_data:
+        bg_today = "background:#fef08a;" if c["is_today"] else ""
+        html += f"""
+                    <div style="width:{col_w}px; border-right:1px solid #cbd5e1; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:900; color:#0f172a; {bg_today}">
+                        {c['date_str']}
+                    </div>
+        """
+
+    html += """
+                </div>
+            </div>
+        </div>
+    </div>
+    """
+    return html
 
 top_bar_html = "<div class='top-bar'><div class='brand-title'>CAPITAL QUANT v2</div><div class='live-badge'>Live (1-min Sync) | " + datetime.now().strftime('%b %d, %Y %H:%M:%S') + " | UK Institutional Terminal</div></div>"
 st.markdown(top_bar_html, unsafe_allow_html=True)
@@ -327,7 +607,7 @@ elif st.session_state.page == "Stock Analysis":
     if chosen != st.session_state.selected_ticker:
         st.session_state.selected_ticker = chosen
         st.rerun()
-    if t3.button("OPTIONS INTELLIGENCE V1.0 >", use_container_width=True):
+    if t3.button("OPTIONS INTELLIGENCE V2.0 >", use_container_width=True):
         st.session_state.page = "Options Intelligence"
         st.rerun()
     if t4.button("← BACK", use_container_width=True):
@@ -459,7 +739,7 @@ elif st.session_state.page == "Stock Analysis":
     k5.markdown("<div class='metric-box'><div class='metric-label'>P/E / EPS</div><div class='metric-val'>" + (str(m.get('pe', 'N/A')) if m.get('pe') else 'N/A') + " / " + str(m.get('eps', 'N/A')) + "</div></div>", unsafe_allow_html=True)
     k6.markdown("<div class='metric-box'><div class='metric-label'>RSI (14)</div><div class='metric-val' style='color:#38bdf8;'>" + f"{float(m.get('rsi', 50.0)):.1f}" + "</div></div>", unsafe_allow_html=True)
 
-# ==================== PAGE 3: OPTIONS INTELLIGENCE (完美还原草图排版) ====================
+# ==================== PAGE 3: OPTIONS INTELLIGENCE (草图同款一体化矩阵图表) ====================
 elif st.session_state.page == "Options Intelligence":
     o1, o2, o3, o4 = st.columns([2.3, 2.1, 1.5, 1.5])
     o1.markdown("### CAPITAL QUANT — OPTIONS INTELLIGENCE V2.0")
@@ -483,146 +763,15 @@ elif st.session_state.page == "Options Intelligence":
     
     st.markdown("<br>", unsafe_allow_html=True)
 
+    # 渲染手绘同款一体化纯白底矩阵折线看板
+    matrix_html = build_custom_option_matrix_html(sym, spot)
+    st.components.v1.html(matrix_html, height=670, scrolling=True)
+
     # -------------------------------------------------------------------------
-    # 1. 顶部直接显示：Top 3 Call Wall (上方压力位) 矩阵
+    # 辅助模块：期权链与数据汇总（白底表格）
     # -------------------------------------------------------------------------
     st.markdown("<div class='module-container'>", unsafe_allow_html=True)
-    st.markdown("<div class='card-header'>🟢 上方防守阻力：Top 3 Call Wall Strikes (压力位与到期挂单矩阵)</div>", unsafe_allow_html=True)
-    
-    top_calls = cdf.nlargest(3, "openInterest").sort_values(by="strike", ascending=False)
-    call_table_data = []
-    for _, row in top_calls.iterrows():
-        strike_p = row["strike"]
-        oi_val = int(row["openInterest"])
-        pct_diff = ((strike_p - spot) / spot) * 100
-        call_table_data.append({
-            "Strike 行权价": f"${strike_p:.2f}",
-            "权利金价格 (Last)": f"${row['lastPrice']:.2f}",
-            "距离现价 (%)": f"{pct_diff:+.2f}%",
-            "未平仓量 (OI)": f"{oi_val:,}",
-            "挂单建议": "🟢 分批指价挂空/止盈" if pct_diff > 0 else "⚪ 已经历突破"
-        })
-    df_call_table = pd.DataFrame(call_table_data)
-    st.markdown(df_call_table.to_html(index=False, classes="table-white"), unsafe_allow_html=True)
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    # -------------------------------------------------------------------------
-    # 2. 中间核心看板：多维期权墙与走势轨迹图 (纯白背景，四色线条)
-    # -------------------------------------------------------------------------
-    st.markdown("<div class='module-container'>", unsafe_allow_html=True)
-    st.markdown("<div class='card-header'>🎯 挂单决策核心看板：多维期权墙与走势轨迹 (Past 3 Expiries → Next 30 Days)</div>", unsafe_allow_html=True)
-
-    today_dt = datetime.today()
-    timeline_dates = [today_dt - timedelta(days=21), today_dt - timedelta(days=14), today_dt - timedelta(days=7),
-                      today_dt - timedelta(days=2), today_dt - timedelta(days=1), today_dt,
-                      today_dt + timedelta(days=1), today_dt + timedelta(days=2), today_dt + timedelta(days=7),
-                      today_dt + timedelta(days=14), today_dt + timedelta(days=21), today_dt + timedelta(days=30)]
-    
-    np.random.seed(abs(hash(sym)) % 10000)
-    base_trend = spot * np.linspace(0.92, 1.06, len(timeline_dates))
-    noise = np.random.normal(0, spot * 0.01, len(timeline_dates))
-    
-    history_spot = base_trend + noise
-    call_wall_line = history_spot * 1.07 + spot * 0.02
-    put_wall_line = history_spot * 0.93 - spot * 0.02
-    max_pain_line = history_spot * 0.99 + spot * 0.005
-
-    fig_multi = go.Figure()
-    # 1. Call Wall 阻力线 (绿色 - 上方)
-    fig_multi.add_trace(go.Scatter(
-        x=timeline_dates, y=call_wall_line, mode='lines+markers',
-        name='Call Wall (上方阻力 - 绿)', line=dict(color='#16a34a', width=3), marker=dict(size=6, color='#16a34a')
-    ))
-    # 2. Put Wall 支撑线 (红色 - 下方)
-    fig_multi.add_trace(go.Scatter(
-        x=timeline_dates, y=put_wall_line, mode='lines+markers',
-        name='Put Wall (下方支撑 - 红)', line=dict(color='#dc2626', width=3), marker=dict(size=6, color='#dc2626'),
-        fill='tonexty', fillcolor='rgba(22, 163, 74, 0.04)'
-    ))
-    # 3. Max Pain 最大痛点 (蓝色)
-    fig_multi.add_trace(go.Scatter(
-        x=timeline_dates, y=max_pain_line, mode='lines',
-        name='Max Pain (最大痛点 - 蓝)', line=dict(color='#2563eb', width=2.5, dash='dash')
-    ))
-    # 4. 现实股票价格 Spot (黑色实线 + 高亮节点)
-    fig_multi.add_trace(go.Scatter(
-        x=timeline_dates, y=history_spot, mode='lines+markers',
-        name='Spot Price (现实股价 - 黑)', line=dict(color='#0f172a', width=3.5), marker=dict(size=8, color='#0f172a')
-    ))
-
-    fig_multi.update_layout(
-        template='plotly_white', height=430,
-        paper_bgcolor='#ffffff', plot_bgcolor='#ffffff',
-        margin=dict(l=10, r=10, t=30, b=10),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(color="#0f172a", size=14)),
-        yaxis=dict(title="价格 ($)", gridcolor='#e2e8f0', title_font=dict(color="#0f172a"), tickfont=dict(color="#0f172a")),
-        xaxis=dict(gridcolor='#e2e8f0', tickformat='%b %d', tickfont=dict(color="#0f172a"))
-    )
-    st.plotly_chart(fig_multi, use_container_width=True)
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    # -------------------------------------------------------------------------
-    # 3. 底部直接显示：Top 3 Put Wall (下方支撑位) 矩阵
-    # -------------------------------------------------------------------------
-    st.markdown("<div class='module-container'>", unsafe_allow_html=True)
-    st.markdown("<div class='card-header'>🔴 下方强力支撑：Top 3 Put Wall Strikes (防守位与到期挂单矩阵)</div>", unsafe_allow_html=True)
-    
-    top_puts = pdf.nlargest(3, "openInterest").sort_values(by="strike", ascending=True)
-    put_table_data = []
-    for _, row in top_puts.iterrows():
-        strike_p = row["strike"]
-        oi_val = int(row["openInterest"])
-        pct_diff = ((strike_p - spot) / spot) * 100
-        put_table_data.append({
-            "Strike 行权价": f"${strike_p:.2f}",
-            "权利金价格 (Last)": f"${row['lastPrice']:.2f}",
-            "距离现价 (%)": f"{pct_diff:+.2f}%",
-            "未平仓量 (OI)": f"{oi_val:,}",
-            "挂单建议": "🟢 支撑位逢低限价买入 (Buy the Dip)" if pct_diff < 0 else "⚪ 处于上方高位"
-        })
-    df_put_table = pd.DataFrame(put_table_data)
-    st.markdown(df_put_table.to_html(index=False, classes="table-white"), unsafe_allow_html=True)
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    # 注入白底表格样式
-    st.markdown("""
-    <style>
-        table.table-white {
-            width: 100%;
-            background-color: #ffffff !important;
-            color: #0f172a !important;
-            border-collapse: collapse;
-            font-family: sans-serif;
-            border-radius: 6px;
-            overflow: hidden;
-        }
-        table.table-white th {
-            background-color: #f1f5f9 !important;
-            color: #1e293b !important;
-            font-weight: 800;
-            padding: 10px 12px;
-            border-bottom: 2px solid #cbd5e1;
-            text-align: left;
-        }
-        table.table-white td {
-            background-color: #ffffff !important;
-            color: #0f172a !important;
-            padding: 9px 12px;
-            border-bottom: 1px solid #e2e8f0;
-            font-size: 16px;
-            font-weight: 600;
-        }
-        table.table-white tr:hover td {
-            background-color: #f8fafc !important;
-        }
-    </style>
-    """, unsafe_allow_html=True)
-
-    # -------------------------------------------------------------------------
-    # 辅助模块：期权链与数据汇总
-    # -------------------------------------------------------------------------
-    st.markdown("<div class='module-container'>", unsafe_allow_html=True)
-    st.markdown("<div class='card-header'>📊 详细期权链与挂单策略建议 (T-Shaped Options Intelligence)</div>", unsafe_allow_html=True)
+    st.markdown("<div class='card-header'>📊 近期到期日核心行权价明细 (Call vs Put 权利金与未平仓对比)</div>", unsafe_allow_html=True)
     
     coi = int(cdf["openInterest"].sum())
     poi = int(pdf["openInterest"].sum())
@@ -636,7 +785,7 @@ elif st.session_state.page == "Options Intelligence":
     m3.markdown("<div class='metric-box'><div class='metric-label'>Spot Price (现价)</div><div class='metric-val' style='color:#38bdf8;'>" + f"${spot:.2f}" + "</div></div>", unsafe_allow_html=True)
     m4.markdown("<div class='metric-box'><div class='metric-label'>挂单信号状态</div><div class='metric-val' style='color:#4ade80;'>回踩支撑限价买入</div></div>", unsafe_allow_html=True)
 
-    st.markdown("<br>##### 📋 近期到期日核心行权价对比 (Strike Chain Table)", unsafe_allow_html=True)
+    st.markdown("<br>", unsafe_allow_html=True)
     cdf["dist"] = (cdf["strike"] - spot).abs()
     strikes = cdf.nsmallest(9, "dist")["strike"].sort_values().tolist()
     cf = cdf[cdf["strike"].isin(strikes)].set_index("strike")
@@ -648,10 +797,19 @@ elif st.session_state.page == "Options Intelligence":
         s_rows.append({
             "CALL OI": int(cr["openInterest"]), 
             "CALL 权利金": f"${cr['lastPrice']:.2f}",
-            "STRIKE": float(k), 
+            "STRIKE 行权价": f"${float(k):.2f}", 
             "PUT 权利金": f"${pr['lastPrice']:.2f}",
             "PUT OI": int(pr["openInterest"])
         })
     dfs = pd.DataFrame(s_rows)
-    st.dataframe(dfs, use_container_width=True, height=280, hide_index=True)
+    
+    st.markdown("""
+    <style>
+        table.table-white { width: 100%; background-color: #ffffff !important; color: #0f172a !important; border-collapse: collapse; font-family: sans-serif; border-radius: 6px; overflow: hidden; }
+        table.table-white th { background-color: #f1f5f9 !important; color: #1e293b !important; font-weight: 800; padding: 10px 12px; border-bottom: 2px solid #cbd5e1; text-align: center; }
+        table.table-white td { background-color: #ffffff !important; color: #0f172a !important; padding: 9px 12px; border-bottom: 1px solid #e2e8f0; font-size: 16px; font-weight: 700; text-align: center; }
+        table.table-white tr:hover td { background-color: #f8fafc !important; }
+    </style>
+    """, unsafe_allow_html=True)
+    st.markdown(dfs.to_html(index=False, classes="table-white"), unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
