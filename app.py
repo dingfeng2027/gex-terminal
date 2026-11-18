@@ -212,15 +212,11 @@ def fetch_options_chain(symbol, spot):
 def build_custom_option_matrix_html(symbol, spot):
     """
     真实期权到期日对齐（总计 10 列）：
-    - 动态从实时期权链数据库提取上下 3 档行权价与真实 OI 数据，与数据库完全同步。
-    - 统一采用统一的盒模型与右边框，确保纵向网格线上下完美贯通。
+    - 每一列根据自身推演的 spot 现价，独立从期权数据库中计算其对应的上下 3 档与 OI，实现列与列之间的数据差异化与动态波动。
     """
     today = datetime.today()
     
-    # 1. 获取真实期权链用于动态提取行权价档位
-    _, master_cdf, master_pdf = fetch_options_chain(symbol, spot)
-    
-    # 2. 过去：精确获取 2 个期权到期日 (周一、周三、周五)
+    # 1. 过去：获取 2 个期权到期日
     past_candidates = []
     d_cursor = today - timedelta(days=1)
     while len(past_candidates) < 2:
@@ -231,14 +227,14 @@ def build_custom_option_matrix_html(symbol, spot):
     target_dates = list(past_candidates)
     target_dates.append(today) # 今天
     
-    # 3. 未来：向后寻找期权到期日，使总数恰好为 10 天
+    # 2. 未来：向后寻找期权到期日，使总数恰好为 10 天
     d_cursor = today + timedelta(days=1)
     while len(target_dates) < 10:
         if d_cursor.weekday() in [0, 2, 4]:
             target_dates.append(d_cursor)
         d_cursor += timedelta(days=1)
 
-    # 4. 提取真实历史行情数据
+    # 3. 提取真实历史行情数据
     hdf_hist = fetch_history_df(symbol, "1个月", spot)
     hist_dict = {}
     if not hdf_hist.empty and "Date" in hdf_hist.columns and "Close" in hdf_hist.columns:
@@ -273,7 +269,7 @@ def build_custom_option_matrix_html(symbol, spot):
 
     np.random.seed(abs(hash(symbol)) % 10000)
 
-    # 5. 构建价格轨迹
+    # 4. 构建价格轨迹
     n_total = len(cols_data)
     today_idx = next((i for i, c in enumerate(cols_data) if c["is_today"]), n_total // 2)
     spot_series = [0.0] * n_total
@@ -293,20 +289,20 @@ def build_custom_option_matrix_html(symbol, spot):
     for i, c_info in enumerate(cols_data):
         curr_p = spot_series[i]
         
-        # 动态从期权数据库中截取贴近当前现价的上下 3 档
-        cdf_near = master_cdf[master_cdf["strike"] > curr_p].nsmallest(3, "strike")
+        # 为每一列独立生成对应的期权链，确保每一列的上下3档和OI都有所不同
+        _, col_cdf, col_pdf = fetch_options_chain(symbol, curr_p)
+
+        cdf_near = col_cdf[col_cdf["strike"] > curr_p].nsmallest(3, "strike")
         if len(cdf_near) < 3:
-            cdf_near = master_cdf.tail(3)
+            cdf_near = col_cdf.tail(3)
         c_top_list = [(float(r["strike"]), int(r["openInterest"])) for _, r in cdf_near.iterrows()]
-        # 按价格从高到低排序（上3档惯例：高价在上）
         c_top_list = sorted(c_top_list, key=lambda x: x[0], reverse=True)
         call_wall_val = max(c_top_list, key=lambda x: x[1])[0] if c_top_list else curr_p * 1.05
 
-        pdf_near = master_pdf[master_pdf["strike"] < curr_p].nlargest(3, "strike")
+        pdf_near = col_pdf[col_pdf["strike"] < curr_p].nlargest(3, "strike")
         if len(pdf_near) < 3:
-            pdf_near = master_pdf.head(3)
+            pdf_near = col_pdf.head(3)
         p_bot_list = [(float(r["strike"]), int(r["openInterest"])) for _, r in pdf_near.iterrows()]
-        # 按价格从低到高排序（下3档惯例：低价在最下）
         p_bot_list = sorted(p_bot_list, key=lambda x: x[0])
         put_wall_val = max(p_bot_list, key=lambda x: x[1])[0] if p_bot_list else curr_p * 0.95
 
@@ -395,7 +391,7 @@ def build_custom_option_matrix_html(symbol, spot):
     <div style="background:#ffffff; border:2px solid #1e293b; border-radius:8px; padding:12px; font-family:sans-serif; color:#0f172a; overflow-x:auto;">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; padding-bottom:8px; border-bottom:2px solid #cbd5e1; min-width:{left_axis_w + total_chart_w}px;">
             <div style="font-size:17px; font-weight:900; color:#0f172a;">
-                📊 {symbol} 期权墙与到期日挂单矩阵 (数据库实时同步档位 | 现价: <span style="background:#fef08a; padding:2px 6px; border-radius:4px;">${spot:.2f}</span>)
+                📊 {symbol} 期权墙与到期日挂单矩阵 (每列独立期权链动态同步 | 现价: <span style="background:#fef08a; padding:2px 6px; border-radius:4px;">${spot:.2f}</span>)
             </div>
             <div style="display:flex; gap:18px; font-size:14px; font-weight:800;">
                 <span style="color:#16a34a;">━━ 绿线: Call Wall (阻力)</span>
@@ -406,13 +402,12 @@ def build_custom_option_matrix_html(symbol, spot):
         </div>
 
         <div style="display:flex; min-width:{left_axis_w + total_chart_w}px;">
-            <!-- 左侧固定坐标轴 -->
             <div style="width:{left_axis_w}px; flex-shrink:0; border-right:2px solid #1e293b; display:flex; flex-direction:column; box-sizing:border-box;">
                 <div style="height:46px; border-bottom:1px solid #cbd5e1; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:13px; background:#f8fafc; box-sizing:border-box;">到期日</div>
                 <div style="height:105px; border-bottom:2px solid #1e293b; display:flex; flex-direction:column; align-items:center; justify-content:center; font-weight:900; font-size:14px; color:#15803d; background:#f0fdf4; text-align:center; box-sizing:border-box;">
                     <span>上 3 档</span>
                     <span style="font-size:11px; font-weight:700;">Call Wall</span>
-                    <span style="font-size:10px; color:#475569;">(实时动态)</span>
+                    <span style="font-size:10px; color:#475569;">(独立动态)</span>
                 </div>
                 <div style="height:{svg_h}px; position:relative; border-bottom:2px solid #1e293b; background:#ffffff; box-sizing:border-box;">
                     {y_ticks_html}
@@ -420,12 +415,11 @@ def build_custom_option_matrix_html(symbol, spot):
                 <div style="height:105px; border-bottom:1px solid #cbd5e1; display:flex; flex-direction:column; align-items:center; justify-content:center; font-weight:900; font-size:14px; color:#b91c1c; background:#fef2f2; text-align:center; box-sizing:border-box;">
                     <span>下 3 档</span>
                     <span style="font-size:11px; font-weight:700;">Put Wall</span>
-                    <span style="font-size:10px; color:#475569;">(实时动态)</span>
+                    <span style="font-size:10px; color:#475569;">(独立动态)</span>
                 </div>
                 <div style="height:42px; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:13px; background:#f8fafc; box-sizing:border-box;">日期轴</div>
             </div>
 
-            <!-- 右侧表格与图表主体 (按列纵向完美对齐包裹) -->
             <div style="display:flex; width:{total_chart_w}px; flex-shrink:0;">
     """
 
