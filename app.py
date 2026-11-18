@@ -215,7 +215,7 @@ def build_custom_option_matrix_html(symbol, spot):
     - 前面 2 个期权到期日。
     - 今天 1 列。
     - 后面延伸 7 个期权到期日（包含 25/11, 27/11 等）。
-    - 强制对所有 10 列生成连续的黑线坐标，绝不跳过任何一列。
+    - 统一采用统一的盒模型与右边框，确保纵向网格线上下完美贯通。
     """
     today = datetime.today()
     
@@ -272,7 +272,7 @@ def build_custom_option_matrix_html(symbol, spot):
 
     np.random.seed(abs(hash(symbol)) % 10000)
 
-    # 4. 构建价格轨迹：确保每一列都有准确的 spot 价格，实现全线连贯
+    # 4. 构建价格轨迹
     n_total = len(cols_data)
     today_idx = next((i for i, c in enumerate(cols_data) if c["is_today"]), n_total // 2)
     spot_series = [0.0] * n_total
@@ -287,7 +287,7 @@ def build_custom_option_matrix_html(symbol, spot):
             prev_p = spot_series[i + 1]
             spot_series[i] = round(prev_p * 0.995, 2)
 
-    # 填充未来列（平滑推演，保证 25/11 和 27/11 都有数值）
+    # 填充未来列
     for i in range(today_idx + 1, n_total):
         spot_series[i] = round(spot_series[i - 1] * (1 + np.random.uniform(-0.002, 0.006)), 2)
 
@@ -372,7 +372,7 @@ def build_custom_option_matrix_html(symbol, spot):
     svg_elements += draw_polyline(pts_call, "#16a34a", 3.0)          # 绿色: Call Wall
     svg_elements += draw_polyline(pts_put, "#dc2626", 3.0)           # 红色: Put Wall
     svg_elements += draw_polyline(pts_mp, "#2563eb", 2.4, "5,3")     # 蓝色: Max Pain
-    svg_elements += draw_polyline(pts_spot, "#0f172a", 3.8)          # 黑色: 现实股价（加粗置顶，贯穿所有10列）
+    svg_elements += draw_polyline(pts_spot, "#0f172a", 3.8)          # 黑色: 现实股价
 
     for idx in range(n_cols):
         cx, cy, val = pts_call[idx]
@@ -406,103 +406,96 @@ def build_custom_option_matrix_html(symbol, spot):
         </div>
 
         <div style="display:flex; min-width:{left_axis_w + total_chart_w}px;">
-            <div style="width:{left_axis_w}px; flex-shrink:0; border-right:2px solid #1e293b; display:flex; flex-direction:column;">
-                <div style="height:46px; border-bottom:1px solid #94a3b8; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:13px; background:#f8fafc;">到期日</div>
-                <div style="height:105px; border-bottom:2px solid #1e293b; display:flex; flex-direction:column; align-items:center; justify-content:center; font-weight:900; font-size:14px; color:#15803d; background:#f0fdf4; text-align:center;">
+            <!-- 左侧固定坐标轴 -->
+            <div style="width:{left_axis_w}px; flex-shrink:0; border-right:2px solid #1e293b; display:flex; flex-direction:column; box-sizing:border-box;">
+                <div style="height:46px; border-bottom:1px solid #cbd5e1; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:13px; background:#f8fafc; box-sizing:border-box;">到期日</div>
+                <div style="height:105px; border-bottom:2px solid #1e293b; display:flex; flex-direction:column; align-items:center; justify-content:center; font-weight:900; font-size:14px; color:#15803d; background:#f0fdf4; text-align:center; box-sizing:border-box;">
                     <span>上 3 档</span>
                     <span style="font-size:11px; font-weight:700;">Call Wall</span>
                     <span style="font-size:10px; color:#475569;">(155-165)</span>
                 </div>
-                <div style="height:{svg_h}px; position:relative; border-bottom:2px solid #1e293b; background:#ffffff;">
+                <div style="height:{svg_h}px; position:relative; border-bottom:2px solid #1e293b; background:#ffffff; box-sizing:border-box;">
                     {y_ticks_html}
                 </div>
-                <div style="height:105px; border-bottom:1px solid #94a3b8; display:flex; flex-direction:column; align-items:center; justify-content:center; font-weight:900; font-size:14px; color:#b91c1c; background:#fef2f2; text-align:center;">
+                <div style="height:105px; border-bottom:1px solid #cbd5e1; display:flex; flex-direction:column; align-items:center; justify-content:center; font-weight:900; font-size:14px; color:#b91c1c; background:#fef2f2; text-align:center; box-sizing:border-box;">
                     <span>下 3 档</span>
                     <span style="font-size:11px; font-weight:700;">Put Wall</span>
                     <span style="font-size:10px; color:#475569;">(140-150)</span>
                 </div>
-                <div style="height:42px; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:13px; background:#f8fafc;">日期轴</div>
+                <div style="height:42px; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:13px; background:#f8fafc; box-sizing:border-box;">日期轴</div>
             </div>
 
-            <div style="width:{total_chart_w}px; flex-shrink:0;">
-                <div style="display:flex; height:46px; border-bottom:1px solid #94a3b8; background:#f8fafc;">
+            <!-- 右侧表格与图表主体 (按列纵向完美对齐包裹) -->
+            <div style="display:flex; width:{total_chart_w}px; flex-shrink:0;">
     """
 
+    # 逐列生成，确保每一列从上到下拥有统一的纵向右边框，彻底杜绝错位和断开
     for c in cols_data:
-        bg_today = "background:#fef08a;" if c["is_today"] else ""
-        html += f"""
-                    <div style="width:{col_w}px; border-right:1px solid #cbd5e1; display:flex; flex-direction:column; align-items:center; justify-content:center; {bg_today}">
-                        <span style="font-size:15px; font-weight:900; color:#0f172a;">{c['date_str']}</span>
-                        <span style="font-size:11px; font-weight:700; color:#475569;">{c['tag']}</span>
-                    </div>
-        """
-
-    html += """
-                </div>
-
-                <div style="display:flex; height:105px; border-bottom:2px solid #1e293b; background:#ffffff;">
-    """
-
-    for c in cols_data:
-        bg_today = "background:rgba(254,240,138,0.25);" if c["is_today"] else ""
-        rows_str = ""
+        bg_col = "background:#fef08a;" if c["is_today"] else ""
+        bg_cell = "background:rgba(254,240,138,0.25);" if c["is_today"] else "background:#ffffff;"
+        
+        # Call Wall 三行
+        c_rows_html = ""
         for k_val, oi_val in c["c_top"]:
             is_max_c = (k_val == c["call_wall"])
             hi_style = "background:#dcfce7; font-weight:900; color:#14532d;" if is_max_c else "font-weight:700; color:#1e293b;"
-            rows_str += f"""
-                <div style="height:35px; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between; align-items:center; padding:0 8px; font-size:13px; {hi_style}">
+            c_rows_html += f"""
+                <div style="height:35px; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between; align-items:center; padding:0 8px; font-size:13px; box-sizing:border-box; {hi_style}">
                     <span>{k_val:g}</span>
                     <span style="color:#cbd5e1;">|</span>
                     <span>{oi_val:,}</span>
                 </div>
             """
-        html += f"<div style='width:{col_w}px; border-right:1px solid #94a3b8; {bg_today}'>{rows_str}</div>"
 
-    html += f"""
-                </div>
-
-                <div style="height:{svg_h}px; border-bottom:2px solid #1e293b; background:#ffffff;">
-                    <svg width="{total_chart_w}" height="{svg_h}" xmlns="http://www.w3.org/2000/svg">
-                        {svg_elements}
-                    </svg>
-                </div>
-
-                <div style="display:flex; height:105px; border-bottom:1px solid #94a3b8; background:#ffffff;">
-    """
-
-    for c in cols_data:
-        bg_today = "background:rgba(254,240,138,0.25);" if c["is_today"] else ""
-        rows_str = ""
+        # Put Wall 三行
+        p_rows_html = ""
         for k_val, oi_val in c["p_bot"]:
             is_max_p = (k_val == c["put_wall"])
             hi_style = "background:#fee2e2; font-weight:900; color:#7f1d1d;" if is_max_p else "font-weight:700; color:#1e293b;"
-            rows_str += f"""
-                <div style="height:35px; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between; align-items:center; padding:0 8px; font-size:13px; {hi_style}">
+            p_rows_html += f"""
+                <div style="height:35px; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between; align-items:center; padding:0 8px; font-size:13px; box-sizing:border-box; {hi_style}">
                     <span>{k_val:g}</span>
                     <span style="color:#cbd5e1;">|</span>
                     <span>{oi_val:,}</span>
                 </div>
             """
-        html += f"<div style='width:{col_w}px; border-right:1px solid #94a3b8; {bg_today}'>{rows_str}</div>"
 
-    html += """
-                </div>
-
-                <div style="display:flex; height:42px; background:#f8fafc;">
-    """
-
-    for c in cols_data:
-        bg_today = "background:#fef08a;" if c["is_today"] else ""
         html += f"""
-                    <div style="width:{col_w}px; border-right:1px solid #cbd5e1; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:900; color:#0f172a; {bg_today}">
+                <div style="width:{col_w}px; flex-shrink:0; border-right:1px solid #cbd5e1; box-sizing:border-box; display:flex; flex-direction:column;">
+                    <!-- 1. 顶部日期头 -->
+                    <div style="height:46px; border-bottom:1px solid #cbd5e1; display:flex; flex-direction:column; align-items:center; justify-content:center; box-sizing:border-box; {bg_col}">
+                        <span style="font-size:15px; font-weight:900; color:#0f172a;">{c['date_str']}</span>
+                        <span style="font-size:11px; font-weight:700; color:#475569;">{c['tag']}</span>
+                    </div>
+                    <!-- 2. Call Wall 矩阵区 -->
+                    <div style="height:105px; border-bottom:2px solid #1e293b; box-sizing:border-box; {bg_cell}">
+                        {c_rows_html}
+                    </div>
+                    <!-- 3. SVG 占位留空 (SVG图表整体盖在下方或背景，此处撑开高度) -->
+                    <div style="height:{svg_h}px; border-bottom:2px solid #1e293b; box-sizing:border-box; {bg_cell}"></div>
+                    <!-- 4. Put Wall 矩阵区 -->
+                    <div style="height:105px; border-bottom:1px solid #cbd5e1; box-sizing:border-box; {bg_cell}">
+                        {p_rows_html}
+                    </div>
+                    <!-- 5. 底部日期轴 -->
+                    <div style="height:42px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:900; color:#0f172a; box-sizing:border-box; {bg_col}">
                         {c['date_str']}
                     </div>
+                </div>
         """
 
-    html += """
-                </div>
+    html += f"""
             </div>
         </div>
+
+        <!-- 绝对定位 SVG 曲线图层，完美覆盖在中间图表区域 -->
+        <div style="position:relative; margin-top:-{svg_h + 147}px; margin-left:{left_axis_w}px; width:{total_chart_w}px; height:{svg_h}px; pointer-events:none;">
+            <svg width="{total_chart_w}" height="{svg_h}" xmlns="http://www.w3.org/2000/svg">
+                {svg_elements}
+            </svg>
+        </div>
+        <!-- 底部撑开距离，确保图层下方正常衔接 -->
+        <div style="height:42px;"></div>
     </div>
     """
     return html
