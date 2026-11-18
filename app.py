@@ -212,10 +212,10 @@ def fetch_options_chain(symbol, spot):
 def build_custom_option_matrix_html(symbol, spot):
     """
     真实期权到期日对齐（总计 10 列）：
-    - 前面严格保留 2 个期权到期日（周一/周三/周五）。
+    - 前面 2 个期权到期日。
     - 今天 1 列。
-    - 后面延伸补足 7 个期权到期日。
-    - 历史现价通过真实行情数据填充，确保黑线完美贯穿过去、今天与未来所有格子。
+    - 后面延伸 7 个期权到期日（包含 25/11, 27/11 等）。
+    - 强制对所有 10 列生成连续的黑线坐标，绝不跳过任何一列。
     """
     today = datetime.today()
     
@@ -230,20 +230,20 @@ def build_custom_option_matrix_html(symbol, spot):
     target_dates = list(past_candidates)
     target_dates.append(today) # 今天
     
-    # 2. 未来：向后寻找期权到期日 (周一、周三、周五)，使总数恰好为 10 天
+    # 2. 未来：向后寻找期权到期日，使总数恰好为 10 天
     d_cursor = today + timedelta(days=1)
     while len(target_dates) < 10:
         if d_cursor.weekday() in [0, 2, 4]:
             target_dates.append(d_cursor)
         d_cursor += timedelta(days=1)
 
-    # 3. 提取真实历史行情数据用于精准连接过去黑线
+    # 3. 提取真实历史行情数据
     hdf_hist = fetch_history_df(symbol, "1个月", spot)
     hist_dict = {}
     if not hdf_hist.empty and "Date" in hdf_hist.columns and "Close" in hdf_hist.columns:
         for _, row in hdf_hist.iterrows():
             d_key = row["Date"].strftime("%Y-%m-%d")
-            hist_dict[d_key] = row["Close"]
+            hist_dict[d_key] = float(row["Close"])
 
     cols_data = []
     for dt in target_dates:
@@ -272,29 +272,28 @@ def build_custom_option_matrix_html(symbol, spot):
 
     np.random.seed(abs(hash(symbol)) % 10000)
 
-    # 4. 构建价格轨迹（过去使用真实历史收盘价，未来使用波动模型推演）
+    # 4. 构建价格轨迹：确保每一列都有准确的 spot 价格，实现全线连贯
     n_total = len(cols_data)
-    today_idx = next(i for i, c in enumerate(cols_data) if c["is_today"])
+    today_idx = next((i for i, c in enumerate(cols_data) if c["is_today"]), n_total // 2)
     spot_series = [0.0] * n_total
     spot_series[today_idx] = spot
 
-    # 填充过去列的现价（优先匹配真实历史收盘价）
+    # 填充过去列
     for i in range(today_idx - 1, -1, -1):
         d_key = cols_data[i]["date"].strftime("%Y-%m-%d")
         if d_key in hist_dict:
-            spot_series[i] = round(float(hist_dict[d_key]), 2)
+            spot_series[i] = round(hist_dict[d_key], 2)
         else:
             prev_p = spot_series[i + 1]
-            spot_series[i] = round(prev_p * (1 - np.random.uniform(0.002, 0.008)), 2)
+            spot_series[i] = round(prev_p * 0.995, 2)
 
-    # 填充未来列的现价推演
+    # 填充未来列（平滑推演，保证 25/11 和 27/11 都有数值）
     for i in range(today_idx + 1, n_total):
-        spot_series[i] = round(spot_series[i - 1] * (1 + np.random.uniform(-0.004, 0.011)), 2)
+        spot_series[i] = round(spot_series[i - 1] * (1 + np.random.uniform(-0.002, 0.006)), 2)
 
     for i, c_info in enumerate(cols_data):
         curr_p = spot_series[i]
         
-        # 锁定行权价档位：上3档 (155, 160, 165) / 下3档 (140, 145, 150)
         c1_k, c2_k, c3_k = 165.0, 160.0, 155.0
         c1_oi = int(np.random.randint(22000, 31000))
         c2_oi = int(np.random.randint(25000, 34000))
@@ -373,7 +372,7 @@ def build_custom_option_matrix_html(symbol, spot):
     svg_elements += draw_polyline(pts_call, "#16a34a", 3.0)          # 绿色: Call Wall
     svg_elements += draw_polyline(pts_put, "#dc2626", 3.0)           # 红色: Put Wall
     svg_elements += draw_polyline(pts_mp, "#2563eb", 2.4, "5,3")     # 蓝色: Max Pain
-    svg_elements += draw_polyline(pts_spot, "#0f172a", 3.8)          # 黑色: 现实股价（加粗置顶）
+    svg_elements += draw_polyline(pts_spot, "#0f172a", 3.8)          # 黑色: 现实股价（加粗置顶，贯穿所有10列）
 
     for idx in range(n_cols):
         cx, cy, val = pts_call[idx]
@@ -396,7 +395,7 @@ def build_custom_option_matrix_html(symbol, spot):
     <div style="background:#ffffff; border:2px solid #1e293b; border-radius:8px; padding:12px; font-family:sans-serif; color:#0f172a; overflow-x:auto;">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; padding-bottom:8px; border-bottom:2px solid #cbd5e1; min-width:{left_axis_w + total_chart_w}px;">
             <div style="font-size:17px; font-weight:900; color:#0f172a;">
-                📊 {symbol} 期权墙与到期日挂单矩阵 (10天窗口: 前2天 + 今天 + 后7天 | 现价: <span style="background:#fef08a; padding:2px 6px; border-radius:4px;">${spot:.2f}</span>)
+                📊 {symbol} 期权墙与到期日挂单矩阵 (10天窗口: 前2天期权日 + 今天 + 后7天期权日 | 现价: <span style="background:#fef08a; padding:2px 6px; border-radius:4px;">${spot:.2f}</span>)
             </div>
             <div style="display:flex; gap:18px; font-size:14px; font-weight:800;">
                 <span style="color:#16a34a;">━━ 绿线: Call Wall (阻力)</span>
