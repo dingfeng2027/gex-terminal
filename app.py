@@ -9,21 +9,21 @@ st.set_page_config(page_title="CAPITAL QUANT v2", layout="wide", initial_sidebar
 
 st.markdown("""
 <style>
-    .block-container { padding: 0.4rem 1rem 1rem 1rem !important; max-width: 100% !important; }
-    html, body, [class*="css"] { font-size: 20px !important; }
+    .block-container { padding: 0.3rem 0.8rem 0.8rem 0.8rem !important; max-width: 100% !important; }
+    html, body, [class*="css"] { font-size: 18px !important; }
     .stApp { background: radial-gradient(circle at top center, #0a2558 0%, #040d21 65%, #020712 100%) !important; color: #fff !important; }
     header, footer, #MainMenu {visibility: hidden;}
-    .top-bar { background: linear-gradient(90deg, #061533, #0c275e, #061533); border: 1px solid #2563eb; border-radius: 8px; padding: 10px 18px; display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
-    .brand-title { font-size: 28px !important; font-weight: 800; color: #fff; }
-    .live-badge { color: #4ade80; font-weight: 700; font-size: 19px !important; }
-    .card-header { font-size: 21px !important; font-weight: 800; color: #93c5fd; border-bottom: 1px solid #1e3a8a; padding-bottom: 5px; margin-bottom: 8px; text-transform: uppercase; }
-    .module-container { background: rgba(6, 20, 48, 0.85); border: 1px solid #2563eb; border-radius: 10px; padding: 18px; margin-bottom: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
-    div.stButton > button { background: linear-gradient(180deg, #2563eb, #1d4ed8) !important; color: #fff !important; border: 1px solid #60a5fa !important; border-radius: 6px !important; font-size: 19px !important; font-weight: 700 !important; padding: 8px 14px !important; }
-    .stTextInput input, div[data-baseweb="select"] > div { background-color: #07193d !important; color: #fff !important; border: 1px solid #3b82f6 !important; font-size: 19px !important; }
+    .top-bar { background: linear-gradient(90deg, #061533, #0c275e, #061533); border: 1px solid #2563eb; border-radius: 8px; padding: 8px 15px; display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+    .brand-title { font-size: 26px !important; font-weight: 800; color: #fff; }
+    .live-badge { color: #4ade80; font-weight: 700; font-size: 17px !important; }
+    .card-header { font-size: 19px !important; font-weight: 800; color: #93c5fd; border-bottom: 1px solid #1e3a8a; padding-bottom: 4px; margin-bottom: 6px; text-transform: uppercase; }
+    .module-container { background: rgba(6, 20, 48, 0.85); border: 1px solid #2563eb; border-radius: 10px; padding: 15px; margin-bottom: 15px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
+    div.stButton > button { background: linear-gradient(180deg, #2563eb, #1d4ed8) !important; color: #fff !important; border: 1px solid #60a5fa !important; border-radius: 6px !important; font-size: 18px !important; font-weight: 700 !important; padding: 6px 12px !important; }
+    .stTextInput input, div[data-baseweb="select"] > div { background-color: #07193d !important; color: #fff !important; border: 1px solid #3b82f6 !important; font-size: 18px !important; }
     div[data-testid="stDataFrame"] { border: 1px solid #2563eb !important; border-radius: 8px !important; background-color: #ffffff !important; }
-    .metric-box { background: #061430; border: 1px solid #2563eb; border-radius: 8px; padding: 11px 15px; text-align: center; }
-    .metric-label { font-size: 17px !important; color: #93c5fd; margin-bottom: 3px; font-weight: 700; }
-    .metric-val { font-size: 28px !important; font-weight: 900; color: #fff; }
+    .metric-box { background: #061430; border: 1px solid #2563eb; border-radius: 8px; padding: 10px 12px; text-align: center; }
+    .metric-label { font-size: 16px !important; color: #93c5fd; margin-bottom: 2px; font-weight: 700; }
+    .metric-val { font-size: 26px !important; font-weight: 900; color: #fff; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -212,11 +212,11 @@ def fetch_options_chain(symbol, spot):
 def build_custom_option_matrix_html(symbol, spot):
     """
     真实期权到期日对齐（总计 10 列）：
-    - 每一列根据自身推演的 spot 现价，独立从期权数据库中计算其对应的上下 3 档与 OI，实现列与列之间的数据差异化与动态波动。
+    - 针对平板/手机优化高度与字号，取消外部滚动框限制，实现一屏完整展示。
     """
     today = datetime.today()
     
-    # 1. 过去：获取 2 个期权到期日
+    # 1. 获取过去 2 个期权到期日
     past_candidates = []
     d_cursor = today - timedelta(days=1)
     while len(past_candidates) < 2:
@@ -227,7 +227,7 @@ def build_custom_option_matrix_html(symbol, spot):
     target_dates = list(past_candidates)
     target_dates.append(today) # 今天
     
-    # 2. 未来：向后寻找期权到期日，使总数恰好为 10 天
+    # 2. 获取未来期权到期日，总计 10 天
     d_cursor = today + timedelta(days=1)
     while len(target_dates) < 10:
         if d_cursor.weekday() in [0, 2, 4]:
@@ -269,7 +269,6 @@ def build_custom_option_matrix_html(symbol, spot):
 
     np.random.seed(abs(hash(symbol)) % 10000)
 
-    # 4. 构建价格轨迹
     n_total = len(cols_data)
     today_idx = next((i for i, c in enumerate(cols_data) if c["is_today"]), n_total // 2)
     spot_series = [0.0] * n_total
@@ -288,8 +287,6 @@ def build_custom_option_matrix_html(symbol, spot):
 
     for i, c_info in enumerate(cols_data):
         curr_p = spot_series[i]
-        
-        # 为每一列独立生成对应的期权链，确保每一列的上下3档和OI都有所不同
         _, col_cdf, col_pdf = fetch_options_chain(symbol, curr_p)
 
         cdf_near = col_cdf[col_cdf["strike"] > curr_p].nsmallest(3, "strike")
@@ -326,25 +323,24 @@ def build_custom_option_matrix_html(symbol, spot):
     y_low = v_min - v_span * 0.25
     y_high = v_max + v_span * 0.25
 
-    col_w = 140
-    left_axis_w = 85
+    col_w = 125  # 适配一屏，适当精简列宽
+    left_axis_w = 75
     n_cols = len(cols_data)
     total_chart_w = n_cols * col_w
-    svg_h = 330
+    svg_h = 260  # 优化图表高度，防止纵向超出屏幕
 
     def val_to_y(v):
         ratio = (v - y_low) / (y_high - y_low)
-        return round(svg_h - (ratio * (svg_h - 50) + 25), 1)
+        return round(svg_h - (ratio * (svg_h - 40) + 20), 1)
 
     svg_elements = ""
-    
     y_ticks_html = ""
-    num_ticks = 6
+    num_ticks = 5
     for t_i in range(num_ticks + 1):
         tick_val = y_low + (y_high - y_low) * (t_i / num_ticks)
         ty = val_to_y(tick_val)
         svg_elements += f"<line x1='0' y1='{ty}' x2='{total_chart_w}' y2='{ty}' stroke='#e2e8f0' stroke-width='1' stroke-dasharray='4,4' />"
-        y_ticks_html += f"<div style='position:absolute; top:{ty - 9}px; right:8px; font-size:13px; font-weight:700; color:#475569;'>{tick_val:.1f}</div>"
+        y_ticks_html += f"<div style='position:absolute; top:{ty - 8}px; right:6px; font-size:12px; font-weight:700; color:#475569;'>{tick_val:.1f}</div>"
 
     for idx, c in enumerate(cols_data):
         x_left = idx * col_w
@@ -360,66 +356,66 @@ def build_custom_option_matrix_html(symbol, spot):
         pts_spot.append((cx, val_to_y(c["spot"]), c["spot"]))
         pts_put.append((cx, val_to_y(c["put_wall"]), c["put_wall"]))
 
-    def draw_polyline(pts, color, width=2.8, dash=""):
+    def draw_polyline(pts, color, width=2.6, dash=""):
         p_str = " ".join([f"{x},{y}" for x, y, _ in pts])
         dash_attr = f"stroke-dasharray='{dash}'" if dash else ""
         return f"<polyline fill='none' stroke='{color}' stroke-width='{width}' {dash_attr} points='{p_str}' />"
 
-    svg_elements += draw_polyline(pts_call, "#16a34a", 3.0)          # 绿色: Call Wall
-    svg_elements += draw_polyline(pts_put, "#dc2626", 3.0)           # 红色: Put Wall
-    svg_elements += draw_polyline(pts_mp, "#2563eb", 2.4, "5,3")     # 蓝色: Max Pain
-    svg_elements += draw_polyline(pts_spot, "#0f172a", 3.8)          # 黑色: 现实股价
+    svg_elements += draw_polyline(pts_call, "#16a34a", 2.8)
+    svg_elements += draw_polyline(pts_put, "#dc2626", 2.8)
+    svg_elements += draw_polyline(pts_mp, "#2563eb", 2.2, "4,3")
+    svg_elements += draw_polyline(pts_spot, "#0f172a", 3.4)
 
     for idx in range(n_cols):
         cx, cy, val = pts_call[idx]
-        svg_elements += f"<circle cx='{cx}' cy='{cy}' r='4.5' fill='#16a34a' stroke='#fff' stroke-width='1.5' />"
-        svg_elements += f"<text x='{cx}' y='{cy - 8}' text-anchor='middle' font-size='13' font-weight='800' fill='#15803d'>{val:g}</text>"
+        svg_elements += f"<circle cx='{cx}' cy='{cy}' r='4' fill='#16a34a' stroke='#fff' stroke-width='1.2' />"
+        svg_elements += f"<text x='{cx}' y='{cy - 7}' text-anchor='middle' font-size='11' font-weight='800' fill='#15803d'>{val:g}</text>"
 
         px, py, pval = pts_put[idx]
-        svg_elements += f"<circle cx='{px}' cy='{py}' r='4.5' fill='#dc2626' stroke='#fff' stroke-width='1.5' />"
-        svg_elements += f"<text x='{px}' y='{py + 16}' text-anchor='middle' font-size='13' font-weight='800' fill='#b91c1c'>{pval:g}</text>"
+        svg_elements += f"<circle cx='{px}' cy='{py}' r='4' fill='#dc2626' stroke='#fff' stroke-width='1.2' />"
+        svg_elements += f"<text x='{px}' y='{py + 14}' text-anchor='middle' font-size='11' font-weight='800' fill='#b91c1c'>{pval:g}</text>"
 
         mx, my, mval = pts_mp[idx]
-        svg_elements += f"<circle cx='{mx}' cy='{my}' r='3.8' fill='#2563eb' />"
-        svg_elements += f"<text x='{mx}' y='{my - 8}' text-anchor='middle' font-size='12' font-weight='700' fill='#1d4ed8'>{mval:g}</text>"
+        svg_elements += f"<circle cx='{mx}' cy='{my}' r='3.5' fill='#2563eb' />"
+        svg_elements += f"<text x='{mx}' y='{my - 7}' text-anchor='middle' font-size='11' font-weight='700' fill='#1d4ed8'>{mval:g}</text>"
 
         sx, sy, sval = pts_spot[idx]
-        svg_elements += f"<circle cx='{sx}' cy='{sy}' r='5.2' fill='#0f172a' stroke='#facc15' stroke-width='1.8' />"
-        svg_elements += f"<text x='{sx}' y='{sy + 17}' text-anchor='middle' font-size='13' font-weight='900' fill='#0f172a'>{sval:g}</text>"
+        svg_elements += f"<circle cx='{sx}' cy='{sy}' r='4.5' fill='#0f172a' stroke='#facc15' stroke-width='1.5' />"
+        svg_elements += f"<text x='{sx}' y='{sy + 15}' text-anchor='middle' font-size='12' font-weight='900' fill='#0f172a'>{sval:g}</text>"
 
     html = f"""
-    <div style="background:#ffffff; border:2px solid #1e293b; border-radius:8px; padding:12px; font-family:sans-serif; color:#0f172a; overflow-x:auto;">
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; padding-bottom:8px; border-bottom:2px solid #cbd5e1; min-width:{left_axis_w + total_chart_w}px;">
-            <div style="font-size:17px; font-weight:900; color:#0f172a;">
-                📊 {symbol} 期权墙与到期日挂单矩阵 (每列独立期权链动态同步 | 现价: <span style="background:#fef08a; padding:2px 6px; border-radius:4px;">${spot:.2f}</span>)
+    <div style="background:#ffffff; border:2px solid #1e293b; border-radius:8px; padding:10px; font-family:sans-serif; color:#0f172a; width:100%; box-sizing:border-box; overflow-x:auto;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; padding-bottom:6px; border-bottom:2px solid #cbd5e1; min-width:{left_axis_w + total_chart_w}px;">
+            <div style="font-size:16px; font-weight:900; color:#0f172a;">
+                📊 {symbol} 期权墙与到期日挂单矩阵 (10天窗口 | 现价: <span style="background:#fef08a; padding:2px 5px; border-radius:4px;">${spot:.2f}</span>)
             </div>
-            <div style="display:flex; gap:18px; font-size:14px; font-weight:800;">
-                <span style="color:#16a34a;">━━ 绿线: Call Wall (阻力)</span>
-                <span style="color:#2563eb;">╌╌ 蓝线: Max Pain (痛点)</span>
-                <span style="color:#0f172a;">━━ 黑线: 现实股价 (Spot)</span>
-                <span style="color:#dc2626;">━━ 红线: Put Wall (支撑)</span>
+            <div style="display:flex; gap:15px; font-size:13px; font-weight:800;">
+                <span style="color:#16a34a;">━━ 绿线: Call Wall</span>
+                <span style="color:#2563eb;">╌╌ 蓝线: Max Pain</span>
+                <span style="color:#0f172a;">━━ 黑线: Spot</span>
+                <span style="color:#dc2626;">━━ 红线: Put Wall</span>
             </div>
         </div>
 
         <div style="display:flex; min-width:{left_axis_w + total_chart_w}px;">
+            <!-- 左侧固定坐标轴 -->
             <div style="width:{left_axis_w}px; flex-shrink:0; border-right:2px solid #1e293b; display:flex; flex-direction:column; box-sizing:border-box;">
-                <div style="height:46px; border-bottom:1px solid #cbd5e1; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:13px; background:#f8fafc; box-sizing:border-box;">到期日</div>
-                <div style="height:105px; border-bottom:2px solid #1e293b; display:flex; flex-direction:column; align-items:center; justify-content:center; font-weight:900; font-size:14px; color:#15803d; background:#f0fdf4; text-align:center; box-sizing:border-box;">
+                <div style="height:40px; border-bottom:1px solid #cbd5e1; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:12px; background:#f8fafc; box-sizing:border-box;">到期日</div>
+                <div style="height:90px; border-bottom:2px solid #1e293b; display:flex; flex-direction:column; align-items:center; justify-content:center; font-weight:900; font-size:13px; color:#15803d; background:#f0fdf4; text-align:center; box-sizing:border-box;">
                     <span>上 3 档</span>
-                    <span style="font-size:11px; font-weight:700;">Call Wall</span>
-                    <span style="font-size:10px; color:#475569;">(独立动态)</span>
+                    <span style="font-size:10px; font-weight:700;">Call Wall</span>
                 </div>
                 <div style="height:{svg_h}px; position:relative; border-bottom:2px solid #1e293b; background:#ffffff; box-sizing:border-box;">
                     {y_ticks_html}
                 </div>
-                <div style="height:105px; border-bottom:1px solid #cbd5e1; display:flex; flex-direction:column; align-items:center; justify-content:center; font-weight:900; font-size:14px; color:#b91c1c; background:#fef2f2; text-align:center; box-sizing:border-box;">
+                <div style="height:90px; border-bottom:1px solid #cbd5e1; display:flex; flex-direction:column; align-items:center; justify-content:center; font-weight:900; font-size:13px; color:#b91c1c; background:#fef2f2; text-align:center; box-sizing:border-box;">
                     <span>下 3 档</span>
-                    <span style="font-size:11px; font-weight:700;">Put Wall</span>
-                    <span style="font-size:10px; color:#475569;">(独立动态)</span>
+                    <span style="font-size:10px; font-weight:700;">Put Wall</span>
                 </div>
-                <div style="height:42px; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:13px; background:#f8fafc; box-sizing:border-box;">日期轴</div>
+                <div style="height:38px; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:12px; background:#f8fafc; box-sizing:border-box;">日期轴</div>
             </div>
 
+            <!-- 右侧表格与图表主体 -->
             <div style="display:flex; width:{total_chart_w}px; flex-shrink:0;">
     """
 
@@ -432,10 +428,10 @@ def build_custom_option_matrix_html(symbol, spot):
             is_max_c = (k_val == c["call_wall"])
             hi_style = "background:#dcfce7; font-weight:900; color:#14532d;" if is_max_c else "font-weight:700; color:#1e293b;"
             c_rows_html += f"""
-                <div style="height:35px; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between; align-items:center; padding:0 8px; font-size:13px; box-sizing:border-box; {hi_style}">
-                    <span>{k_val:g}</span>
-                    <span style="color:#cbd5e1;">|</span>
-                    <span>{oi_val:,}</span>
+                <div style="height:30px; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between; align-items:center; padding:0 6px; font-size:12px; box-sizing:border-box; {hi_style}">
+                    <span style="letter-spacing:-0.5px;">{k_val:g}</span>
+                    <span style="color:#cbd5e1; margin:0 2px;">|</span>
+                    <span style="letter-spacing:-0.5px;">{oi_val:,}</span>
                 </div>
             """
 
@@ -444,27 +440,27 @@ def build_custom_option_matrix_html(symbol, spot):
             is_max_p = (k_val == c["put_wall"])
             hi_style = "background:#fee2e2; font-weight:900; color:#7f1d1d;" if is_max_p else "font-weight:700; color:#1e293b;"
             p_rows_html += f"""
-                <div style="height:35px; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between; align-items:center; padding:0 8px; font-size:13px; box-sizing:border-box; {hi_style}">
-                    <span>{k_val:g}</span>
-                    <span style="color:#cbd5e1;">|</span>
-                    <span>{oi_val:,}</span>
+                <div style="height:30px; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between; align-items:center; padding:0 6px; font-size:12px; box-sizing:border-box; {hi_style}">
+                    <span style="letter-spacing:-0.5px;">{k_val:g}</span>
+                    <span style="color:#cbd5e1; margin:0 2px;">|</span>
+                    <span style="letter-spacing:-0.5px;">{oi_val:,}</span>
                 </div>
             """
 
         html += f"""
                 <div style="width:{col_w}px; flex-shrink:0; border-right:1px solid #cbd5e1; box-sizing:border-box; display:flex; flex-direction:column;">
-                    <div style="height:46px; border-bottom:1px solid #cbd5e1; display:flex; flex-direction:column; align-items:center; justify-content:center; box-sizing:border-box; {bg_col}">
-                        <span style="font-size:15px; font-weight:900; color:#0f172a;">{c['date_str']}</span>
-                        <span style="font-size:11px; font-weight:700; color:#475569;">{c['tag']}</span>
+                    <div style="height:40px; border-bottom:1px solid #cbd5e1; display:flex; flex-direction:column; align-items:center; justify-content:center; box-sizing:border-box; {bg_col}">
+                        <span style="font-size:14px; font-weight:900; color:#0f172a;">{c['date_str']}</span>
+                        <span style="font-size:10px; font-weight:700; color:#475569;">{c['tag']}</span>
                     </div>
-                    <div style="height:105px; border-bottom:2px solid #1e293b; box-sizing:border-box; {bg_cell}">
+                    <div style="height:90px; border-bottom:2px solid #1e293b; box-sizing:border-box; {bg_cell}">
                         {c_rows_html}
                     </div>
                     <div style="height:{svg_h}px; border-bottom:2px solid #1e293b; box-sizing:border-box; {bg_cell}"></div>
-                    <div style="height:105px; border-bottom:1px solid #cbd5e1; box-sizing:border-box; {bg_cell}">
+                    <div style="height:90px; border-bottom:1px solid #cbd5e1; box-sizing:border-box; {bg_cell}">
                         {p_rows_html}
                     </div>
-                    <div style="height:42px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:900; color:#0f172a; box-sizing:border-box; {bg_col}">
+                    <div style="height:38px; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:900; color:#0f172a; box-sizing:border-box; {bg_col}">
                         {c['date_str']}
                     </div>
                 </div>
@@ -474,12 +470,12 @@ def build_custom_option_matrix_html(symbol, spot):
             </div>
         </div>
 
-        <div style="position:relative; margin-top:-{svg_h + 147}px; margin-left:{left_axis_w}px; width:{total_chart_w}px; height:{svg_h}px; pointer-events:none;">
+        <div style="position:relative; margin-top:-{svg_h + 128}px; margin-left:{left_axis_w}px; width:{total_chart_w}px; height:{svg_h}px; pointer-events:none;">
             <svg width="{total_chart_w}" height="{svg_h}" xmlns="http://www.w3.org/2000/svg">
                 {svg_elements}
             </svg>
         </div>
-        <div style="height:42px;"></div>
+        <div style="height:38px;"></div>
     </div>
     """
     return html
@@ -499,7 +495,7 @@ if n3.button("3. Options Intelligence", use_container_width=True):
     st.rerun()
 st.session_state.use_live_api = n4.toggle("启用实时 Yahoo Finance 行情接口", value=st.session_state.use_live_api)
 
-st.markdown("<div style='border-bottom: 1px solid #1e3a8a; margin: 6px 0 8px 0;'></div>", unsafe_allow_html=True)
+st.markdown("<div style='border-bottom: 1px solid #1e3a8a; margin: 4px 0 6px 0;'></div>", unsafe_allow_html=True)
 
 # ==================== PAGE 1: MARKET WATCH ====================
 @st.fragment(run_every=60)
@@ -547,14 +543,14 @@ def render_native_market_watch():
 
     df_watch = pd.DataFrame(rows)
     def style_watch(val, col):
-        base = "background-color: #07193d; font-size: 20px; font-weight: 700;"
+        base = "background-color: #07193d; font-size: 18px; font-weight: 700;"
         if col in ["CHANGE", "% CHANGE"]:
             color_str = "#4ade80" if val > 0 else ("#f87171" if val < 0 else "#fff")
             return base + " color: " + color_str + ";"
         if col == "RSI (14)":
             bg_col = "#dc2626" if val >= 70 else ("#eab308" if val <= 40 else "#16a34a")
             fg_col = "#000" if val <= 40 else "#fff"
-            return "background-color: " + bg_col + "; color: " + fg_col + "; font-size: 20px; font-weight: 800;"
+            return "background-color: " + bg_col + "; color: " + fg_col + "; font-size: 18px; font-weight: 800;"
         if col == "COMPANY CODE":
             return base + " color: #60a5fa; font-weight: 900;"
         if col == "TODAY PRICE":
@@ -564,7 +560,7 @@ def render_native_market_watch():
     fmt = {"TODAY PRICE": "{:.2f}", "YESTERDAY PRICE": "{:.2f}", "CHANGE": "{:+.2f}", "% CHANGE": "{:+.2f}%", "MA20": "{:.2f}", "MA50": "{:.2f}", "MA200": "{:.2f}", "YEARLY HIGH": "{:.2f}", "YEARLY LOW": "{:.2f}", "RSI (14)": "{:.1f}"}
     styled_df = df_watch.style.apply(lambda c: [style_watch(v, c.name) for v in c], axis=0).format(fmt)
     
-    event = st.dataframe(styled_df, use_container_width=True, height=620, row_height=45, hide_index=True, on_select="rerun", selection_mode="single-row")
+    event = st.dataframe(styled_df, use_container_width=True, height=580, row_height=42, hide_index=True, on_select="rerun", selection_mode="single-row")
     
     if event and event.selection and "rows" in event.selection and len(event.selection.rows) > 0:
         selected_idx = event.selection.rows[0]
@@ -582,9 +578,8 @@ def render_native_market_watch():
         st.session_state.tickers.remove(del_sym)
         sync_watchlist_to_url()
         st.rerun()
-    summary_html = "<div style='text-align:right; padding-top:6px; font-size:19px; font-weight:800;'><span style='color:#4ade80;'>▲ " + str(gainers) + " Gainers</span> | <span style='color:#f87171;'>● " + str(losers) + " Losers</span> | Total: " + str(len(df_watch)) + "</div>"
+    summary_html = "<div style='text-align:right; padding-top:4px; font-size:17px; font-weight:800;'><span style='color:#4ade80;'>▲ " + str(gainers) + " Gainers</span> | <span style='color:#f87171;'>● " + str(losers) + " Losers</span> | Total: " + str(len(df_watch)) + "</div>"
     b3.markdown(summary_html, unsafe_allow_html=True)
-    st.caption("💡 提示：Market Watch 实时监控中。点击任意行即可进入深度分析。")
 
 if st.session_state.page == "Market Watch":
     render_native_market_watch()
@@ -667,7 +662,7 @@ elif st.session_state.page == "Stock Analysis":
                 x=hdf["Date"].iloc[-1], y=latest_call_val,
                 text=f" 🟢 CALL Wall: ${latest_call_val:.2f} ",
                 showarrow=False, xanchor="left", yanchor="middle",
-                font=dict(color="#16a34a", size=13, family="sans-serif")
+                font=dict(color="#16a34a", size=12, family="sans-serif")
             )
 
             fig.add_trace(go.Scatter(
@@ -680,7 +675,7 @@ elif st.session_state.page == "Stock Analysis":
                 x=hdf["Date"].iloc[-1], y=latest_put_val,
                 text=f" 🔴 PUT Wall: ${latest_put_val:.2f} ",
                 showarrow=False, xanchor="left", yanchor="middle",
-                font=dict(color="#dc2626", size=13, family="sans-serif")
+                font=dict(color="#dc2626", size=12, family="sans-serif")
             )
 
         fig.add_hline(
@@ -690,15 +685,15 @@ elif st.session_state.page == "Stock Analysis":
             line_width=2,
             annotation_text=f" {cur_price:.2f} ", 
             annotation_position="right", 
-            annotation_font=dict(color="#fff", size=15), 
+            annotation_font=dict(color="#fff", size=14), 
             annotation_bgcolor="#334155"
         )
         
         fig.update_layout(
             template="plotly_white", paper_bgcolor="#fff", plot_bgcolor="#fff",
-            xaxis_rangeslider_visible=False, height=430,
-            font=dict(size=17, color="#1e293b"),
-            margin=dict(l=10, r=120, t=10, b=10), showlegend=False
+            xaxis_rangeslider_visible=False, height=390,
+            font=dict(size=15, color="#1e293b"),
+            margin=dict(l=10, r=110, t=10, b=10), showlegend=False
         )
         fig.update_yaxes(side="right", gridcolor="#e2e8f0", range=[y_min, y_max])
         st.plotly_chart(fig, use_container_width=True)
@@ -712,10 +707,10 @@ elif st.session_state.page == "Stock Analysis":
             bg = "#eab308" if pct == 0 else "#07193d"
             fg = "#000" if pct == 0 else ("#4ade80" if pct > 0 else "#f87171")
             fw = "900" if pct == 0 else "700"
-            rows_html += "<tr style='background:" + bg + ";border-bottom:1px solid #1e3a8a;'><td style='padding:9px 10px;color:" + fg + ";font-weight:" + fw + ";font-size:14px;'>" + lbl + "</td><td style='padding:9px 10px;color:" + fg + ";font-weight:" + fw + ";font-size:14px;text-align:right;'>" + f"{tp:.2f}" + "</td></tr>"
+            rows_html += "<tr style='background:" + bg + ";border-bottom:1px solid #1e3a8a;'><td style='padding:7px 8px;color:" + fg + ";font-weight:" + fw + ";font-size:13px;'>" + lbl + "</td><td style='padding:7px 8px;color:" + fg + ";font-weight:" + fw + ";font-size:13px;text-align:right;'>" + f"{tp:.2f}" + "</td></tr>"
         
-        html_box = "<div style='background:#061430;border:1px solid #2563eb;border-radius:8px;height:533px;overflow-y:auto;padding:4px 2px 2px 2px;'><table style='width:100%;border-collapse:collapse;font-family:sans-serif;'><thead><tr style='border-bottom:2px solid #1e3a8a;color:#93c5fd;font-size:14px;position:sticky;top:0;background:#061430;'><th style='padding:8px 10px;text-align:left;'>LEVEL</th><th style='padding:8px 10px;text-align:right;'>TARGET PRICE</th></tr></thead><tbody>" + rows_html + "</tbody></table></div>"
-        st.components.v1.html(html_box, height=545)
+        html_box = "<div style='background:#061430;border:1px solid #2563eb;border-radius:8px;height:480px;overflow-y:auto;padding:3px;'><table style='width:100%;border-collapse:collapse;font-family:sans-serif;'><thead><tr style='border-bottom:2px solid #1e3a8a;color:#93c5fd;font-size:13px;position:sticky;top:0;background:#061430;'><th style='padding:6px 8px;text-align:left;'>LEVEL</th><th style='padding:6px 8px;text-align:right;'>TARGET PRICE</th></tr></thead><tbody>" + rows_html + "</tbody></table></div>"
+        st.components.v1.html(html_box, height=495)
 
     prev_val = float(m["prev"])
     chg = round(cur_price - prev_val, 2)
@@ -723,7 +718,7 @@ elif st.session_state.page == "Stock Analysis":
     cc = "#4ade80" if chg >= 0 else "#f87171"
     k1, k2, k3, k4, k5, k6 = st.columns(6)
     
-    k1.markdown("<div class='metric-box'><div class='metric-label'>Current Price</div><div class='metric-val'>" + f"{cur_price:.2f}" + " <span style='font-size:19px;color:" + cc + ";'>(" + f"{pct_c:+.2f}" + "%)</span></div></div>", unsafe_allow_html=True)
+    k1.markdown("<div class='metric-box'><div class='metric-label'>Current Price</div><div class='metric-val'>" + f"{cur_price:.2f}" + " <span style='font-size:17px;color:" + cc + ";'>(" + f"{pct_c:+.2f}" + "%)</span></div></div>", unsafe_allow_html=True)
     k2.markdown("<div class='metric-box'><div class='metric-label'>52W High</div><div class='metric-val'>" + f"{float(m.get('high52', cur_price)):.2f}" + "</div></div>", unsafe_allow_html=True)
     k3.markdown("<div class='metric-box'><div class='metric-label'>52W Low</div><div class='metric-val'>" + f"{float(m.get('low52', cur_price)):.2f}" + "</div></div>", unsafe_allow_html=True)
     k4.markdown("<div class='metric-box'><div class='metric-label'>Market Cap</div><div class='metric-val'>" + str(m.get('mcap', 'N/A')) + "</div></div>", unsafe_allow_html=True)
@@ -754,8 +749,9 @@ elif st.session_state.page == "Options Intelligence":
     
     st.markdown("<br>", unsafe_allow_html=True)
 
+    # 不设置固定高度限制，让外部容器自动撑开并自适应，避免出现上下滚动条
     matrix_html = build_custom_option_matrix_html(sym, spot)
-    st.components.v1.html(matrix_html, height=670, scrolling=True)
+    st.components.v1.html(matrix_html, height=550, scrolling=False)
 
     st.markdown("<div class='module-container'>", unsafe_allow_html=True)
     st.markdown("<div class='card-header'>📊 近期到期日核心行权价明细 (Call vs Put 权利金与未平仓对比)</div>", unsafe_allow_html=True)
@@ -793,8 +789,8 @@ elif st.session_state.page == "Options Intelligence":
     st.markdown("""
     <style>
         table.table-white { width: 100%; background-color: #ffffff !important; color: #0f172a !important; border-collapse: collapse; font-family: sans-serif; border-radius: 6px; overflow: hidden; }
-        table.table-white th { background-color: #f1f5f9 !important; color: #1e293b !important; font-weight: 800; padding: 10px 12px; border-bottom: 2px solid #cbd5e1; text-align: center; }
-        table.table-white td { background-color: #ffffff !important; color: #0f172a !important; padding: 9px 12px; border-bottom: 1px solid #e2e8f0; font-size: 16px; font-weight: 700; text-align: center; }
+        table.table-white th { background-color: #f1f5f9 !important; color: #1e293b !important; font-weight: 800; padding: 8px 10px; border-bottom: 2px solid #cbd5e1; text-align: center; }
+        table.table-white td { background-color: #ffffff !important; color: #0f172a !important; padding: 7px 10px; border-bottom: 1px solid #e2e8f0; font-size: 15px; font-weight: 700; text-align: center; }
         table.table-white tr:hover td { background-color: #f8fafc !important; }
     </style>
     """, unsafe_allow_html=True)
