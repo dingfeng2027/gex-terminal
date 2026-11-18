@@ -211,14 +211,13 @@ def fetch_options_chain(symbol, spot):
 
 def build_custom_option_matrix_html(symbol, spot):
     """
-    优化版：
-    - 时间轴：今天前保留 2 天 (-2, -1) -> 今天 (0) -> 未来最高到 9 天 (+2, +4, +6, +9)
-    - 价格档位：上3档锁定 155, 160, 165，下3档锁定 140, 145, 150 阶梯标准
-    - 黑线（现实股价）全程置顶、完美贯穿所有列
+    严格限制总列数正好为 10 天：
+    - 从前天开始：前天(-2), 昨天(-1), 今天(0), +1天, +2天, +3天, +4天, +5天, +6天, +7天（共正好 10 列）
+    - 上3档锁定 155, 160, 165，下3档锁定 140, 145, 150
     """
     today = datetime.today()
-    # 时间轴：前天(-2)、昨天(-1)、今天(0)、未来至 9 天内的到期日节点 (+2, +4, +6, +9)
-    offsets = [-2, -1, 0, 2, 4, 6, 9]
+    # 严格固定 10 个时间节点
+    offsets = [-2, -1, 0, 1, 2, 3, 4, 5, 6, 7]
     dates_info = []
     for off in offsets:
         dt = today + timedelta(days=off)
@@ -241,18 +240,18 @@ def build_custom_option_matrix_html(symbol, spot):
     spot_series = [0.0] * n_total
     spot_series[today_idx] = spot
 
-    # 往回推 2 天
+    # 往回推前天、昨天
     for i in range(today_idx - 1, -1, -1):
-        spot_series[i] = round(spot_series[i + 1] * (1 - np.random.uniform(-0.006, 0.010)), 2)
+        spot_series[i] = round(spot_series[i + 1] * (1 - np.random.uniform(-0.005, 0.009)), 2)
 
-    # 往后推至 9 天
+    # 往后推至 +7 天
     for i in range(today_idx + 1, n_total):
-        spot_series[i] = round(spot_series[i - 1] * (1 + np.random.uniform(-0.004, 0.012)), 2)
+        spot_series[i] = round(spot_series[i - 1] * (1 + np.random.uniform(-0.004, 0.011)), 2)
 
     for i, info in enumerate(dates_info):
         curr_p = spot_series[i]
         
-        # 严格固定您要求的行权价档位：上3档 (155, 160, 165) / 下3档 (140, 145, 150)
+        # 锁定行权价档位：上3档 (155, 160, 165) / 下3档 (140, 145, 150)
         c1_k, c2_k, c3_k = 165.0, 160.0, 155.0
         c1_oi = int(np.random.randint(22000, 31000))
         c2_oi = int(np.random.randint(25000, 34000))
@@ -359,7 +358,7 @@ def build_custom_option_matrix_html(symbol, spot):
     <div style="background:#ffffff; border:2px solid #1e293b; border-radius:8px; padding:12px; font-family:sans-serif; color:#0f172a; overflow-x:auto;">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; padding-bottom:8px; border-bottom:2px solid #cbd5e1; min-width:{left_axis_w + total_chart_w}px;">
             <div style="font-size:17px; font-weight:900; color:#0f172a;">
-                📊 {symbol} 期权墙与到期日挂单矩阵 (现价: <span style="background:#fef08a; padding:2px 6px; border-radius:4px;">${spot:.2f}</span>)
+                📊 {symbol} 期权墙与到期日挂单矩阵 (共 10 天窗口 | 现价: <span style="background:#fef08a; padding:2px 6px; border-radius:4px;">${spot:.2f}</span>)
             </div>
             <div style="display:flex; gap:18px; font-size:14px; font-weight:800;">
                 <span style="color:#16a34a;">━━ 绿线: Call Wall (阻力)</span>
