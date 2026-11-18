@@ -457,7 +457,7 @@ elif st.session_state.page == "Stock Analysis":
     k5.markdown("<div class='metric-box'><div class='metric-label'>P/E / EPS</div><div class='metric-val'>" + (str(m.get('pe', 'N/A')) if m.get('pe') else 'N/A') + " / " + str(m.get('eps', 'N/A')) + "</div></div>", unsafe_allow_html=True)
     k6.markdown("<div class='metric-box'><div class='metric-label'>RSI (14)</div><div class='metric-val' style='color:#38bdf8;'>" + f"{float(m.get('rsi', 50.0)):.1f}" + "</div></div>", unsafe_allow_html=True)
 
-# ==================== PAGE 3: OPTIONS INTELLIGENCE ====================
+# ==================== PAGE 3: OPTIONS INTELLIGENCE (纯白背景 + 四色规范 + 上下矩阵) ====================
 elif st.session_state.page == "Options Intelligence":
     o1, o2, o3, o4 = st.columns([2.3, 2.1, 1.5, 1.5])
     o1.markdown("### CAPITAL QUANT — OPTIONS INTELLIGENCE V2.0")
@@ -482,7 +482,7 @@ elif st.session_state.page == "Options Intelligence":
     st.markdown("<br>", unsafe_allow_html=True)
 
     # -------------------------------------------------------------------------
-    # 核心看板：多维时间轴走势图（Call Wall 在上绿色，Put Wall 在下红色）
+    # 核心看板：多维时间轴走势图（严格白色背景、四色区分）
     # -------------------------------------------------------------------------
     st.markdown("<div class='module-container'>", unsafe_allow_html=True)
     st.markdown("<div class='card-header'>🎯 挂单决策核心看板：多维期权墙与走势轨迹 (Past 3 Expiries → Next 30 Days)</div>", unsafe_allow_html=True)
@@ -498,7 +498,6 @@ elif st.session_state.page == "Options Intelligence":
     noise = np.random.normal(0, spot * 0.01, len(timeline_dates))
     
     history_spot = base_trend + noise
-    # 修正：Call Wall 设在上方（绿色），Put Wall 设在下方（红色）
     call_wall_line = history_spot * 1.07 + spot * 0.02
     put_wall_line = history_spot * 0.93 - spot * 0.02
     max_pain_line = history_spot * 0.99 + spot * 0.005
@@ -507,38 +506,39 @@ elif st.session_state.page == "Options Intelligence":
     # 1. Call Wall 阻力线 (绿色 - 上方)
     fig_multi.add_trace(go.Scatter(
         x=timeline_dates, y=call_wall_line, mode='lines+markers',
-        name='Call Wall (上方阻力 - 绿)', line=dict(color='#22c55e', width=3), marker=dict(size=6)
+        name='Call Wall (上方阻力 - 绿)', line=dict(color='#16a34a', width=3), marker=dict(size=6, color='#16a34a')
     ))
     # 2. Put Wall 支撑线 (红色 - 下方)
     fig_multi.add_trace(go.Scatter(
         x=timeline_dates, y=put_wall_line, mode='lines+markers',
-        name='Put Wall (下方支撑 - 红)', line=dict(color='#ef4444', width=3), marker=dict(size=6),
-        fill='tonexty', fillcolor='rgba(34, 197, 94, 0.03)'
+        name='Put Wall (下方支撑 - 红)', line=dict(color='#dc2626', width=3), marker=dict(size=6, color='#dc2626'),
+        fill='tonexty', fillcolor='rgba(22, 163, 74, 0.04)'
     ))
     # 3. Max Pain 最大痛点 (蓝色)
     fig_multi.add_trace(go.Scatter(
         x=timeline_dates, y=max_pain_line, mode='lines',
-        name='Max Pain (最大痛点 - 蓝)', line=dict(color='#3b82f6', width=2.5, dash='dash')
+        name='Max Pain (最大痛点 - 蓝)', line=dict(color='#2563eb', width=2.5, dash='dash')
     ))
-    # 4. 现实股票价格 Spot (高亮白线)
+    # 4. 现实股票价格 Spot (黑色实线 + 高亮节点)
     fig_multi.add_trace(go.Scatter(
         x=timeline_dates, y=history_spot, mode='lines+markers',
-        name='Spot Price (现实股价 - 白)', line=dict(color='#ffffff', width=3.5), marker=dict(size=8, color='#facc15')
+        name='Spot Price (现实股价 - 黑)', line=dict(color='#0f172a', width=3.5), marker=dict(size=8, color='#0f172a')
     ))
 
+    # 严格采用白色背景模板 (template='plotly_white')
     fig_multi.update_layout(
-        template='plotly_dark', height=420,
-        paper_bgcolor='rgba(6,20,48,0.95)', plot_bgcolor='rgba(4,14,34,0.98)',
+        template='plotly_white', height=430,
+        paper_bgcolor='#ffffff', plot_bgcolor='#ffffff',
         margin=dict(l=10, r=10, t=30, b=10),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        yaxis=dict(title="价格 ($)", gridcolor='rgba(255,255,255,0.08)'),
-        xaxis=dict(gridcolor='rgba(255,255,255,0.05)', tickformat='%b %d')
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(color="#0f172a", size=14)),
+        yaxis=dict(title="价格 ($)", gridcolor='#e2e8f0', title_font=dict(color="#0f172a"), tickfont=dict(color="#0f172a")),
+        xaxis=dict(gridcolor='#e2e8f0', tickformat='%b %d', tickfont=dict(color="#0f172a"))
     )
     st.plotly_chart(fig_multi, use_container_width=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
     # -------------------------------------------------------------------------
-    # 上下方精细化数据面板：Top 3 最高 Call / Put Wall 结构（背景已改为白色）
+    # 上下方精细化数据面板：Top 3 最高 Call / Put Wall 结构（纯白背景表格）
     # -------------------------------------------------------------------------
     col_top_call, col_top_put = st.columns(2)
 
@@ -560,11 +560,7 @@ elif st.session_state.page == "Options Intelligence":
             })
         
         df_call_table = pd.DataFrame(call_table_data)
-        # 用 HTML/CSS 包装白底表格，确保在深色容器中完美呈现白底黑字
-        st.markdown(
-            df_call_table.to_html(index=False, classes="table-white"),
-            unsafe_allow_html=True
-        )
+        st.markdown(df_call_table.to_html(index=False, classes="table-white"), unsafe_allow_html=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
     with col_top_put:
@@ -585,13 +581,10 @@ elif st.session_state.page == "Options Intelligence":
             })
         
         df_put_table = pd.DataFrame(put_table_data)
-        st.markdown(
-            df_put_table.to_html(index=False, classes="table-white"),
-            unsafe_allow_html=True
-        )
+        st.markdown(df_put_table.to_html(index=False, classes="table-white"), unsafe_allow_html=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
-    # 注入全局白底表格样式
+    # 注入白底表格样式
     st.markdown("""
     <style>
         table.table-white {
