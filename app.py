@@ -212,14 +212,15 @@ def fetch_options_chain(symbol, spot):
 def build_custom_option_matrix_html(symbol, spot):
     """
     真实期权到期日对齐（总计 10 列）：
-    - 前面 2 个期权到期日。
-    - 今天 1 列。
-    - 后面延伸 7 个期权到期日（包含 25/11, 27/11 等）。
+    - 动态从实时期权链数据库提取上下 3 档行权价与真实 OI 数据，与数据库完全同步。
     - 统一采用统一的盒模型与右边框，确保纵向网格线上下完美贯通。
     """
     today = datetime.today()
     
-    # 1. 过去：精确获取 2 个期权到期日 (周一、周三、周五)
+    # 1. 获取真实期权链用于动态提取行权价档位
+    _, master_cdf, master_pdf = fetch_options_chain(symbol, spot)
+    
+    # 2. 过去：精确获取 2 个期权到期日 (周一、周三、周五)
     past_candidates = []
     d_cursor = today - timedelta(days=1)
     while len(past_candidates) < 2:
@@ -230,14 +231,14 @@ def build_custom_option_matrix_html(symbol, spot):
     target_dates = list(past_candidates)
     target_dates.append(today) # 今天
     
-    # 2. 未来：向后寻找期权到期日，使总数恰好为 10 天
+    # 3. 未来：向后寻找期权到期日，使总数恰好为 10 天
     d_cursor = today + timedelta(days=1)
     while len(target_dates) < 10:
         if d_cursor.weekday() in [0, 2, 4]:
             target_dates.append(d_cursor)
         d_cursor += timedelta(days=1)
 
-    # 3. 提取真实历史行情数据
+    # 4. 提取真实历史行情数据
     hdf_hist = fetch_history_df(symbol, "1个月", spot)
     hist_dict = {}
     if not hdf_hist.empty and "Date" in hdf_hist.columns and "Close" in hdf_hist.columns:
@@ -272,13 +273,12 @@ def build_custom_option_matrix_html(symbol, spot):
 
     np.random.seed(abs(hash(symbol)) % 10000)
 
-    # 4. 构建价格轨迹
+    # 5. 构建价格轨迹
     n_total = len(cols_data)
     today_idx = next((i for i, c in enumerate(cols_data) if c["is_today"]), n_total // 2)
     spot_series = [0.0] * n_total
     spot_series[today_idx] = spot
 
-    # 填充过去列
     for i in range(today_idx - 1, -1, -1):
         d_key = cols_data[i]["date"].strftime("%Y-%m-%d")
         if d_key in hist_dict:
@@ -287,35 +287,35 @@ def build_custom_option_matrix_html(symbol, spot):
             prev_p = spot_series[i + 1]
             spot_series[i] = round(prev_p * 0.995, 2)
 
-    # 填充未来列
     for i in range(today_idx + 1, n_total):
         spot_series[i] = round(spot_series[i - 1] * (1 + np.random.uniform(-0.002, 0.006)), 2)
 
     for i, c_info in enumerate(cols_data):
         curr_p = spot_series[i]
         
-        c1_k, c2_k, c3_k = 165.0, 160.0, 155.0
-        c1_oi = int(np.random.randint(22000, 31000))
-        c2_oi = int(np.random.randint(25000, 34000))
-        c3_oi = int(np.random.randint(18000, 28000))
-        
-        call_candidates = [(c1_k, c1_oi), (c2_k, c2_oi), (c3_k, c3_oi)]
-        call_wall_val = max(call_candidates, key=lambda x: x[1])[0]
+        # 动态从期权数据库中截取贴近当前现价的上下 3 档
+        cdf_near = master_cdf[master_cdf["strike"] > curr_p].nsmallest(3, "strike")
+        if len(cdf_near) < 3:
+            cdf_near = master_cdf.tail(3)
+        c_top_list = [(float(r["strike"]), int(r["openInterest"])) for _, r in cdf_near.iterrows()]
+        # 按价格从高到低排序（上3档惯例：高价在上）
+        c_top_list = sorted(c_top_list, key=lambda x: x[0], reverse=True)
+        call_wall_val = max(c_top_list, key=lambda x: x[1])[0] if c_top_list else curr_p * 1.05
 
-        p1_k, p2_k, p3_k = 140.0, 145.0, 150.0
-        p1_oi = int(np.random.randint(15000, 25000))
-        p2_oi = int(np.random.randint(18000, 28000))
-        p3_oi = int(np.random.randint(16000, 26000))
-        
-        put_candidates = [(p1_k, p1_oi), (p2_k, p2_oi), (p3_k, p3_oi)]
-        put_wall_val = max(put_candidates, key=lambda x: x[1])[0]
+        pdf_near = master_pdf[master_pdf["strike"] < curr_p].nlargest(3, "strike")
+        if len(pdf_near) < 3:
+            pdf_near = master_pdf.head(3)
+        p_bot_list = [(float(r["strike"]), int(r["openInterest"])) for _, r in pdf_near.iterrows()]
+        # 按价格从低到高排序（下3档惯例：低价在最下）
+        p_bot_list = sorted(p_bot_list, key=lambda x: x[0])
+        put_wall_val = max(p_bot_list, key=lambda x: x[1])[0] if p_bot_list else curr_p * 0.95
 
         raw_mp = round((curr_p * 0.55 + call_wall_val * 0.25 + put_wall_val * 0.20), 2)
         if abs(raw_mp - curr_p) < 2.0:
             raw_mp = round(curr_p + 3.5, 2)
 
-        c_info["c_top"] = [(c1_k, c1_oi), (c2_k, c2_oi), (c3_k, c3_oi)]
-        c_info["p_bot"] = [(p1_k, p1_oi), (p2_k, p2_oi), (p3_k, p3_oi)]
+        c_info["c_top"] = c_top_list
+        c_info["p_bot"] = p_bot_list
         c_info["call_wall"] = call_wall_val
         c_info["max_pain"] = raw_mp
         c_info["spot"] = curr_p
@@ -395,7 +395,7 @@ def build_custom_option_matrix_html(symbol, spot):
     <div style="background:#ffffff; border:2px solid #1e293b; border-radius:8px; padding:12px; font-family:sans-serif; color:#0f172a; overflow-x:auto;">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; padding-bottom:8px; border-bottom:2px solid #cbd5e1; min-width:{left_axis_w + total_chart_w}px;">
             <div style="font-size:17px; font-weight:900; color:#0f172a;">
-                📊 {symbol} 期权墙与到期日挂单矩阵 (10天窗口: 前2天期权日 + 今天 + 后7天期权日 | 现价: <span style="background:#fef08a; padding:2px 6px; border-radius:4px;">${spot:.2f}</span>)
+                📊 {symbol} 期权墙与到期日挂单矩阵 (数据库实时同步档位 | 现价: <span style="background:#fef08a; padding:2px 6px; border-radius:4px;">${spot:.2f}</span>)
             </div>
             <div style="display:flex; gap:18px; font-size:14px; font-weight:800;">
                 <span style="color:#16a34a;">━━ 绿线: Call Wall (阻力)</span>
@@ -412,7 +412,7 @@ def build_custom_option_matrix_html(symbol, spot):
                 <div style="height:105px; border-bottom:2px solid #1e293b; display:flex; flex-direction:column; align-items:center; justify-content:center; font-weight:900; font-size:14px; color:#15803d; background:#f0fdf4; text-align:center; box-sizing:border-box;">
                     <span>上 3 档</span>
                     <span style="font-size:11px; font-weight:700;">Call Wall</span>
-                    <span style="font-size:10px; color:#475569;">(155-165)</span>
+                    <span style="font-size:10px; color:#475569;">(实时动态)</span>
                 </div>
                 <div style="height:{svg_h}px; position:relative; border-bottom:2px solid #1e293b; background:#ffffff; box-sizing:border-box;">
                     {y_ticks_html}
@@ -420,7 +420,7 @@ def build_custom_option_matrix_html(symbol, spot):
                 <div style="height:105px; border-bottom:1px solid #cbd5e1; display:flex; flex-direction:column; align-items:center; justify-content:center; font-weight:900; font-size:14px; color:#b91c1c; background:#fef2f2; text-align:center; box-sizing:border-box;">
                     <span>下 3 档</span>
                     <span style="font-size:11px; font-weight:700;">Put Wall</span>
-                    <span style="font-size:10px; color:#475569;">(140-150)</span>
+                    <span style="font-size:10px; color:#475569;">(实时动态)</span>
                 </div>
                 <div style="height:42px; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:13px; background:#f8fafc; box-sizing:border-box;">日期轴</div>
             </div>
@@ -429,12 +429,10 @@ def build_custom_option_matrix_html(symbol, spot):
             <div style="display:flex; width:{total_chart_w}px; flex-shrink:0;">
     """
 
-    # 逐列生成，确保每一列从上到下拥有统一的纵向右边框，彻底杜绝错位和断开
     for c in cols_data:
         bg_col = "background:#fef08a;" if c["is_today"] else ""
         bg_cell = "background:rgba(254,240,138,0.25);" if c["is_today"] else "background:#ffffff;"
         
-        # Call Wall 三行
         c_rows_html = ""
         for k_val, oi_val in c["c_top"]:
             is_max_c = (k_val == c["call_wall"])
@@ -447,7 +445,6 @@ def build_custom_option_matrix_html(symbol, spot):
                 </div>
             """
 
-        # Put Wall 三行
         p_rows_html = ""
         for k_val, oi_val in c["p_bot"]:
             is_max_p = (k_val == c["put_wall"])
@@ -462,22 +459,17 @@ def build_custom_option_matrix_html(symbol, spot):
 
         html += f"""
                 <div style="width:{col_w}px; flex-shrink:0; border-right:1px solid #cbd5e1; box-sizing:border-box; display:flex; flex-direction:column;">
-                    <!-- 1. 顶部日期头 -->
                     <div style="height:46px; border-bottom:1px solid #cbd5e1; display:flex; flex-direction:column; align-items:center; justify-content:center; box-sizing:border-box; {bg_col}">
                         <span style="font-size:15px; font-weight:900; color:#0f172a;">{c['date_str']}</span>
                         <span style="font-size:11px; font-weight:700; color:#475569;">{c['tag']}</span>
                     </div>
-                    <!-- 2. Call Wall 矩阵区 -->
                     <div style="height:105px; border-bottom:2px solid #1e293b; box-sizing:border-box; {bg_cell}">
                         {c_rows_html}
                     </div>
-                    <!-- 3. SVG 占位留空 (SVG图表整体盖在下方或背景，此处撑开高度) -->
                     <div style="height:{svg_h}px; border-bottom:2px solid #1e293b; box-sizing:border-box; {bg_cell}"></div>
-                    <!-- 4. Put Wall 矩阵区 -->
                     <div style="height:105px; border-bottom:1px solid #cbd5e1; box-sizing:border-box; {bg_cell}">
                         {p_rows_html}
                     </div>
-                    <!-- 5. 底部日期轴 -->
                     <div style="height:42px; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:900; color:#0f172a; box-sizing:border-box; {bg_col}">
                         {c['date_str']}
                     </div>
@@ -488,13 +480,11 @@ def build_custom_option_matrix_html(symbol, spot):
             </div>
         </div>
 
-        <!-- 绝对定位 SVG 曲线图层，完美覆盖在中间图表区域 -->
         <div style="position:relative; margin-top:-{svg_h + 147}px; margin-left:{left_axis_w}px; width:{total_chart_w}px; height:{svg_h}px; pointer-events:none;">
             <svg width="{total_chart_w}" height="{svg_h}" xmlns="http://www.w3.org/2000/svg">
                 {svg_elements}
             </svg>
         </div>
-        <!-- 底部撑开距离，确保图层下方正常衔接 -->
         <div style="height:42px;"></div>
     </div>
     """
