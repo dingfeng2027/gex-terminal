@@ -211,40 +211,49 @@ def fetch_options_chain(symbol, spot):
 
 def build_custom_option_matrix_html(symbol, spot):
     """
-    真实期权到期日对齐：
-    - 自动生成总共 10 个节点，且严格筛选过滤为“周一、周三、周五”（真实期权到期日/交易日节奏）。
-    - 上3档锁定 155, 160, 165，下3档锁定 140, 145, 150 阶梯标准。
-    - 黑线（现实股价）全程置顶贯穿。
+    真实期权到期日对齐（总计 10 列）：
+    - 前面严格保留 2 个期权到期日（周一/周三/周五）。
+    - 今天 1 列。
+    - 后面延伸补足 7 个期权到期日。
+    - 历史现价通过真实行情数据填充，确保黑线完美贯穿过去、今天与未来所有格子。
     """
     today = datetime.today()
     
-    # 向前和向后扫描，找出恰好 10 个属于 周一(0)、周三(2)、周五(4) 的真实日期
-    target_dates = []
-    # 从今天往前找前置交易日
-    d_cursor = today - timedelta(days=1)
+    # 1. 过去：精确获取 2 个期权到期日 (周一、周三、周五)
     past_candidates = []
-    while len(past_candidates) < 3: # 找前 3 个期权日/交易日
-        if d_cursor.weekday() in [0, 2, 4]: # 周一、周三、周五
+    d_cursor = today - timedelta(days=1)
+    while len(past_candidates) < 2:
+        if d_cursor.weekday() in [0, 2, 4]:
             past_candidates.insert(0, d_cursor)
         d_cursor -= timedelta(days=1)
         
-    target_dates.extend(past_candidates)
+    target_dates = list(past_candidates)
     target_dates.append(today) # 今天
     
-    # 从今天往后找后续的期权到期日 (周一、周三、周五)
+    # 2. 未来：向后寻找期权到期日 (周一、周三、周五)，使总数恰好为 10 天
     d_cursor = today + timedelta(days=1)
     while len(target_dates) < 10:
         if d_cursor.weekday() in [0, 2, 4]:
             target_dates.append(d_cursor)
         d_cursor += timedelta(days=1)
 
+    # 3. 提取真实历史行情数据用于精准连接过去黑线
+    hdf_hist = fetch_history_df(symbol, "1个月", spot)
+    hist_dict = {}
+    if not hdf_hist.empty and "Date" in hdf_hist.columns and "Close" in hdf_hist.columns:
+        for _, row in hdf_hist.iterrows():
+            d_key = row["Date"].strftime("%Y-%m-%d")
+            hist_dict[d_key] = row["Close"]
+
     cols_data = []
     for dt in target_dates:
-        # 计算相对今天的偏移天数，用于后续生成对应的股价轨迹波动
         delta_days = (dt.date() - today.date()).days
         if delta_days == 0:
             tag = "今天"
             is_today = True
+        elif delta_days == -1:
+            tag = "昨天"
+            is_today = False
         elif delta_days < 0:
             tag = f"{abs(delta_days)}天前"
             is_today = False
@@ -263,15 +272,22 @@ def build_custom_option_matrix_html(symbol, spot):
 
     np.random.seed(abs(hash(symbol)) % 10000)
 
-    # 按照时间先后顺序生成平滑的现价轨迹
+    # 4. 构建价格轨迹（过去使用真实历史收盘价，未来使用波动模型推演）
     n_total = len(cols_data)
     today_idx = next(i for i, c in enumerate(cols_data) if c["is_today"])
     spot_series = [0.0] * n_total
     spot_series[today_idx] = spot
 
+    # 填充过去列的现价（优先匹配真实历史收盘价）
     for i in range(today_idx - 1, -1, -1):
-        spot_series[i] = round(spot_series[i + 1] * (1 - np.random.uniform(-0.005, 0.009)), 2)
+        d_key = cols_data[i]["date"].strftime("%Y-%m-%d")
+        if d_key in hist_dict:
+            spot_series[i] = round(float(hist_dict[d_key]), 2)
+        else:
+            prev_p = spot_series[i + 1]
+            spot_series[i] = round(prev_p * (1 - np.random.uniform(0.002, 0.008)), 2)
 
+    # 填充未来列的现价推演
     for i in range(today_idx + 1, n_total):
         spot_series[i] = round(spot_series[i - 1] * (1 + np.random.uniform(-0.004, 0.011)), 2)
 
@@ -380,7 +396,7 @@ def build_custom_option_matrix_html(symbol, spot):
     <div style="background:#ffffff; border:2px solid #1e293b; border-radius:8px; padding:12px; font-family:sans-serif; color:#0f172a; overflow-x:auto;">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; padding-bottom:8px; border-bottom:2px solid #cbd5e1; min-width:{left_axis_w + total_chart_w}px;">
             <div style="font-size:17px; font-weight:900; color:#0f172a;">
-                📊 {symbol} 期权墙与到期日挂单矩阵 (真实 1/3/5 期权日排期 | 现价: <span style="background:#fef08a; padding:2px 6px; border-radius:4px;">${spot:.2f}</span>)
+                📊 {symbol} 期权墙与到期日挂单矩阵 (10天窗口: 前2天 + 今天 + 后7天 | 现价: <span style="background:#fef08a; padding:2px 6px; border-radius:4px;">${spot:.2f}</span>)
             </div>
             <div style="display:flex; gap:18px; font-size:14px; font-weight:800;">
                 <span style="color:#16a34a;">━━ 绿线: Call Wall (阻力)</span>
