@@ -104,6 +104,19 @@ def get_nasdaq_credentials():
         pass
     return api_key.strip(), bearer.strip()
 
+def _build_nasdaq_headers():
+    api_key, bearer = get_nasdaq_credentials()
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Referer": "https://www.nasdaq.com/"
+    }
+    if bearer:
+        headers["Authorization"] = f"Bearer {bearer}"
+    elif api_key:
+        headers["X-Api-Key"] = api_key
+    return api_key, bearer, headers
+
 def _parse_float_clean(val):
     if val is None:
         return None
@@ -139,14 +152,7 @@ def _query_nasdaq_stock_data(symbol):
     if "." in symbol:
         return None
     clean_sym = symbol.upper()
-    _, bearer = get_nasdaq_credentials()
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/plain, */*",
-        "Referer": "https://www.nasdaq.com/"
-    }
-    if bearer:
-        headers["Authorization"] = f"Bearer {bearer}"
+    _, _, headers = _build_nasdaq_headers()
 
     asset_classes = ["etf", "stocks"] if clean_sym in ["QQQ", "SPY", "IWM", "DIA", "TLT"] else ["stocks", "etf"]
     info_data = None
@@ -253,7 +259,7 @@ def _calc_indicators_from_closes(closes, last_price, prev_price, high52=None, lo
         "rsi": round(float(rsi), 1)
     }
 
-@st.cache_data(ttl=15, show_spinner=False)
+@st.cache_data(ttl=180, show_spinner=False)
 def fetch_stock_metrics(symbol, live=True):
     fb = FALLBACK_DATA.get(symbol, {"name": symbol, "price": 150.0, "prev": 148.0, "pe": 25.0, "mcap": "100B"})
     if not live:
@@ -263,6 +269,24 @@ def fetch_stock_metrics(symbol, live=True):
             "high52": fb["price"] * 1.15, "low52": fb["price"] * 0.80, "rsi": 55.0,
             "pe": fb.get("pe"), "eps": 5.0, "mcap": fb.get("mcap", "100B")
         }
+
+    # Market Watch 与行情指标优先使用配置了 API Key 的 Nasdaq 接口
+    nasdaq_res = _query_nasdaq_stock_data(symbol)
+    if nasdaq_res:
+        calc = _calc_indicators_from_closes(
+            nasdaq_res["closes"],
+            nasdaq_res["price"],
+            nasdaq_res["prev"],
+            nasdaq_res.get("high52"),
+            nasdaq_res.get("low52")
+        )
+        calc.update({
+            "name": nasdaq_res["name"],
+            "pe": fb.get("pe", 25.0),
+            "eps": 5.0,
+            "mcap": nasdaq_res.get("mcap") or fb.get("mcap", "100B")
+        })
+        return calc
 
     result_item = _query_yahoo_chart_payload(symbol, range_str="1y", interval_str="1d")
     if result_item:
@@ -294,23 +318,6 @@ def fetch_stock_metrics(symbol, live=True):
         except Exception:
             pass
 
-    nasdaq_res = _query_nasdaq_stock_data(symbol)
-    if nasdaq_res:
-        calc = _calc_indicators_from_closes(
-            nasdaq_res["closes"],
-            nasdaq_res["price"],
-            nasdaq_res["prev"],
-            nasdaq_res.get("high52"),
-            nasdaq_res.get("low52")
-        )
-        calc.update({
-            "name": nasdaq_res["name"],
-            "pe": fb.get("pe", 25.0),
-            "eps": 5.0,
-            "mcap": nasdaq_res.get("mcap") or fb.get("mcap", "100B")
-        })
-        return calc
-
     p = fb["price"]
     prev = fb["prev"]
     return {
@@ -320,7 +327,7 @@ def fetch_stock_metrics(symbol, live=True):
         "pe": fb.get("pe"), "eps": 5.0, "mcap": fb.get("mcap", "100B")
     }
 
-@st.cache_data(ttl=15, show_spinner=False)
+@st.cache_data(ttl=180, show_spinner=False)
 def fetch_history_df(symbol, period_str, current_price):
     pmap = {"1日": "1d", "1星期": "5d", "1个月": "1mo", "3个月": "3mo", "6个月": "6mo", "1年": "1y", "全部": "max"}
     yfp = pmap.get(period_str, "6mo")
@@ -328,30 +335,12 @@ def fetch_history_df(symbol, period_str, current_price):
     r = range_map.get(yfp, "6mo")
     interval_str = "5m" if r == "1d" else "1d"
 
-    result_item = _query_yahoo_chart_payload(symbol, range_str=r, interval_str=interval_str)
-    if result_item:
-        try:
-            timestamps = result_item.get("timestamp", [])
-            quotes = result_item.get("indicators", {}).get("quote", [{}])[0]
-            closes = quotes.get("close", [])
-            if timestamps and closes:
-                valid_data = [(datetime.fromtimestamp(ts), c) for ts, c in zip(timestamps, closes) if c is not None]
-                if valid_data:
-                    dates, prices = zip(*valid_data)
-                    return pd.DataFrame({"Date": list(dates), "Close": list(prices)})
-        except Exception:
-            pass
-
     if "." not in symbol:
         clean_sym = symbol.upper()
         days_back = {"1d": 5, "5d": 10, "1mo": 32, "3mo": 95, "6mo": 185, "1y": 365, "max": 1825}.get(yfp, 185)
         to_dt = datetime.today().strftime("%Y-%m-%d")
         from_dt = (datetime.today() - timedelta(days=days_back)).strftime("%Y-%m-%d")
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
-            "Accept": "application/json, text/plain, */*",
-            "Referer": "https://www.nasdaq.com/"
-        }
+        _, _, headers = _build_nasdaq_headers()
         ac = "etf" if clean_sym in ["QQQ", "SPY", "IWM", "DIA", "TLT"] else "stocks"
         try:
             url_hist = f"https://api.nasdaq.com/api/quote/{clean_sym}/historical?assetclass={ac}&fromdate={from_dt}&limit=1500&todate={to_dt}"
@@ -372,6 +361,20 @@ def fetch_history_df(symbol, period_str, current_price):
                     if records:
                         dates, prices = zip(*records)
                         return pd.DataFrame({"Date": list(dates), "Close": list(prices)})
+        except Exception:
+            pass
+
+    result_item = _query_yahoo_chart_payload(symbol, range_str=r, interval_str=interval_str)
+    if result_item:
+        try:
+            timestamps = result_item.get("timestamp", [])
+            quotes = result_item.get("indicators", {}).get("quote", [{}])[0]
+            closes = quotes.get("close", [])
+            if timestamps and closes:
+                valid_data = [(datetime.fromtimestamp(ts), c) for ts, c in zip(timestamps, closes) if c is not None]
+                if valid_data:
+                    dates, prices = zip(*valid_data)
+                    return pd.DataFrame({"Date": list(dates), "Close": list(prices)})
         except Exception:
             pass
 
@@ -492,14 +495,7 @@ def _extract_nasdaq_expirations(data_obj):
 @st.cache_data(ttl=300, show_spinner=False)
 def _query_nasdaq_options_api(symbol, target_dt_timestamp=None):
     clean_sym = symbol.split(".")[0].upper()
-    api_key, bearer = get_nasdaq_credentials()
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/plain, */*",
-        "Referer": "https://www.nasdaq.com/"
-    }
-    if bearer:
-        headers["Authorization"] = f"Bearer {bearer}"
+    api_key, _, headers = _build_nasdaq_headers()
 
     date_query = ""
     target_date_str = None
@@ -624,12 +620,12 @@ def _query_nasdaq_options_api(symbol, target_dt_timestamp=None):
 
 def fetch_real_option_chain_for_date(symbol, target_dt_timestamp=None):
     cache_key = f"{symbol}_{target_dt_timestamp or 'nearest'}"
-    exp_dates, cdf, pdf = _query_yahoo_options_api(symbol, target_dt_timestamp)
+    exp_dates, cdf, pdf = _query_nasdaq_options_api(symbol, target_dt_timestamp)
 
     if cdf.empty or pdf.empty:
-        n_exp, n_cdf, n_pdf = _query_nasdaq_options_api(symbol, target_dt_timestamp)
-        if not n_cdf.empty and not n_pdf.empty:
-            exp_dates, cdf, pdf = n_exp, n_cdf, n_pdf
+        y_exp, y_cdf, y_pdf = _query_yahoo_options_api(symbol, target_dt_timestamp)
+        if not y_cdf.empty and not y_pdf.empty:
+            exp_dates, cdf, pdf = y_exp, y_cdf, y_pdf
 
     if not cdf.empty and not pdf.empty:
         st.session_state["opt_backup_cache"][cache_key] = (exp_dates, cdf.copy(), pdf.copy())
@@ -670,6 +666,30 @@ def extract_top3_walls(col_cdf, col_pdf, curr_p):
     put_wall_val = max(p_bot_list, key=lambda x: x[1])[0] if p_bot_list else None
 
     return c_top_list, call_wall_val, p_bot_list, put_wall_val
+
+def _build_10_separate_exp_timestamps(real_exp_timestamps, base_dt):
+    pool = []
+    seen_days = set()
+
+    for ts in sorted(real_exp_timestamps or []):
+        try:
+            d_key = datetime.fromtimestamp(int(ts)).strftime("%Y-%m-%d")
+            if d_key not in seen_days:
+                seen_days.add(d_key)
+                pool.append(int(ts))
+        except Exception:
+            continue
+
+    cursor = base_dt
+    while len(pool) < 10:
+        cursor = cursor + timedelta(days=1)
+        if cursor.weekday() in [0, 2, 4]:
+            d_key = cursor.strftime("%Y-%m-%d")
+            if d_key not in seen_days:
+                seen_days.add(d_key)
+                pool.append(int(cursor.replace(hour=16, minute=0, second=0).timestamp()))
+
+    return pool[:10]
 
 def build_custom_option_matrix_html(symbol, spot, real_exp_timestamps=None):
     today = datetime.today()
@@ -739,14 +759,12 @@ def build_custom_option_matrix_html(symbol, spot, real_exp_timestamps=None):
     for i in range(today_idx + 1, n_total):
         spot_series[i] = spot_series[i - 1]
 
+    separate_exp_timestamps = _build_10_separate_exp_timestamps(real_exp_timestamps, today)
+
     has_any_real_data = False
     for i, c_info in enumerate(cols_data):
         curr_p = spot_series[i] if spot_series[i] is not None else spot
-        # 去掉“3个真实到期日强行就近合并”限制，直接按列对应日期或轮替不同到期日查询
-        if real_exp_timestamps:
-            ts_target = real_exp_timestamps[i % len(real_exp_timestamps)]
-        else:
-            ts_target = int(c_info["date"].timestamp())
+        ts_target = separate_exp_timestamps[i]
 
         _, col_cdf, col_pdf = fetch_real_option_chain_for_date(symbol, ts_target)
         if not col_cdf.empty and not col_pdf.empty:
@@ -755,13 +773,9 @@ def build_custom_option_matrix_html(symbol, spot, real_exp_timestamps=None):
         c_top_list, call_wall_val, p_bot_list, put_wall_val = extract_top3_walls(col_cdf, col_pdf, curr_p)
         raw_mp = round((curr_p * 0.55 + call_wall_val * 0.25 + put_wall_val * 0.20), 2) if (call_wall_val is not None and put_wall_val is not None) else None
 
-        exp_label = ""
-        if ts_target:
-            try:
-                exp_label = "到期:" + datetime.fromtimestamp(ts_target).strftime("%d/%m")
-            except Exception:
-                exp_label = c_info["tag"]
-        else:
+        try:
+            exp_label = "到期:" + datetime.fromtimestamp(ts_target).strftime("%d/%m")
+        except Exception:
             exp_label = c_info["tag"]
 
         c_info["exp_label"] = exp_label
@@ -855,7 +869,7 @@ def build_custom_option_matrix_html(symbol, spot, real_exp_timestamps=None):
         svg_elements += f"<circle cx='{sx}' cy='{sy}' r='5' fill='#0f172a' stroke='#facc15' stroke-width='1.5' />"
         svg_elements += f"<text x='{sx}' y='{sy + 17}' text-anchor='middle' font-size='13.5' font-weight='900' fill='#0f172a'>{sval:g}</text>"
 
-    status_badge = "Yahoo/Nasdaq 真实链" if has_any_real_data else "接口暂未返回真实链"
+    status_badge = "API Key 真实链" if has_any_real_data else "接口暂未返回真实链"
 
     html = f"""
     <div style="background:#ffffff; border:2px solid #1e293b; border-radius:8px; padding:8px 10px; font-family:sans-serif; color:#0f172a; width:100%; box-sizing:border-box; overflow:hidden;">
@@ -967,7 +981,7 @@ def build_custom_option_matrix_html(symbol, spot, real_exp_timestamps=None):
     """
     return html
 
-top_bar_html = "<div class='top-bar'><div class='brand-title'>CAPITAL QUANT v2</div><div class='live-badge'>Live (15s Cache / 1-min Sync) | " + datetime.now().strftime('%b %d, %Y %H:%M:%S') + " | UK Institutional Terminal</div></div>"
+top_bar_html = "<div class='top-bar'><div class='brand-title'>CAPITAL QUANT v2</div><div class='live-badge'>Auto-Sync Every 3m (180s) | " + datetime.now().strftime('%b %d, %Y %H:%M:%S') + " | UK Institutional Terminal</div></div>"
 st.markdown(top_bar_html, unsafe_allow_html=True)
 
 n1, n2, n3, n4 = st.columns([1.3, 1.3, 1.6, 2.2])
@@ -980,12 +994,12 @@ if n2.button("2. Stock Analysis", use_container_width=True):
 if n3.button("3. Options Intelligence", use_container_width=True):
     st.session_state.page = "Options Intelligence"
     st.rerun()
-st.session_state.use_live_api = n4.toggle("启用实时 Yahoo / Nasdaq 行情接口", value=st.session_state.use_live_api)
+st.session_state.use_live_api = n4.toggle("启用 API Key 行情接口", value=st.session_state.use_live_api)
 
 st.markdown("<div style='border-bottom: 1px solid #1e3a8a; margin: 4px 0 6px 0;'></div>", unsafe_allow_html=True)
 
 # ==================== PAGE 1: MARKET WATCH ====================
-@st.fragment(run_every=60)
+@st.fragment(run_every=180)
 def render_native_market_watch():
     c1, c2, c3, c4 = st.columns([2.0, 2.2, 1.2, 1.3])
     c1.markdown("### Market Watch")
