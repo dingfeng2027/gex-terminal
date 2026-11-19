@@ -639,15 +639,22 @@ def fetch_real_option_chain_for_date(symbol, target_dt_timestamp=None):
     return [], pd.DataFrame(), pd.DataFrame()
 
 def extract_top3_walls(col_cdf, col_pdf, curr_p):
+    """在现价上下 5%~30% 区间内筛选前 3 档最大未平仓压力位/支撑位"""
     if col_cdf is None or col_pdf is None or col_cdf.empty or col_pdf.empty:
         return [], None, [], None
 
     cdf_clean = col_cdf.sort_values("openInterest", ascending=False).drop_duplicates(subset=["strike"])
     pdf_clean = col_pdf.sort_values("openInterest", ascending=False).drop_duplicates(subset=["strike"])
 
-    above_df = cdf_clean[cdf_clean["strike"] > curr_p].copy()
+    # 上方 5% ~ 30% 区间 (Spot * 1.05 <= Strike <= Spot * 1.30)
+    c_min_bound = curr_p * 1.05
+    c_max_bound = curr_p * 1.30
+    above_df = cdf_clean[(cdf_clean["strike"] >= c_min_bound) & (cdf_clean["strike"] <= c_max_bound)].copy()
+    if above_df.empty:
+        above_df = cdf_clean[cdf_clean["strike"] > curr_p].copy()
     if above_df.empty:
         above_df = cdf_clean.copy()
+
     top3_calls = (
         above_df.sort_values(by="openInterest", ascending=False)
         .head(3)
@@ -656,9 +663,15 @@ def extract_top3_walls(col_cdf, col_pdf, curr_p):
     c_top_list = [(float(r["strike"]), int(r["openInterest"])) for _, r in top3_calls.iterrows()]
     call_wall_val = max(c_top_list, key=lambda x: x[1])[0] if c_top_list else None
 
-    below_df = pdf_clean[pdf_clean["strike"] < curr_p].copy()
+    # 下方 5% ~ 30% 区间 (Spot * 0.70 <= Strike <= Spot * 0.95)
+    p_min_bound = curr_p * 0.70
+    p_max_bound = curr_p * 0.95
+    below_df = pdf_clean[(pdf_clean["strike"] >= p_min_bound) & (pdf_clean["strike"] <= p_max_bound)].copy()
+    if below_df.empty:
+        below_df = pdf_clean[pdf_clean["strike"] < curr_p].copy()
     if below_df.empty:
         below_df = pdf_clean.copy()
+
     top3_puts = (
         below_df.sort_values(by="openInterest", ascending=False)
         .head(3)
@@ -698,7 +711,6 @@ def build_custom_option_matrix_html(symbol, spot, real_exp_timestamps=None):
     if real_exp_timestamps is None:
         real_exp_timestamps, _, _ = fetch_real_option_chain_for_date(symbol)
 
-    # 10 个独立到期日与矩阵 10 列日期完全一一对齐
     separate_exp_timestamps = _build_10_separate_exp_timestamps(real_exp_timestamps, today)
 
     cols_data = []
@@ -767,7 +779,7 @@ def build_custom_option_matrix_html(symbol, spot, real_exp_timestamps=None):
     y_high = v_max + v_span * 0.25
 
     col_w = 128
-    left_axis_w = 92
+    left_axis_w = 96
     n_cols = len(cols_data)
     total_chart_w = n_cols * col_w
     header_h = 42
@@ -835,7 +847,7 @@ def build_custom_option_matrix_html(symbol, spot, real_exp_timestamps=None):
         svg_elements += f"<circle cx='{sx}' cy='{sy}' r='5' fill='#0f172a' stroke='#facc15' stroke-width='1.5' />"
         svg_elements += f"<text x='{sx}' y='{sy + 17}' text-anchor='middle' font-size='13.5' font-weight='900' fill='#0f172a'>{sval:g}</text>"
 
-    status_badge = "API Key 真实链" if has_any_real_data else "接口暂未返回真实链"
+    status_badge = "API Key 真实链 | ±5%~30% 波段区间" if has_any_real_data else "接口暂未返回真实链"
 
     html = f"""
     <div style="background:#ffffff; border:2px solid #1e293b; border-radius:8px; padding:8px 10px; font-family:sans-serif; color:#0f172a; width:100%; box-sizing:border-box; overflow:hidden;">
@@ -856,14 +868,14 @@ def build_custom_option_matrix_html(symbol, spot, real_exp_timestamps=None):
                 <div style="height:{header_h}px; border-bottom:1px solid #cbd5e1; display:flex; align-items:center; justify-content:center; font-weight:900; font-size:13px; background:#f8fafc; box-sizing:border-box;">到期日</div>
                 <div style="height:{top3_h}px; border-bottom:2px solid #1e293b; display:flex; flex-direction:column; align-items:center; justify-content:center; font-weight:900; font-size:13px; color:#15803d; background:#f0fdf4; text-align:center; box-sizing:border-box;">
                     <span>上3档 Call</span>
-                    <span style="font-size:11px; font-weight:800;">行权价 &gt; Spot</span>
+                    <span style="font-size:11px; font-weight:800;">+5% ~ +30%</span>
                 </div>
                 <div style="height:{svg_h}px; position:relative; border-bottom:2px solid #1e293b; background:#ffffff; box-sizing:border-box;">
                     {y_ticks_html}
                 </div>
                 <div style="height:{bot3_h}px; border-bottom:1px solid #cbd5e1; display:flex; flex-direction:column; align-items:center; justify-content:center; font-weight:900; font-size:13px; color:#b91c1c; background:#fef2f2; text-align:center; box-sizing:border-box;">
                     <span>下3档 Put</span>
-                    <span style="font-size:11px; font-weight:800;">行权价 &lt; Spot</span>
+                    <span style="font-size:11px; font-weight:800;">-5% ~ -30%</span>
                 </div>
                 <div style="height:{footer_h}px; display:flex; align-items:center; justify-content:center; font-weight:900; font-size:13px; background:#f8fafc; box-sizing:border-box;">到期轴</div>
             </div>
@@ -1027,7 +1039,9 @@ def render_native_market_watch():
     fmt = {"TODAY PRICE": "{:.2f}", "YESTERDAY PRICE": "{:.2f}", "CHANGE": "{:+.2f}", "% CHANGE": "{:+.2f}%", "MA20": "{:.2f}", "MA50": "{:.2f}", "MA200": "{:.2f}", "YEARLY HIGH": "{:.2f}", "YEARLY LOW": "{:.2f}", "RSI (14)": "{:.1f}"}
     styled_df = df_watch.style.apply(lambda c: [style_watch(v, c.name) for v in c], axis=0).format(fmt)
 
-    event = st.dataframe(styled_df, use_container_width=True, height=580, row_height=42, hide_index=True, on_select="rerun", selection_mode="single-row")
+    # 取消固定高度内部上下滚动框，按行数完整展开显示
+    full_table_height = (len(df_watch) + 1) * 42 + 12
+    event = st.dataframe(styled_df, use_container_width=True, height=full_table_height, row_height=42, hide_index=True, on_select="rerun", selection_mode="single-row")
 
     if event and event.selection and "rows" in event.selection and len(event.selection.rows) > 0:
         selected_idx = event.selection.rows[0]
