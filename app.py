@@ -80,9 +80,6 @@ if "show_walls" not in st.session_state:
 if "show_all_strikes" not in st.session_state:
     st.session_state["show_all_strikes"] = False
 
-if "selected_exp_ts" not in st.session_state:
-    st.session_state["selected_exp_ts"] = None
-
 if "opt_backup_cache" not in st.session_state:
     st.session_state["opt_backup_cache"] = {}
 
@@ -139,7 +136,6 @@ def _query_yahoo_chart_payload(symbol, range_str="1y", interval_str="1d"):
     return None
 
 def _query_nasdaq_stock_data(symbol):
-    """使用 Nasdaq 官方行情与历史接口获取美股实时报价与历史收盘序列"""
     if "." in symbol:
         return None
     clean_sym = symbol.upper()
@@ -182,7 +178,6 @@ def _query_nasdaq_stock_data(symbol):
     prev_price = round(last_price - net_chg, 4) if net_chg is not None else last_price
     short_name = d.get("companyName") or clean_sym
 
-    # 尝试从 keyStats 提取 52 周高低点与市值
     high52, low52, mcap = None, None, None
     hl_obj = key_stats.get("fiftyTwoWeekHighLow", {})
     if isinstance(hl_obj, dict) and hl_obj.get("value"):
@@ -195,7 +190,6 @@ def _query_nasdaq_stock_data(symbol):
     if isinstance(mcap_obj, dict) and mcap_obj.get("value"):
         mcap = str(mcap_obj["value"]).strip()
 
-    # 拉取 Nasdaq 历史日线用于计算 MA20 / MA50 / MA200 / RSI
     closes = []
     try:
         to_dt = datetime.today().strftime("%Y-%m-%d")
@@ -205,7 +199,6 @@ def _query_nasdaq_stock_data(symbol):
         if h_res.status_code == 200:
             rows = h_res.json().get("data", {}).get("tradesTable", {}).get("rows", [])
             if isinstance(rows, list) and rows:
-                # Nasdaq 历史数据默认倒序排列，反转为正序
                 for r in reversed(rows):
                     c_val = _parse_float_clean(r.get("close"))
                     if c_val is not None:
@@ -271,7 +264,6 @@ def fetch_stock_metrics(symbol, live=True):
             "pe": fb.get("pe"), "eps": 5.0, "mcap": fb.get("mcap", "100B")
         }
 
-    # 1. 优先尝试 Yahoo Finance（拉取 1y 以便精确计算 MA50 / MA200 / 52W 高低点）
     result_item = _query_yahoo_chart_payload(symbol, range_str="1y", interval_str="1d")
     if result_item:
         try:
@@ -302,7 +294,6 @@ def fetch_stock_metrics(symbol, live=True):
         except Exception:
             pass
 
-    # 2. Yahoo 失败或被限流时，自动切换 Nasdaq 实时行情接口
     nasdaq_res = _query_nasdaq_stock_data(symbol)
     if nasdaq_res:
         calc = _calc_indicators_from_closes(
@@ -320,7 +311,6 @@ def fetch_stock_metrics(symbol, live=True):
         })
         return calc
 
-    # 3. 最终离线兜底
     p = fb["price"]
     prev = fb["prev"]
     return {
@@ -338,7 +328,6 @@ def fetch_history_df(symbol, period_str, current_price):
     r = range_map.get(yfp, "6mo")
     interval_str = "5m" if r == "1d" else "1d"
 
-    # 1. 优先 Yahoo 历史 K 线
     result_item = _query_yahoo_chart_payload(symbol, range_str=r, interval_str=interval_str)
     if result_item:
         try:
@@ -353,7 +342,6 @@ def fetch_history_df(symbol, period_str, current_price):
         except Exception:
             pass
 
-    # 2. Yahoo 失败时切换 Nasdaq 历史日线
     if "." not in symbol:
         clean_sym = symbol.upper()
         days_back = {"1d": 5, "5d": 10, "1mo": 32, "3mo": 95, "6mo": 185, "1y": 365, "max": 1825}.get(yfp, 185)
@@ -751,19 +739,14 @@ def build_custom_option_matrix_html(symbol, spot, real_exp_timestamps=None):
     for i in range(today_idx + 1, n_total):
         spot_series[i] = spot_series[i - 1]
 
-    matched_timestamps = []
-    if real_exp_timestamps:
-        for c in cols_data:
-            dt_ts = int(c["date"].timestamp())
-            closest_ts = min(real_exp_timestamps, key=lambda x: abs(x - dt_ts))
-            matched_timestamps.append(closest_ts)
-    else:
-        matched_timestamps = [None] * n_total
-
     has_any_real_data = False
     for i, c_info in enumerate(cols_data):
         curr_p = spot_series[i] if spot_series[i] is not None else spot
-        ts_target = matched_timestamps[i] if i < len(matched_timestamps) else None
+        # 去掉“3个真实到期日强行就近合并”限制，直接按列对应日期或轮替不同到期日查询
+        if real_exp_timestamps:
+            ts_target = real_exp_timestamps[i % len(real_exp_timestamps)]
+        else:
+            ts_target = int(c_info["date"].timestamp())
 
         _, col_cdf, col_pdf = fetch_real_option_chain_for_date(symbol, ts_target)
         if not col_cdf.empty and not col_pdf.empty:
@@ -803,15 +786,15 @@ def build_custom_option_matrix_html(symbol, spot, real_exp_timestamps=None):
     y_low = v_min - v_span * 0.25
     y_high = v_max + v_span * 0.25
 
-    col_w = 122
-    left_axis_w = 84
+    col_w = 128
+    left_axis_w = 92
     n_cols = len(cols_data)
     total_chart_w = n_cols * col_w
-    header_h = 38
-    top3_h = 90
-    svg_h = 240
-    bot3_h = 90
-    footer_h = 34
+    header_h = 42
+    top3_h = 99
+    svg_h = 246
+    bot3_h = 99
+    footer_h = 36
 
     def val_to_y(v):
         ratio = (v - y_low) / (y_high - y_low)
@@ -824,7 +807,7 @@ def build_custom_option_matrix_html(symbol, spot, real_exp_timestamps=None):
         tick_val = y_low + (y_high - y_low) * (t_i / num_ticks)
         ty = val_to_y(tick_val)
         svg_elements += f"<line x1='0' y1='{ty}' x2='{total_chart_w}' y2='{ty}' stroke='#e2e8f0' stroke-width='1' stroke-dasharray='4,4' />"
-        y_ticks_html += f"<div style='position:absolute; top:{ty - 8}px; right:6px; font-size:11px; font-weight:700; color:#475569;'>{tick_val:.1f}</div>"
+        y_ticks_html += f"<div style='position:absolute; top:{ty - 9}px; right:6px; font-size:13px; font-weight:800; color:#334155;'>{tick_val:.1f}</div>"
 
     for idx, c in enumerate(cols_data):
         x_left = idx * col_w
@@ -844,43 +827,43 @@ def build_custom_option_matrix_html(symbol, spot, real_exp_timestamps=None):
         if c["put_wall"] is not None:
             pts_put.append((cx, val_to_y(c["put_wall"]), c["put_wall"]))
 
-    def draw_polyline(pts, color, width=2.6, dash=""):
+    def draw_polyline(pts, color, width=2.8, dash=""):
         if len(pts) < 2:
             return ""
         p_str = " ".join([f"{x},{y}" for x, y, _ in pts])
         dash_attr = f"stroke-dasharray='{dash}'" if dash else ""
         return f"<polyline fill='none' stroke='{color}' stroke-width='{width}' {dash_attr} points='{p_str}' />"
 
-    svg_elements += draw_polyline(pts_call, "#16a34a", 2.8)
-    svg_elements += draw_polyline(pts_put, "#dc2626", 2.8)
-    svg_elements += draw_polyline(pts_mp, "#2563eb", 2.2, "4,3")
-    svg_elements += draw_polyline(pts_spot, "#0f172a", 3.4)
+    svg_elements += draw_polyline(pts_call, "#16a34a", 3.0)
+    svg_elements += draw_polyline(pts_put, "#dc2626", 3.0)
+    svg_elements += draw_polyline(pts_mp, "#2563eb", 2.4, "4,3")
+    svg_elements += draw_polyline(pts_spot, "#0f172a", 3.6)
 
     for cx, cy, val in pts_call:
-        svg_elements += f"<circle cx='{cx}' cy='{cy}' r='4' fill='#16a34a' stroke='#fff' stroke-width='1.2' />"
-        svg_elements += f"<text x='{cx}' y='{cy - 7}' text-anchor='middle' font-size='11' font-weight='800' fill='#15803d'>{val:g}</text>"
+        svg_elements += f"<circle cx='{cx}' cy='{cy}' r='4.5' fill='#16a34a' stroke='#fff' stroke-width='1.2' />"
+        svg_elements += f"<text x='{cx}' y='{cy - 8}' text-anchor='middle' font-size='13' font-weight='900' fill='#15803d'>{val:g}</text>"
 
     for px, py, pval in pts_put:
-        svg_elements += f"<circle cx='{px}' cy='{py}' r='4' fill='#dc2626' stroke='#fff' stroke-width='1.2' />"
-        svg_elements += f"<text x='{px}' y='{py + 14}' text-anchor='middle' font-size='11' font-weight='800' fill='#b91c1c'>{pval:g}</text>"
+        svg_elements += f"<circle cx='{px}' cy='{py}' r='4.5' fill='#dc2626' stroke='#fff' stroke-width='1.2' />"
+        svg_elements += f"<text x='{px}' y='{py + 16}' text-anchor='middle' font-size='13' font-weight='900' fill='#b91c1c'>{pval:g}</text>"
 
     for mx, my, mval in pts_mp:
-        svg_elements += f"<circle cx='{mx}' cy='{my}' r='3.5' fill='#2563eb' />"
-        svg_elements += f"<text x='{mx}' y='{my - 7}' text-anchor='middle' font-size='11' font-weight='700' fill='#1d4ed8'>{mval:g}</text>"
+        svg_elements += f"<circle cx='{mx}' cy='{my}' r='4' fill='#2563eb' />"
+        svg_elements += f"<text x='{mx}' y='{my - 8}' text-anchor='middle' font-size='12.5' font-weight='800' fill='#1d4ed8'>{mval:g}</text>"
 
     for sx, sy, sval in pts_spot:
-        svg_elements += f"<circle cx='{sx}' cy='{sy}' r='4.5' fill='#0f172a' stroke='#facc15' stroke-width='1.5' />"
-        svg_elements += f"<text x='{sx}' y='{sy + 15}' text-anchor='middle' font-size='12' font-weight='900' fill='#0f172a'>{sval:g}</text>"
+        svg_elements += f"<circle cx='{sx}' cy='{sy}' r='5' fill='#0f172a' stroke='#facc15' stroke-width='1.5' />"
+        svg_elements += f"<text x='{sx}' y='{sy + 17}' text-anchor='middle' font-size='13.5' font-weight='900' fill='#0f172a'>{sval:g}</text>"
 
     status_badge = "Yahoo/Nasdaq 真实链" if has_any_real_data else "接口暂未返回真实链"
 
     html = f"""
     <div style="background:#ffffff; border:2px solid #1e293b; border-radius:8px; padding:8px 10px; font-family:sans-serif; color:#0f172a; width:100%; box-sizing:border-box; overflow:hidden;">
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; padding-bottom:4px; border-bottom:2px solid #cbd5e1; height:28px; box-sizing:border-box;">
-            <div style="font-size:15px; font-weight:900; color:#0f172a;">
-                📊 {symbol} 期权墙矩阵 ({status_badge} | Spot: <span style="background:#fef08a; padding:1px 5px; border-radius:4px;">${spot:.2f}</span>)
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; padding-bottom:4px; border-bottom:2px solid #cbd5e1; height:30px; box-sizing:border-box;">
+            <div style="font-size:16px; font-weight:900; color:#0f172a;">
+                📊 {symbol} 期权墙矩阵 ({status_badge} | Spot: <span style="background:#fef08a; padding:1px 6px; border-radius:4px;">${spot:.2f}</span>)
             </div>
-            <div style="display:flex; gap:14px; font-size:12px; font-weight:800;">
+            <div style="display:flex; gap:16px; font-size:13px; font-weight:900;">
                 <span style="color:#16a34a;">━━ Call Wall</span>
                 <span style="color:#2563eb;">╌╌ Max Pain</span>
                 <span style="color:#0f172a;">━━ Spot</span>
@@ -890,19 +873,19 @@ def build_custom_option_matrix_html(symbol, spot, real_exp_timestamps=None):
 
         <div style="display:flex; width:100%;">
             <div style="width:{left_axis_w}px; flex-shrink:0; border-right:2px solid #1e293b; display:flex; flex-direction:column; box-sizing:border-box;">
-                <div style="height:{header_h}px; border-bottom:1px solid #cbd5e1; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:12px; background:#f8fafc; box-sizing:border-box;">到期日</div>
-                <div style="height:{top3_h}px; border-bottom:2px solid #1e293b; display:flex; flex-direction:column; align-items:center; justify-content:center; font-weight:900; font-size:11px; color:#15803d; background:#f0fdf4; text-align:center; box-sizing:border-box;">
+                <div style="height:{header_h}px; border-bottom:1px solid #cbd5e1; display:flex; align-items:center; justify-content:center; font-weight:900; font-size:13px; background:#f8fafc; box-sizing:border-box;">到期日</div>
+                <div style="height:{top3_h}px; border-bottom:2px solid #1e293b; display:flex; flex-direction:column; align-items:center; justify-content:center; font-weight:900; font-size:13px; color:#15803d; background:#f0fdf4; text-align:center; box-sizing:border-box;">
                     <span>上3档 Call</span>
-                    <span style="font-size:9px; font-weight:700;">行权价 &gt; Spot</span>
+                    <span style="font-size:11px; font-weight:800;">行权价 &gt; Spot</span>
                 </div>
                 <div style="height:{svg_h}px; position:relative; border-bottom:2px solid #1e293b; background:#ffffff; box-sizing:border-box;">
                     {y_ticks_html}
                 </div>
-                <div style="height:{bot3_h}px; border-bottom:1px solid #cbd5e1; display:flex; flex-direction:column; align-items:center; justify-content:center; font-weight:900; font-size:11px; color:#b91c1c; background:#fef2f2; text-align:center; box-sizing:border-box;">
+                <div style="height:{bot3_h}px; border-bottom:1px solid #cbd5e1; display:flex; flex-direction:column; align-items:center; justify-content:center; font-weight:900; font-size:13px; color:#b91c1c; background:#fef2f2; text-align:center; box-sizing:border-box;">
                     <span>下3档 Put</span>
-                    <span style="font-size:9px; font-weight:700;">行权价 &lt; Spot</span>
+                    <span style="font-size:11px; font-weight:800;">行权价 &lt; Spot</span>
                 </div>
-                <div style="height:{footer_h}px; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:12px; background:#f8fafc; box-sizing:border-box;">日期轴</div>
+                <div style="height:{footer_h}px; display:flex; align-items:center; justify-content:center; font-weight:900; font-size:13px; background:#f8fafc; box-sizing:border-box;">日期轴</div>
             </div>
 
             <div style="display:flex; flex:1; min-width:0;">
@@ -916,9 +899,9 @@ def build_custom_option_matrix_html(symbol, spot, real_exp_timestamps=None):
         if c["c_top"]:
             for k_val, oi_val in c["c_top"]:
                 is_max_c = (k_val == c["call_wall"])
-                hi_style = "background:#dcfce7; font-weight:900; color:#14532d;" if is_max_c else "font-weight:700; color:#1e293b;"
+                hi_style = "background:#dcfce7; font-weight:900; color:#14532d;" if is_max_c else "font-weight:800; color:#0f172a;"
                 c_rows_html += f"""
-                    <div style="height:30px; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between; align-items:center; padding:0 5px; font-size:11px; box-sizing:border-box; {hi_style}">
+                    <div style="height:33px; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between; align-items:center; padding:0 6px; font-size:13px; box-sizing:border-box; {hi_style}">
                         <span>{k_val:g}</span>
                         <span style="color:#cbd5e1;">|</span>
                         <span>{oi_val:,}</span>
@@ -926,7 +909,7 @@ def build_custom_option_matrix_html(symbol, spot, real_exp_timestamps=None):
                 """
         else:
             c_rows_html = """
-                <div style="height:90px; display:flex; align-items:center; justify-content:center; font-size:11px; color:#64748b; font-weight:700;">
+                <div style="height:99px; display:flex; align-items:center; justify-content:center; font-size:13px; color:#64748b; font-weight:800;">
                     无真实链数据
                 </div>
             """
@@ -935,9 +918,9 @@ def build_custom_option_matrix_html(symbol, spot, real_exp_timestamps=None):
         if c["p_bot"]:
             for k_val, oi_val in c["p_bot"]:
                 is_max_p = (k_val == c["put_wall"])
-                hi_style = "background:#fee2e2; font-weight:900; color:#7f1d1d;" if is_max_p else "font-weight:700; color:#1e293b;"
+                hi_style = "background:#fee2e2; font-weight:900; color:#7f1d1d;" if is_max_p else "font-weight:800; color:#0f172a;"
                 p_rows_html += f"""
-                    <div style="height:30px; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between; align-items:center; padding:0 5px; font-size:11px; box-sizing:border-box; {hi_style}">
+                    <div style="height:33px; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between; align-items:center; padding:0 6px; font-size:13px; box-sizing:border-box; {hi_style}">
                         <span>{k_val:g}</span>
                         <span style="color:#cbd5e1;">|</span>
                         <span>{oi_val:,}</span>
@@ -945,7 +928,7 @@ def build_custom_option_matrix_html(symbol, spot, real_exp_timestamps=None):
                 """
         else:
             p_rows_html = """
-                <div style="height:90px; display:flex; align-items:center; justify-content:center; font-size:11px; color:#64748b; font-weight:700;">
+                <div style="height:99px; display:flex; align-items:center; justify-content:center; font-size:13px; color:#64748b; font-weight:800;">
                     无真实链数据
                 </div>
             """
@@ -953,8 +936,8 @@ def build_custom_option_matrix_html(symbol, spot, real_exp_timestamps=None):
         html += f"""
                 <div style="flex:1; min-width:0; border-right:1px solid #cbd5e1; box-sizing:border-box; display:flex; flex-direction:column;">
                     <div style="height:{header_h}px; border-bottom:1px solid #cbd5e1; display:flex; flex-direction:column; align-items:center; justify-content:center; box-sizing:border-box; {bg_col}">
-                        <span style="font-size:12px; font-weight:900; color:#0f172a;">{c['date_str']}</span>
-                        <span style="font-size:9px; font-weight:700; color:#475569;">{c['exp_label']}</span>
+                        <span style="font-size:13px; font-weight:900; color:#0f172a;">{c['date_str']}</span>
+                        <span style="font-size:11px; font-weight:800; color:#475569;">{c['exp_label']}</span>
                     </div>
                     <div style="height:{top3_h}px; border-bottom:2px solid #1e293b; box-sizing:border-box; {bg_cell}">
                         {c_rows_html}
@@ -963,7 +946,7 @@ def build_custom_option_matrix_html(symbol, spot, real_exp_timestamps=None):
                     <div style="height:{bot3_h}px; border-bottom:1px solid #cbd5e1; box-sizing:border-box; {bg_cell}">
                         {p_rows_html}
                     </div>
-                    <div style="height:{footer_h}px; display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:900; color:#0f172a; box-sizing:border-box; {bg_col}">
+                    <div style="height:{footer_h}px; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:900; color:#0f172a; box-sizing:border-box; {bg_col}">
                         {c['date_str']}
                     </div>
                 </div>
@@ -1237,7 +1220,6 @@ elif st.session_state.page == "Options Intelligence":
     chosen_o = o2.selectbox("期权标的", st.session_state.tickers, index=idx, label_visibility="collapsed")
     if chosen_o != st.session_state.selected_ticker:
         st.session_state.selected_ticker = chosen_o
-        st.session_state.selected_exp_ts = None
         st.rerun()
     if o3.button("← Stock Analysis", use_container_width=True):
         st.session_state.page = "Stock Analysis"
@@ -1250,29 +1232,10 @@ elif st.session_state.page == "Options Intelligence":
     m_opt = fetch_stock_metrics(sym, live=st.session_state.use_live_api)
     spot = float(m_opt["price"])
 
-    base_exp_dates, _, _ = fetch_real_option_chain_for_date(sym)
-
-    exp_sel_col1, exp_sel_col2 = st.columns([2.5, 3.5])
-    if base_exp_dates:
-        exp_options = {ts: datetime.fromtimestamp(ts).strftime("%Y-%m-%d") for ts in base_exp_dates}
-        exp_ts_list = list(exp_options.keys())
-        default_ts = st.session_state.selected_exp_ts if st.session_state.selected_exp_ts in exp_ts_list else exp_ts_list[0]
-        picked_ts = exp_sel_col1.selectbox(
-            "选择真实到期日（查看该到期日的 OI 与行权价明细）",
-            options=exp_ts_list,
-            index=exp_ts_list.index(default_ts),
-            format_func=lambda ts: exp_options[ts]
-        )
-        st.session_state.selected_exp_ts = picked_ts
-        exp_sel_col2.markdown(f"<div style='padding-top:34px; font-size:15px; color:#93c5fd;'>已匹配 <b>{len(exp_ts_list)}</b> 个真实到期日，切换到期日可联动下方行权价明细。</div>", unsafe_allow_html=True)
-    else:
-        picked_ts = None
-        exp_sel_col2.markdown("<div style='padding-top:10px; font-size:15px; color:#facc15;'>当前接口未单独列出多到期日列表，展示最近/默认真实期权链。</div>", unsafe_allow_html=True)
-
-    _, cdf, pdf = fetch_real_option_chain_for_date(sym, picked_ts)
+    base_exp_dates, cdf, pdf = fetch_real_option_chain_for_date(sym)
 
     matrix_html = build_custom_option_matrix_html(sym, spot, real_exp_timestamps=base_exp_dates)
-    st.components.v1.html(matrix_html, height=620, scrolling=False)
+    st.components.v1.html(matrix_html, height=640, scrolling=False)
 
     st.markdown("<div class='module-container'>", unsafe_allow_html=True)
     hdr_c1, hdr_c2 = st.columns([4.5, 1.5])
@@ -1320,8 +1283,8 @@ elif st.session_state.page == "Options Intelligence":
             st.markdown("""
             <style>
                 table.table-white { width: 100%; background-color: #ffffff !important; color: #0f172a !important; border-collapse: collapse; font-family: sans-serif; border-radius: 6px; overflow: hidden; }
-                table.table-white th { background-color: #f1f5f9 !important; color: #1e293b !important; font-weight: 800; padding: 8px 10px; border-bottom: 2px solid #cbd5e1; text-align: center; }
-                table.table-white td { background-color: #ffffff !important; color: #0f172a !important; padding: 7px 10px; border-bottom: 1px solid #e2e8f0; font-size: 15px; font-weight: 700; text-align: center; }
+                table.table-white th { background-color: #f1f5f9 !important; color: #1e293b !important; font-weight: 900; padding: 9px 12px; border-bottom: 2px solid #cbd5e1; text-align: center; font-size: 16px; }
+                table.table-white td { background-color: #ffffff !important; color: #0f172a !important; padding: 8px 12px; border-bottom: 1px solid #e2e8f0; font-size: 16px; font-weight: 800; text-align: center; }
                 table.table-white tr:hover td { background-color: #f8fafc !important; }
             </style>
             """, unsafe_allow_html=True)
