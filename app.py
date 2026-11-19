@@ -646,7 +646,6 @@ def extract_top3_walls(col_cdf, col_pdf, curr_p):
     cdf_clean = col_cdf.sort_values("openInterest", ascending=False).drop_duplicates(subset=["strike"])
     pdf_clean = col_pdf.sort_values("openInterest", ascending=False).drop_duplicates(subset=["strike"])
 
-    # 上方 5% ~ 30% 区间 (Spot * 1.05 <= Strike <= Spot * 1.30)
     c_min_bound = curr_p * 1.05
     c_max_bound = curr_p * 1.30
     above_df = cdf_clean[(cdf_clean["strike"] >= c_min_bound) & (cdf_clean["strike"] <= c_max_bound)].copy()
@@ -663,7 +662,6 @@ def extract_top3_walls(col_cdf, col_pdf, curr_p):
     c_top_list = [(float(r["strike"]), int(r["openInterest"])) for _, r in top3_calls.iterrows()]
     call_wall_val = max(c_top_list, key=lambda x: x[1])[0] if c_top_list else None
 
-    # 下方 5% ~ 30% 区间 (Spot * 0.70 <= Strike <= Spot * 0.95)
     p_min_bound = curr_p * 0.70
     p_max_bound = curr_p * 0.95
     below_df = pdf_clean[(pdf_clean["strike"] >= p_min_bound) & (pdf_clean["strike"] <= p_max_bound)].copy()
@@ -1039,7 +1037,6 @@ def render_native_market_watch():
     fmt = {"TODAY PRICE": "{:.2f}", "YESTERDAY PRICE": "{:.2f}", "CHANGE": "{:+.2f}", "% CHANGE": "{:+.2f}%", "MA20": "{:.2f}", "MA50": "{:.2f}", "MA200": "{:.2f}", "YEARLY HIGH": "{:.2f}", "YEARLY LOW": "{:.2f}", "RSI (14)": "{:.1f}"}
     styled_df = df_watch.style.apply(lambda c: [style_watch(v, c.name) for v in c], axis=0).format(fmt)
 
-    # 取消固定高度内部上下滚动框，按行数完整展开显示
     full_table_height = (len(df_watch) + 1) * 42 + 12
     event = st.dataframe(styled_df, use_container_width=True, height=full_table_height, row_height=42, hide_index=True, on_select="rerun", selection_mode="single-row")
 
@@ -1233,8 +1230,8 @@ elif st.session_state.page == "Options Intelligence":
 
     st.markdown("<div class='module-container'>", unsafe_allow_html=True)
     hdr_c1, hdr_c2 = st.columns([4.5, 1.5])
-    hdr_c1.markdown("<div class='card-header'>📊 期权库真实核心行权价明细 (Call vs Put 权利金与未平仓对比)</div>", unsafe_allow_html=True)
-    st.session_state.show_all_strikes = hdr_c2.toggle("显示全部行权价", value=st.session_state.show_all_strikes)
+    hdr_c1.markdown("<div class='card-header'>📊 期权库真实核心行权价明细 (Call vs Put 权利金与未平仓对比 | 现价 ±30% 波段全覆盖)</div>", unsafe_allow_html=True)
+    st.session_state.show_all_strikes = hdr_c2.toggle("显示全链所有行权价", value=st.session_state.show_all_strikes)
 
     has_real_chain = (not cdf.empty and not pdf.empty)
     if has_real_chain:
@@ -1257,23 +1254,39 @@ elif st.session_state.page == "Options Intelligence":
 
     st.markdown("<br>", unsafe_allow_html=True)
     if has_real_chain:
-        cdf_unique["dist"] = (cdf_unique["strike"] - spot).abs()
-        n_strikes = len(cdf_unique) if st.session_state.show_all_strikes else 29
-        strikes = sorted(cdf_unique.nsmallest(n_strikes, "dist")["strike"].unique().tolist())
         cf = cdf_unique.set_index("strike")
         pf = pdf_unique.set_index("strike")
+        common_strikes = sorted(list(set(cf.index).intersection(set(pf.index))))
+
+        if st.session_state.show_all_strikes:
+            strikes = common_strikes
+        else:
+            # 默认覆盖现价上下 30% 波段区间（如 NVDA $146 -> $102 ~ $190）
+            band_strikes = [k for k in common_strikes if spot * 0.70 <= k <= spot * 1.30]
+            if not band_strikes:
+                band_strikes = common_strikes
+            # 若区间内超过 45 档，按总 OI 筛选最活跃的 45 档再按价格升序排列，确保 110-190 头尾完整覆盖
+            if len(band_strikes) > 45:
+                scored = sorted(
+                    band_strikes,
+                    key=lambda k: int(cf.loc[k].get("openInterest", 0)) + int(pf.loc[k].get("openInterest", 0)),
+                    reverse=True
+                )
+                strikes = sorted(scored[:45])
+            else:
+                strikes = band_strikes
+
         s_rows = []
         for k in strikes:
-            if k in cf.index and k in pf.index:
-                cr = cf.loc[k]
-                pr = pf.loc[k]
-                s_rows.append({
-                    "CALL OI": f"{int(cr.get('openInterest', 0)):,}",
-                    "CALL 权利金": f"${float(cr.get('lastPrice', 0.0)):.2f}",
-                    "STRIKE 行权价": f"${float(k):.2f}",
-                    "PUT 权利金": f"${float(pr.get('lastPrice', 0.0)):.2f}",
-                    "PUT OI": f"{int(pr.get('openInterest', 0)):,}"
-                })
+            cr = cf.loc[k]
+            pr = pf.loc[k]
+            s_rows.append({
+                "CALL OI": f"{int(cr.get('openInterest', 0)):,}",
+                "CALL 权利金": f"${float(cr.get('lastPrice', 0.0)):.2f}",
+                "STRIKE 行权价": f"${float(k):.2f}",
+                "PUT 权利金": f"${float(pr.get('lastPrice', 0.0)):.2f}",
+                "PUT OI": f"{int(pr.get('openInterest', 0)):,}"
+            })
         if s_rows:
             dfs = pd.DataFrame(s_rows)
             st.markdown("""
