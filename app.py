@@ -269,9 +269,7 @@ def _query_yahoo_options_api(symbol, target_dt_timestamp=None):
 @st.cache_data(ttl=1800, show_spinner=False)
 def _query_nasdaq_options_api(symbol, target_dt_timestamp=None):
     """
-    备用源：纳斯达克期权链接口适配。
-    支持可选环境变量/Secrets 中的 NASDAQ_API_KEY 与 NASDAQ_BEARER_TOKEN；
-    无凭证时尝试公开行情端点，若受限或未授权则返回空表并交由缓存/提示兜底。
+    备用源：纳斯达克期权链接口适配（支持大小写无关的模糊字段匹配 + 按到期日过滤）。
     """
     clean_sym = symbol.split(".")[0].upper()
     api_key, bearer = get_nasdaq_credentials()
@@ -283,19 +281,47 @@ def _query_nasdaq_options_api(symbol, target_dt_timestamp=None):
     if bearer:
         headers["Authorization"] = f"Bearer {bearer}"
 
-    endpoints = []
+    date_query = ""
+    if target_dt_timestamp:
+        dt_obj = datetime.fromtimestamp(target_dt_timestamp)
+        d_from = (dt_obj - timedelta(days=2)).strftime("%Y-%m-%d")
+        d_to = (dt_obj + timedelta(days=5)).strftime("%Y-%m-%d")
+        date_query = f"&fromdate={d_from}&todate={d_to}"
+
+    endpoints = [
+        f"https://api.nasdaq.com/api/quote/{clean_sym}/option-chain?assetclass=stocks&limit=100{date_query}",
+        f"https://api.nasdaq.com/api/quote/{clean_sym}/option-chain?assetclass=stocks&limit=100"
+    ]
     if api_key:
-        endpoints.append(f"https://data.nasdaq.com/api/v3/datatables/NDAQ/CHAIN?offset=delayed&symbol={clean_sym}&api_key={api_key}")
-    endpoints.append(f"https://api.nasdaq.com/api/quote/{clean_sym}/option-chain?assetclass=stocks&limit=50")
+        endpoints.insert(0, f"https://data.nasdaq.com/api/v3/datatables/NDAQ/CHAIN?offset=delayed&symbol={clean_sym}&api_key={api_key}")
+
+    def parse_num(val, is_int=False):
+        if val is None:
+            return 0 if is_int else 0.0
+        s = str(val).replace("$", "").replace(",", "").strip()
+        if s in ("", "--", "N/A", "None", "null"):
+            return 0 if is_int else 0.0
+        try:
+            f_val = float(s)
+            return int(round(f_val)) if is_int else f_val
+        except Exception:
+            return 0 if is_int else 0.0
+
+    def find_field(row_dict, prefix_list, keyword_list):
+        for k, v in row_dict.items():
+            kl = k.lower()
+            if any(kl.startswith(p) for p in prefix_list) and any(kw in kl for kw in keyword_list):
+                if v not in (None, "", "--"):
+                    return v
+        return None
 
     for url in endpoints:
         try:
-            res = requests.get(url, headers=headers, timeout=6)
+            res = requests.get(url, headers=headers, timeout=8)
             if res.status_code != 200:
                 continue
             payload = res.json()
 
-            # 1) 解析 Nasdaq Data Link datatables 结构 (NDAQ/CHAIN)
             datatable = payload.get("datatable", {})
             if isinstance(datatable, dict) and datatable.get("data") and datatable.get("columns"):
                 cols = [c.get("name") for c in datatable["columns"]]
@@ -313,10 +339,10 @@ def _query_nasdaq_options_api(symbol, target_dt_timestamp=None):
                         except Exception:
                             pass
                     rec = {
-                        "strike": float(strike),
-                        "lastPrice": float(item.get("lastPrice") or 0.0),
-                        "openInterest": int(item.get("openInterest") or 0),
-                        "volume": int(item.get("volume") or 0),
+                        "strike": parse_num(strike, False),
+                        "lastPrice": parse_num(item.get("lastPrice"), False),
+                        "openInterest": parse_num(item.get("openInterest"), True),
+                        "volume": parse_num(item.get("volume"), True),
                     }
                     if opt_type.startswith("C"):
                         c_rows.append(rec)
@@ -325,7 +351,6 @@ def _query_nasdaq_options_api(symbol, target_dt_timestamp=None):
                 if c_rows and p_rows:
                     return sorted(exp_set), pd.DataFrame(c_rows), pd.DataFrame(p_rows)
 
-            # 2) 解析 api.nasdaq.com 响应结构
             data_obj = payload.get("data", {})
             chain_rows = data_obj.get("table", {}).get("rows") if isinstance(data_obj, dict) else None
             if isinstance(chain_rows, list) and chain_rows:
@@ -333,31 +358,29 @@ def _query_nasdaq_options_api(symbol, target_dt_timestamp=None):
                 for r in chain_rows:
                     if not isinstance(r, dict):
                         continue
-                    strike_raw = r.get("strike")
-                    if strike_raw in (None, "", "--"):
+                    strike_raw = r.get("strike") or r.get("Strike")
+                    strike_val = parse_num(strike_raw, False)
+                    if strike_val <= 0:
                         continue
-                    try:
-                        strike_val = float(str(strike_raw).replace("$", "").replace(",", ""))
-                    except Exception:
-                        continue
-                    c_oi_raw = r.get("c_openInterest") or r.get("callOpenInterest") or 0
-                    p_oi_raw = r.get("p_openInterest") or r.get("putOpenInterest") or 0
-                    c_last_raw = r.get("c_last") or r.get("callLast") or 0.0
-                    p_last_raw = r.get("p_last") or r.get("putLast") or 0.0
-                    c_vol_raw = r.get("c_volume") or r.get("callVolume") or 0
-                    p_vol_raw = r.get("p_volume") or r.get("putVolume") or 0
+
+                    c_oi_raw = find_field(r, ["c_", "call"], ["openinterest", "open_interest", "oi"])
+                    p_oi_raw = find_field(r, ["p_", "put"], ["openinterest", "open_interest", "oi"])
+                    c_last_raw = find_field(r, ["c_", "call"], ["last", "bid", "ask"])
+                    p_last_raw = find_field(r, ["p_", "put"], ["last", "bid", "ask"])
+                    c_vol_raw = find_field(r, ["c_", "call"], ["volume", "vol"])
+                    p_vol_raw = find_field(r, ["p_", "put"], ["volume", "vol"])
 
                     c_rows.append({
                         "strike": strike_val,
-                        "lastPrice": float(str(c_last_raw).replace("$", "") or 0.0),
-                        "openInterest": int(str(c_oi_raw).replace(",", "") or 0),
-                        "volume": int(str(c_vol_raw).replace(",", "") or 0),
+                        "lastPrice": parse_num(c_last_raw, False),
+                        "openInterest": parse_num(c_oi_raw, True),
+                        "volume": parse_num(c_vol_raw, True),
                     })
                     p_rows.append({
                         "strike": strike_val,
-                        "lastPrice": float(str(p_last_raw).replace("$", "") or 0.0),
-                        "openInterest": int(str(p_oi_raw).replace(",", "") or 0),
-                        "volume": int(str(p_vol_raw).replace(",", "") or 0),
+                        "lastPrice": parse_num(p_last_raw, False),
+                        "openInterest": parse_num(p_oi_raw, True),
+                        "volume": parse_num(p_vol_raw, True),
                     })
                 if c_rows and p_rows:
                     return [], pd.DataFrame(c_rows), pd.DataFrame(p_rows)
@@ -367,10 +390,6 @@ def _query_nasdaq_options_api(symbol, target_dt_timestamp=None):
     return [], pd.DataFrame(), pd.DataFrame()
 
 def fetch_real_option_chain_for_date(symbol, target_dt_timestamp=None):
-    """
-    优先请求 Yahoo 期权接口，失败时自动切换 Nasdaq 备用接口；
-    成功后写入 Session 缓存，失败时读取最近真实缓存，绝不伪造数据。
-    """
     cache_key = f"{symbol}_{target_dt_timestamp or 'nearest'}"
     exp_dates, cdf, pdf = _query_yahoo_options_api(symbol, target_dt_timestamp)
 
