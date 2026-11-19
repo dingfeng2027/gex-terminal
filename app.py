@@ -100,7 +100,27 @@ def get_nasdaq_credentials():
         pass
     return api_key.strip(), bearer.strip()
 
-@st.cache_data(ttl=60, show_spinner=False)
+def _query_yahoo_chart_payload(symbol, range_str="1mo", interval_str="1d"):
+    hosts = ["query1.finance.yahoo.com", "query2.finance.yahoo.com"]
+    headers_list = [
+        {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"},
+        {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15"}
+    ]
+    for idx, host in enumerate(hosts):
+        url = f"https://{host}/v8/finance/chart/{symbol}?interval={interval_str}&range={range_str}"
+        headers = headers_list[idx % len(headers_list)]
+        try:
+            res = requests.get(url, headers=headers, timeout=5)
+            if res.status_code == 200:
+                data = res.json()
+                result = data.get("chart", {}).get("result", [])
+                if result:
+                    return result[0]
+        except Exception:
+            continue
+    return None
+
+@st.cache_data(ttl=15, show_spinner=False)
 def fetch_stock_metrics(symbol, live=True):
     fb = FALLBACK_DATA.get(symbol, {"name": symbol, "price": 150.0, "prev": 148.0, "pe": 25.0, "mcap": "100B"})
     if not live:
@@ -110,64 +130,62 @@ def fetch_stock_metrics(symbol, live=True):
             "high52": fb["price"] * 1.15, "low52": fb["price"] * 0.80, "rsi": 55.0,
             "pe": fb.get("pe"), "eps": 5.0, "mcap": fb.get("mcap", "100B")
         }
-    
-    try:
-        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1d&range=1mo"
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-        res = requests.get(url, headers=headers, timeout=6)
-        if res.status_code == 200:
-            data = res.json()
-            result = data.get('chart', {}).get('result', [])
-            if result:
-                meta = result[0].get('meta', {})
-                indicators = result[0].get('indicators', {}).get('quote', [{}])[0]
-                closes = [c for c in indicators.get('close', []) if c is not None]
-                highs = [h for h in indicators.get('high', []) if h is not None]
-                lows = [l for l in indicators.get('low', []) if l is not None]
-                
-                if len(closes) >= 2:
-                    last_price = closes[-1]
-                    prev_price = closes[-2]
-                    
-                    ma20 = sum(closes[-20:]) / min(20, len(closes))
-                    ma50 = sum(closes[-50:]) / min(50, len(closes))
-                    ma200 = sum(closes[-200:]) / min(200, len(closes))
-                    
-                    high52 = max(highs) if highs else last_price * 1.1
-                    low52 = min(lows) if lows else last_price * 0.9
-                    
-                    rsi = 50.0
-                    if len(closes) > 15:
-                        deltas = [closes[i] - closes[i-1] for i in range(1, len(closes))]
-                        gains = [d for d in deltas[-14:] if d > 0]
-                        losses = [-d for d in deltas[-14:] if d < 0]
-                        avg_gain = sum(gains) / 14 if gains else 0.0
-                        avg_loss = sum(losses) / 14 if losses else 0.0
-                        if avg_loss > 0:
-                            rs = avg_gain / avg_loss
-                            rsi = 100 - (100 / (1 + rs))
-                        elif avg_gain > 0:
-                            rsi = 100.0
-                            
-                    short_name = meta.get('shortName') or meta.get('longName') or fb.get("name", symbol)
-                    
-                    return {
-                        "name": short_name,
-                        "price": round(float(last_price), 2),
-                        "prev": round(float(prev_price), 2),
-                        "ma20": round(float(ma20), 2),
-                        "ma50": round(float(ma50), 2),
-                        "ma200": round(float(ma200), 2),
-                        "high52": round(float(high52), 2),
-                        "low52": round(float(low52), 2),
-                        "rsi": round(float(rsi), 1),
-                        "pe": fb.get("pe", 25.0),
-                        "eps": 5.0,
-                        "mcap": fb.get("mcap", "100B")
-                    }
-    except Exception:
-        pass
-        
+
+    result_item = _query_yahoo_chart_payload(symbol, range_str="1mo", interval_str="1d")
+    if result_item:
+        try:
+            meta = result_item.get("meta", {})
+            indicators = result_item.get("indicators", {}).get("quote", [{}])[0]
+            closes = [c for c in indicators.get("close", []) if c is not None]
+            highs = [h for h in indicators.get("high", []) if h is not None]
+            lows = [l for l in indicators.get("low", []) if l is not None]
+
+            meta_price = meta.get("regularMarketPrice")
+            meta_prev = meta.get("chartPreviousClose") or meta.get("previousClose")
+
+            if len(closes) >= 2:
+                last_price = float(meta_price) if meta_price is not None else float(closes[-1])
+                prev_price = float(meta_prev) if meta_prev is not None else float(closes[-2])
+
+                ma20 = sum(closes[-20:]) / min(20, len(closes))
+                ma50 = sum(closes[-50:]) / min(50, len(closes))
+                ma200 = sum(closes[-200:]) / min(200, len(closes))
+
+                high52 = max(highs) if highs else last_price * 1.1
+                low52 = min(lows) if lows else last_price * 0.9
+
+                rsi = 50.0
+                if len(closes) > 15:
+                    deltas = [closes[i] - closes[i-1] for i in range(1, len(closes))]
+                    gains = [d for d in deltas[-14:] if d > 0]
+                    losses = [-d for d in deltas[-14:] if d < 0]
+                    avg_gain = sum(gains) / 14 if gains else 0.0
+                    avg_loss = sum(losses) / 14 if losses else 0.0
+                    if avg_loss > 0:
+                        rs = avg_gain / avg_loss
+                        rsi = 100 - (100 / (1 + rs))
+                    elif avg_gain > 0:
+                        rsi = 100.0
+
+                short_name = meta.get("shortName") or meta.get("longName") or fb.get("name", symbol)
+
+                return {
+                    "name": short_name,
+                    "price": round(float(last_price), 2),
+                    "prev": round(float(prev_price), 2),
+                    "ma20": round(float(ma20), 2),
+                    "ma50": round(float(ma50), 2),
+                    "ma200": round(float(ma200), 2),
+                    "high52": round(float(high52), 2),
+                    "low52": round(float(low52), 2),
+                    "rsi": round(float(rsi), 1),
+                    "pe": fb.get("pe", 25.0),
+                    "eps": 5.0,
+                    "mcap": fb.get("mcap", "100B")
+                }
+        except Exception:
+            pass
+
     p = fb["price"]
     prev = fb["prev"]
     return {
@@ -177,32 +195,28 @@ def fetch_stock_metrics(symbol, live=True):
         "pe": fb.get("pe"), "eps": 5.0, "mcap": fb.get("mcap", "100B")
     }
 
-@st.cache_data(ttl=60, show_spinner=False)
+@st.cache_data(ttl=15, show_spinner=False)
 def fetch_history_df(symbol, period_str, current_price):
     pmap = {"1日": "1d", "1星期": "5d", "1个月": "1mo", "3个月": "3mo", "6个月": "6mo", "1年": "1y", "全部": "max"}
     yfp = pmap.get(period_str, "6mo")
     range_map = {"1d": "1d", "5d": "5d", "1mo": "1mo", "3mo": "3mo", "6mo": "6mo", "1y": "1y", "max": "max"}
     r = range_map.get(yfp, "6mo")
-    
-    try:
-        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1d&range={r}"
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-        res = requests.get(url, headers=headers, timeout=6)
-        if res.status_code == 200:
-            data = res.json()
-            result = data.get('chart', {}).get('result', [])
-            if result:
-                timestamps = result[0].get('timestamp', [])
-                quotes = result[0].get('indicators', {}).get('quote', [{}])[0]
-                closes = quotes.get('close', [])
-                if timestamps and closes:
-                    valid_data = [(datetime.fromtimestamp(ts), c) for ts, c in zip(timestamps, closes) if c is not None]
-                    if valid_data:
-                        dates, prices = zip(*valid_data)
-                        return pd.DataFrame({"Date": list(dates), "Close": list(prices)})
-    except Exception:
-        pass
-        
+    interval_str = "5m" if r == "1d" else "1d"
+
+    result_item = _query_yahoo_chart_payload(symbol, range_str=r, interval_str=interval_str)
+    if result_item:
+        try:
+            timestamps = result_item.get("timestamp", [])
+            quotes = result_item.get("indicators", {}).get("quote", [{}])[0]
+            closes = quotes.get("close", [])
+            if timestamps and closes:
+                valid_data = [(datetime.fromtimestamp(ts), c) for ts, c in zip(timestamps, closes) if c is not None]
+                if valid_data:
+                    dates, prices = zip(*valid_data)
+                    return pd.DataFrame({"Date": list(dates), "Close": list(prices)})
+        except Exception:
+            pass
+
     ndays = {"1d": 2, "5d": 7, "1mo": 21, "3mo": 63, "6mo": 120}.get(yfp, 250)
     np.random.seed(abs(hash(symbol + period_str)) % 10000)
     dates = pd.date_range(end=datetime.today(), periods=ndays, freq="B")
@@ -225,7 +239,7 @@ def _query_yahoo_options_api(symbol, target_dt_timestamp=None):
         }
     ]
     hosts = ["query1.finance.yahoo.com", "query2.finance.yahoo.com"]
-    
+
     for attempt in range(3):
         host = hosts[attempt % len(hosts)]
         headers = headers_list[attempt % len(headers_list)]
@@ -244,21 +258,21 @@ def _query_yahoo_options_api(symbol, target_dt_timestamp=None):
                     if options_data:
                         calls = options_data[0].get('calls', [])
                         puts = options_data[0].get('puts', [])
-                        
+
                         cdf = pd.DataFrame([{
                             "strike": float(c.get("strike")),
                             "lastPrice": float(c.get("lastPrice") or 0.0),
                             "openInterest": int(c.get("openInterest") or 0),
                             "volume": int(c.get("volume") or 0)
                         } for c in calls if c.get("strike") is not None])
-                        
+
                         pdf = pd.DataFrame([{
                             "strike": float(p.get("strike")),
                             "lastPrice": float(p.get("lastPrice") or 0.0),
                             "openInterest": int(p.get("openInterest") or 0),
                             "volume": int(p.get("volume") or 0)
                         } for p in puts if p.get("strike") is not None])
-                        
+
                         if not cdf.empty and not pdf.empty:
                             return exp_dates, cdf, pdf
         except Exception:
@@ -268,9 +282,6 @@ def _query_yahoo_options_api(symbol, target_dt_timestamp=None):
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def _query_nasdaq_options_api(symbol, target_dt_timestamp=None):
-    """
-    备用源：纳斯达克期权链接口适配（支持大小写无关的模糊字段匹配 + 按到期日过滤）。
-    """
     clean_sym = symbol.split(".")[0].upper()
     api_key, bearer = get_nasdaq_credentials()
     headers = {
@@ -411,20 +422,33 @@ def fetch_real_option_chain_for_date(symbol, target_dt_timestamp=None):
     return [], pd.DataFrame(), pd.DataFrame()
 
 def extract_top3_walls(col_cdf, col_pdf, curr_p):
+    """
+    严格按现价上下过滤：
+    - 上 3 档：仅筛选 strike > curr_p 的 Call，按 openInterest 降序取前 3
+    - 下 3 档：仅筛选 strike < curr_p 的 Put，按 openInterest 降序取前 3
+    """
     if col_cdf is None or col_pdf is None or col_cdf.empty or col_pdf.empty:
         return [], None, [], None
 
-    above_df = col_cdf[col_cdf["strike"] > curr_p].sort_values(by="strike", ascending=True).head(8)
-    if len(above_df) < 3:
-        above_df = col_cdf.sort_values(by="strike", ascending=False).head(8)
-    top3_calls = above_df.sort_values(by="openInterest", ascending=False).head(3).sort_values(by="strike", ascending=False)
+    above_df = col_cdf[col_cdf["strike"] > curr_p].copy()
+    if above_df.empty:
+        above_df = col_cdf.copy()
+    top3_calls = (
+        above_df.sort_values(by="openInterest", ascending=False)
+        .head(3)
+        .sort_values(by="strike", ascending=False)
+    )
     c_top_list = [(float(r["strike"]), int(r["openInterest"])) for _, r in top3_calls.iterrows()]
     call_wall_val = max(c_top_list, key=lambda x: x[1])[0] if c_top_list else None
 
-    below_df = col_pdf[col_pdf["strike"] < curr_p].sort_values(by="strike", ascending=False).head(8)
-    if len(below_df) < 3:
-        below_df = col_pdf.sort_values(by="strike", ascending=True).head(8)
-    top3_puts = below_df.sort_values(by="openInterest", ascending=False).head(3).sort_values(by="strike", ascending=True)
+    below_df = col_pdf[col_pdf["strike"] < curr_p].copy()
+    if below_df.empty:
+        below_df = col_pdf.copy()
+    top3_puts = (
+        below_df.sort_values(by="openInterest", ascending=False)
+        .head(3)
+        .sort_values(by="strike", ascending=True)
+    )
     p_bot_list = [(float(r["strike"]), int(r["openInterest"])) for _, r in top3_puts.iterrows()]
     put_wall_val = max(p_bot_list, key=lambda x: x[1])[0] if p_bot_list else None
 
@@ -433,17 +457,17 @@ def extract_top3_walls(col_cdf, col_pdf, curr_p):
 def build_custom_option_matrix_html(symbol, spot):
     today = datetime.today()
     real_exp_timestamps, _, _ = fetch_real_option_chain_for_date(symbol)
-    
+
     past_candidates = []
     d_cursor = today - timedelta(days=1)
     while len(past_candidates) < 2:
         if d_cursor.weekday() in [0, 2, 4]:
             past_candidates.insert(0, d_cursor)
         d_cursor -= timedelta(days=1)
-        
+
     target_dates = list(past_candidates)
     target_dates.append(today)
-    
+
     d_cursor = today + timedelta(days=1)
     while len(target_dates) < 10:
         if d_cursor.weekday() in [0, 2, 4]:
@@ -472,7 +496,7 @@ def build_custom_option_matrix_html(symbol, spot):
         else:
             tag = f"到期 +{delta_days}天"
             is_today = False
-            
+
         d_str = dt.strftime("%d/%m")
         cols_data.append({
             "date": dt,
@@ -510,7 +534,7 @@ def build_custom_option_matrix_html(symbol, spot):
     for i, c_info in enumerate(cols_data):
         curr_p = spot_series[i] if spot_series[i] is not None else spot
         ts_target = matched_timestamps[i] if i < len(matched_timestamps) else None
-        
+
         _, col_cdf, col_pdf = fetch_real_option_chain_for_date(symbol, ts_target)
         if not col_cdf.empty and not col_pdf.empty:
             has_any_real_data = True
@@ -540,7 +564,7 @@ def build_custom_option_matrix_html(symbol, spot):
     y_high = v_max + v_span * 0.25
 
     col_w = 122
-    left_axis_w = 78
+    left_axis_w = 84
     n_cols = len(cols_data)
     total_chart_w = n_cols * col_w
     header_h = 38
@@ -614,7 +638,7 @@ def build_custom_option_matrix_html(symbol, spot):
     <div style="background:#ffffff; border:2px solid #1e293b; border-radius:8px; padding:8px 10px; font-family:sans-serif; color:#0f172a; width:100%; box-sizing:border-box; overflow:hidden;">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; padding-bottom:4px; border-bottom:2px solid #cbd5e1; height:28px; box-sizing:border-box;">
             <div style="font-size:15px; font-weight:900; color:#0f172a;">
-                📊 {symbol} 期权墙矩阵 ({status_badge} | 现价: <span style="background:#fef08a; padding:1px 5px; border-radius:4px;">${spot:.2f}</span>)
+                📊 {symbol} 期权墙矩阵 ({status_badge} | Spot: <span style="background:#fef08a; padding:1px 5px; border-radius:4px;">${spot:.2f}</span>)
             </div>
             <div style="display:flex; gap:14px; font-size:12px; font-weight:800;">
                 <span style="color:#16a34a;">━━ Call Wall</span>
@@ -627,16 +651,16 @@ def build_custom_option_matrix_html(symbol, spot):
         <div style="display:flex; width:100%;">
             <div style="width:{left_axis_w}px; flex-shrink:0; border-right:2px solid #1e293b; display:flex; flex-direction:column; box-sizing:border-box;">
                 <div style="height:{header_h}px; border-bottom:1px solid #cbd5e1; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:12px; background:#f8fafc; box-sizing:border-box;">到期日</div>
-                <div style="height:{top3_h}px; border-bottom:2px solid #1e293b; display:flex; flex-direction:column; align-items:center; justify-content:center; font-weight:900; font-size:12px; color:#15803d; background:#f0fdf4; text-align:center; box-sizing:border-box;">
-                    <span>上 3 档</span>
-                    <span style="font-size:10px; font-weight:700;">Call Wall</span>
+                <div style="height:{top3_h}px; border-bottom:2px solid #1e293b; display:flex; flex-direction:column; align-items:center; justify-content:center; font-weight:900; font-size:11px; color:#15803d; background:#f0fdf4; text-align:center; box-sizing:border-box;">
+                    <span>上3档 Call</span>
+                    <span style="font-size:9px; font-weight:700;">行权价 &gt; Spot</span>
                 </div>
                 <div style="height:{svg_h}px; position:relative; border-bottom:2px solid #1e293b; background:#ffffff; box-sizing:border-box;">
                     {y_ticks_html}
                 </div>
-                <div style="height:{bot3_h}px; border-bottom:1px solid #cbd5e1; display:flex; flex-direction:column; align-items:center; justify-content:center; font-weight:900; font-size:12px; color:#b91c1c; background:#fef2f2; text-align:center; box-sizing:border-box;">
-                    <span>下 3 档</span>
-                    <span style="font-size:10px; font-weight:700;">Put Wall</span>
+                <div style="height:{bot3_h}px; border-bottom:1px solid #cbd5e1; display:flex; flex-direction:column; align-items:center; justify-content:center; font-weight:900; font-size:11px; color:#b91c1c; background:#fef2f2; text-align:center; box-sizing:border-box;">
+                    <span>下3档 Put</span>
+                    <span style="font-size:9px; font-weight:700;">行权价 &lt; Spot</span>
                 </div>
                 <div style="height:{footer_h}px; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:12px; background:#f8fafc; box-sizing:border-box;">日期轴</div>
             </div>
@@ -647,7 +671,7 @@ def build_custom_option_matrix_html(symbol, spot):
     for c in cols_data:
         bg_col = "background:#fef08a;" if c["is_today"] else ""
         bg_cell = "background:rgba(254,240,138,0.25);" if c["is_today"] else "background:#ffffff;"
-        
+
         c_rows_html = ""
         if c["c_top"]:
             for k_val, oi_val in c["c_top"]:
@@ -720,7 +744,7 @@ def build_custom_option_matrix_html(symbol, spot):
     """
     return html
 
-top_bar_html = "<div class='top-bar'><div class='brand-title'>CAPITAL QUANT v2</div><div class='live-badge'>Live (1-min Sync) | " + datetime.now().strftime('%b %d, %Y %H:%M:%S') + " | UK Institutional Terminal</div></div>"
+top_bar_html = "<div class='top-bar'><div class='brand-title'>CAPITAL QUANT v2</div><div class='live-badge'>Live (15s Cache / 1-min Sync) | " + datetime.now().strftime('%b %d, %Y %H:%M:%S') + " | UK Institutional Terminal</div></div>"
 st.markdown(top_bar_html, unsafe_allow_html=True)
 
 n1, n2, n3, n4 = st.columns([1.3, 1.3, 1.6, 2.2])
@@ -799,9 +823,9 @@ def render_native_market_watch():
 
     fmt = {"TODAY PRICE": "{:.2f}", "YESTERDAY PRICE": "{:.2f}", "CHANGE": "{:+.2f}", "% CHANGE": "{:+.2f}%", "MA20": "{:.2f}", "MA50": "{:.2f}", "MA200": "{:.2f}", "YEARLY HIGH": "{:.2f}", "YEARLY LOW": "{:.2f}", "RSI (14)": "{:.1f}"}
     styled_df = df_watch.style.apply(lambda c: [style_watch(v, c.name) for v in c], axis=0).format(fmt)
-    
+
     event = st.dataframe(styled_df, use_container_width=True, height=580, row_height=42, hide_index=True, on_select="rerun", selection_mode="single-row")
-    
+
     if event and event.selection and "rows" in event.selection and len(event.selection.rows) > 0:
         selected_idx = event.selection.rows[0]
         if selected_idx < len(df_watch):
@@ -843,15 +867,15 @@ elif st.session_state.page == "Stock Analysis":
     sym = st.session_state.selected_ticker
     m = fetch_stock_metrics(sym, live=st.session_state.use_live_api)
     cur_price = float(m["price"])
-    
+
     col_c, col_l = st.columns([2.5, 1.1])
     with col_c:
         card_title_html = "<div class='card-header'>" + sym + " — " + m.get('name', sym) + " | Price Chart</div>"
         st.markdown(card_title_html, unsafe_allow_html=True)
-        
+
         active_p = st.session_state.chart_period
         periods = ["1日", "1星期", "1个月", "3个月", "6个月", "1年", "全部"]
-        
+
         style_overrides = "<style>"
         for p in periods:
             if p == active_p:
@@ -864,11 +888,11 @@ elif st.session_state.page == "Stock Analysis":
             if p_cols[i].button(p, use_container_width=True, key="p_" + p):
                 st.session_state.chart_period = p
                 st.rerun()
-                
+
         st.session_state.show_walls = p_cols[-1].toggle("期权防守通道 (Wall)", value=st.session_state.show_walls)
 
         hdf = fetch_history_df(sym, st.session_state.chart_period, cur_price)
-        
+
         if st.session_state.show_walls:
             rolling_mid = hdf['Close'].rolling(window=5, min_periods=1).mean()
             call_wall_tmp = rolling_mid * 1.07
@@ -884,15 +908,15 @@ elif st.session_state.page == "Stock Analysis":
         y_max = c_max + margin
 
         fig = go.Figure(go.Scatter(x=hdf["Date"], y=hdf["Close"], mode="lines", line=dict(color="#0284c7", width=2.5), showlegend=False))
-        
+
         if st.session_state.show_walls:
             rolling_mid = hdf['Close'].rolling(window=5, min_periods=1).mean()
             call_wall_series = rolling_mid * 1.07
             put_wall_series = rolling_mid * 0.93
-            
+
             latest_call_val = float(call_wall_series.iloc[-1])
             latest_put_val = float(put_wall_series.iloc[-1])
-            
+
             fig.add_trace(go.Scatter(
                 x=hdf["Date"], y=call_wall_series, mode='lines',
                 name=f"CALL Wall: ${latest_call_val:.2f}",
@@ -919,16 +943,16 @@ elif st.session_state.page == "Stock Analysis":
             )
 
         fig.add_hline(
-            y=cur_price, 
-            line_dash="dash", 
-            line_color="#64748b", 
+            y=cur_price,
+            line_dash="dash",
+            line_color="#64748b",
             line_width=2,
-            annotation_text=f" {cur_price:.2f} ", 
-            annotation_position="right", 
-            annotation_font=dict(color="#fff", size=14), 
+            annotation_text=f" {cur_price:.2f} ",
+            annotation_position="right",
+            annotation_font=dict(color="#fff", size=14),
             annotation_bgcolor="#334155"
         )
-        
+
         fig.update_layout(
             template="plotly_white", paper_bgcolor="#fff", plot_bgcolor="#fff",
             xaxis_rangeslider_visible=False, height=390,
@@ -948,7 +972,7 @@ elif st.session_state.page == "Stock Analysis":
             fg = "#000" if pct == 0 else ("#4ade80" if pct > 0 else "#f87171")
             fw = "900" if pct == 0 else "700"
             rows_html += "<tr style='background:" + bg + ";border-bottom:1px solid #1e3a8a;'><td style='padding:7px 8px;color:" + fg + ";font-weight:" + fw + ";font-size:13px;'>" + lbl + "</td><td style='padding:7px 8px;color:" + fg + ";font-weight:" + fw + ";font-size:13px;text-align:right;'>" + f"{tp:.2f}" + "</td></tr>"
-        
+
         html_box = "<div style='background:#061430;border:1px solid #2563eb;border-radius:8px;height:480px;overflow-y:auto;padding:3px;'><table style='width:100%;border-collapse:collapse;font-family:sans-serif;'><thead><tr style='border-bottom:2px solid #1e3a8a;color:#93c5fd;font-size:13px;position:sticky;top:0;background:#061430;'><th style='padding:6px 8px;text-align:left;'>LEVEL</th><th style='padding:6px 8px;text-align:right;'>TARGET PRICE</th></tr></thead><tbody>" + rows_html + "</tbody></table></div>"
         st.components.v1.html(html_box, height=495)
 
@@ -957,7 +981,7 @@ elif st.session_state.page == "Stock Analysis":
     pct_c = round((chg / prev_val) * 100, 2) if prev_val else 0.0
     cc = "#4ade80" if chg >= 0 else "#f87171"
     k1, k2, k3, k4, k5, k6 = st.columns(6)
-    
+
     k1.markdown("<div class='metric-box'><div class='metric-label'>Current Price</div><div class='metric-val'>" + f"{cur_price:.2f}" + " <span style='font-size:17px;color:" + cc + ";'>(" + f"{pct_c:+.2f}" + "%)</span></div></div>", unsafe_allow_html=True)
     k2.markdown("<div class='metric-box'><div class='metric-label'>52W High</div><div class='metric-val'>" + f"{float(m.get('high52', cur_price)):.2f}" + "</div></div>", unsafe_allow_html=True)
     k3.markdown("<div class='metric-box'><div class='metric-label'>52W Low</div><div class='metric-val'>" + f"{float(m.get('low52', cur_price)):.2f}" + "</div></div>", unsafe_allow_html=True)
@@ -984,15 +1008,15 @@ elif st.session_state.page == "Options Intelligence":
     sym = st.session_state.selected_ticker
     m_opt = fetch_stock_metrics(sym, live=st.session_state.use_live_api)
     spot = float(m_opt["price"])
-    
+
     _, cdf, pdf = fetch_real_option_chain_for_date(sym)
-    
+
     matrix_html = build_custom_option_matrix_html(sym, spot)
     st.components.v1.html(matrix_html, height=620, scrolling=False)
 
     st.markdown("<div class='module-container'>", unsafe_allow_html=True)
     st.markdown("<div class='card-header'>📊 期权库真实核心行权价明细 (Call vs Put 权利金与未平仓对比)</div>", unsafe_allow_html=True)
-    
+
     has_real_chain = (not cdf.empty and not pdf.empty)
     if has_real_chain:
         coi = safe_col_sum(cdf, "openInterest")
@@ -1002,7 +1026,7 @@ elif st.session_state.page == "Options Intelligence":
         pcr = round(poi / coi, 2) if coi > 0 else 0.0
     else:
         coi, poi, cvol, pvol, pcr = 0, 0, 0, 0, 0.0
-    
+
     m1, m2, m3, m4 = st.columns(4)
     m1.markdown("<div class='metric-box'><div class='metric-label'>Call / Put Volume</div><div class='metric-val'>" + (f"{cvol:,} / {pvol:,}" if has_real_chain else "N/A") + "</div></div>", unsafe_allow_html=True)
     m2.markdown("<div class='metric-box'><div class='metric-label'>Put / Call OI Ratio</div><div class='metric-val' style='color:#facc15;'>" + (f"{pcr:.2f}" if (has_real_chain and coi > 0) else "N/A") + "</div></div>", unsafe_allow_html=True)
@@ -1022,9 +1046,9 @@ elif st.session_state.page == "Options Intelligence":
                 cr = cf.loc[k]
                 pr = pf.loc[k]
                 s_rows.append({
-                    "CALL OI": f"{int(cr.get('openInterest', 0)):,}", 
+                    "CALL OI": f"{int(cr.get('openInterest', 0)):,}",
                     "CALL 权利金": f"${float(cr.get('lastPrice', 0.0)):.2f}",
-                    "STRIKE 行权价": f"${float(k):.2f}", 
+                    "STRIKE 行权价": f"${float(k):.2f}",
                     "PUT 权利金": f"${float(pr.get('lastPrice', 0.0)):.2f}",
                     "PUT OI": f"{int(pr.get('openInterest', 0)):,}"
                 })
