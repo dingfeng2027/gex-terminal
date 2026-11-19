@@ -77,6 +77,9 @@ if "chart_period" not in st.session_state:
 if "show_walls" not in st.session_state:
     st.session_state["show_walls"] = True
 
+if "show_all_strikes" not in st.session_state:
+    st.session_state["show_all_strikes"] = False
+
 if "opt_backup_cache" not in st.session_state:
     st.session_state["opt_backup_cache"] = {}
 
@@ -280,8 +283,64 @@ def _query_yahoo_options_api(symbol, target_dt_timestamp=None):
             continue
     return [], pd.DataFrame(), pd.DataFrame()
 
+def _extract_nasdaq_expirations(data_obj):
+    """从 Nasdaq option-chain 响应对象中提取真实到期日时间戳列表。"""
+    exp_set = set()
+    if not isinstance(data_obj, dict):
+        return []
+
+    date_formats = ["%b %d, %Y", "%B %d, %Y", "%Y-%m-%d", "%m/%d/%Y", "%d/%m/%Y"]
+
+    def try_add_date_str(val):
+        if not val:
+            return
+        s = str(val).strip()
+        for fmt in date_formats:
+            try:
+                dt = datetime.strptime(s[:20], fmt)
+                exp_set.add(int(dt.timestamp()))
+                return
+            except Exception:
+                continue
+
+    for key in ["expirationDates", "expirations", "expiryDates"]:
+        arr = data_obj.get(key)
+        if isinstance(arr, list):
+            for item in arr:
+                if isinstance(item, (int, float)) and item > 1_000_000_000:
+                    exp_set.add(int(item))
+                elif isinstance(item, dict):
+                    for sub_k in ["date", "value", "label", "expiry"]:
+                        try_add_date_str(item.get(sub_k))
+                else:
+                    try_add_date_str(item)
+
+    filters = data_obj.get("filterlist") or data_obj.get("filters")
+    if isinstance(filters, dict):
+        for f_val in filters.values():
+            if isinstance(f_val, list):
+                for item in f_val:
+                    if isinstance(item, dict):
+                        try_add_date_str(item.get("value") or item.get("label") or item.get("date"))
+                    else:
+                        try_add_date_str(item)
+
+    rows = data_obj.get("table", {}).get("rows") if isinstance(data_obj.get("table"), dict) else None
+    if isinstance(rows, list):
+        for r in rows:
+            if isinstance(r, dict):
+                for k, v in r.items():
+                    if any(w in k.lower() for w in ["expir", "expiry", "date"]):
+                        try_add_date_str(v)
+
+    return sorted(exp_set)
+
 @st.cache_data(ttl=1800, show_spinner=False)
 def _query_nasdaq_options_api(symbol, target_dt_timestamp=None):
+    """
+    备用源：纳斯达克期权链接口适配。
+    提取真实到期日列表并按列目标日期过滤/查询，支持大小写无关字段匹配。
+    """
     clean_sym = symbol.split(".")[0].upper()
     api_key, bearer = get_nasdaq_credentials()
     headers = {
@@ -293,15 +352,17 @@ def _query_nasdaq_options_api(symbol, target_dt_timestamp=None):
         headers["Authorization"] = f"Bearer {bearer}"
 
     date_query = ""
+    target_date_str = None
     if target_dt_timestamp:
         dt_obj = datetime.fromtimestamp(target_dt_timestamp)
-        d_from = (dt_obj - timedelta(days=2)).strftime("%Y-%m-%d")
+        target_date_str = dt_obj.strftime("%Y-%m-%d")
+        d_from = (dt_obj - timedelta(days=3)).strftime("%Y-%m-%d")
         d_to = (dt_obj + timedelta(days=5)).strftime("%Y-%m-%d")
-        date_query = f"&fromdate={d_from}&todate={d_to}"
+        date_query = f"&fromdate={d_from}&todate={d_to}&expiry={target_date_str}"
 
     endpoints = [
-        f"https://api.nasdaq.com/api/quote/{clean_sym}/option-chain?assetclass=stocks&limit=100{date_query}",
-        f"https://api.nasdaq.com/api/quote/{clean_sym}/option-chain?assetclass=stocks&limit=100"
+        f"https://api.nasdaq.com/api/quote/{clean_sym}/option-chain?assetclass=stocks&limit=200{date_query}",
+        f"https://api.nasdaq.com/api/quote/{clean_sym}/option-chain?assetclass=stocks&limit=200"
     ]
     if api_key:
         endpoints.insert(0, f"https://data.nasdaq.com/api/v3/datatables/NDAQ/CHAIN?offset=delayed&symbol={clean_sym}&api_key={api_key}")
@@ -363,10 +424,22 @@ def _query_nasdaq_options_api(symbol, target_dt_timestamp=None):
                     return sorted(exp_set), pd.DataFrame(c_rows), pd.DataFrame(p_rows)
 
             data_obj = payload.get("data", {})
+            extracted_exps = _extract_nasdaq_expirations(data_obj)
             chain_rows = data_obj.get("table", {}).get("rows") if isinstance(data_obj, dict) else None
             if isinstance(chain_rows, list) and chain_rows:
+                # 若行内带到期日字段且匹配目标到期日，优先筛出对应到期日合约
+                matched_rows = []
+                if target_date_str:
+                    for r in chain_rows:
+                        if not isinstance(r, dict):
+                            continue
+                        row_exp_txt = " ".join(str(v) for k, v in r.items() if any(w in k.lower() for w in ["expir", "expiry", "date"]))
+                        if target_date_str in row_exp_txt:
+                            matched_rows.append(r)
+                rows_to_parse = matched_rows if matched_rows else chain_rows
+
                 c_rows, p_rows = [], []
-                for r in chain_rows:
+                for r in rows_to_parse:
                     if not isinstance(r, dict):
                         continue
                     strike_raw = r.get("strike") or r.get("Strike")
@@ -394,7 +467,7 @@ def _query_nasdaq_options_api(symbol, target_dt_timestamp=None):
                         "volume": parse_num(p_vol_raw, True),
                     })
                 if c_rows and p_rows:
-                    return [], pd.DataFrame(c_rows), pd.DataFrame(p_rows)
+                    return extracted_exps, pd.DataFrame(c_rows), pd.DataFrame(p_rows)
         except Exception:
             continue
 
@@ -422,11 +495,6 @@ def fetch_real_option_chain_for_date(symbol, target_dt_timestamp=None):
     return [], pd.DataFrame(), pd.DataFrame()
 
 def extract_top3_walls(col_cdf, col_pdf, curr_p):
-    """
-    严格按现价上下过滤：
-    - 上 3 档：仅筛选 strike > curr_p 的 Call，按 openInterest 降序取前 3
-    - 下 3 档：仅筛选 strike < curr_p 的 Put，按 openInterest 降序取前 3
-    """
     if col_cdf is None or col_pdf is None or col_cdf.empty or col_pdf.empty:
         return [], None, [], None
 
@@ -521,6 +589,7 @@ def build_custom_option_matrix_html(symbol, spot):
     for i in range(today_idx + 1, n_total):
         spot_series[i] = spot_series[i - 1]
 
+    # 按列日期匹配最近真实到期日时间戳
     matched_timestamps = []
     if real_exp_timestamps:
         for c in cols_data:
@@ -542,6 +611,16 @@ def build_custom_option_matrix_html(symbol, spot):
         c_top_list, call_wall_val, p_bot_list, put_wall_val = extract_top3_walls(col_cdf, col_pdf, curr_p)
         raw_mp = round((curr_p * 0.55 + call_wall_val * 0.25 + put_wall_val * 0.20), 2) if (call_wall_val is not None and put_wall_val is not None) else None
 
+        exp_label = ""
+        if ts_target:
+            try:
+                exp_label = "到期:" + datetime.fromtimestamp(ts_target).strftime("%d/%m")
+            except Exception:
+                exp_label = c_info["tag"]
+        else:
+            exp_label = c_info["tag"]
+
+        c_info["exp_label"] = exp_label
         c_info["c_top"] = c_top_list
         c_info["p_bot"] = p_bot_list
         c_info["call_wall"] = call_wall_val
@@ -714,7 +793,7 @@ def build_custom_option_matrix_html(symbol, spot):
                 <div style="flex:1; min-width:0; border-right:1px solid #cbd5e1; box-sizing:border-box; display:flex; flex-direction:column;">
                     <div style="height:{header_h}px; border-bottom:1px solid #cbd5e1; display:flex; flex-direction:column; align-items:center; justify-content:center; box-sizing:border-box; {bg_col}">
                         <span style="font-size:12px; font-weight:900; color:#0f172a;">{c['date_str']}</span>
-                        <span style="font-size:9px; font-weight:700; color:#475569;">{c['tag']}</span>
+                        <span style="font-size:9px; font-weight:700; color:#475569;">{c['exp_label']}</span>
                     </div>
                     <div style="height:{top3_h}px; border-bottom:2px solid #1e293b; box-sizing:border-box; {bg_cell}">
                         {c_rows_html}
@@ -1015,7 +1094,9 @@ elif st.session_state.page == "Options Intelligence":
     st.components.v1.html(matrix_html, height=620, scrolling=False)
 
     st.markdown("<div class='module-container'>", unsafe_allow_html=True)
-    st.markdown("<div class='card-header'>📊 期权库真实核心行权价明细 (Call vs Put 权利金与未平仓对比)</div>", unsafe_allow_html=True)
+    hdr_c1, hdr_c2 = st.columns([4.5, 1.5])
+    hdr_c1.markdown("<div class='card-header'>📊 期权库真实核心行权价明细 (Call vs Put 权利金与未平仓对比)</div>", unsafe_allow_html=True)
+    st.session_state.show_all_strikes = hdr_c2.toggle("显示全部行权价", value=st.session_state.show_all_strikes)
 
     has_real_chain = (not cdf.empty and not pdf.empty)
     if has_real_chain:
@@ -1037,7 +1118,8 @@ elif st.session_state.page == "Options Intelligence":
     if has_real_chain:
         cdf_tmp = cdf.copy()
         cdf_tmp["dist"] = (cdf_tmp["strike"] - spot).abs()
-        strikes = cdf_tmp.nsmallest(9, "dist")["strike"].sort_values().tolist()
+        n_strikes = len(cdf_tmp["strike"].unique()) if st.session_state.show_all_strikes else 21
+        strikes = cdf_tmp.nsmallest(n_strikes, "dist")["strike"].sort_values().tolist()
         cf = cdf[cdf["strike"].isin(strikes)].drop_duplicates(subset=["strike"]).set_index("strike")
         pf = pdf[pdf["strike"].isin(strikes)].drop_duplicates(subset=["strike"]).set_index("strike")
         s_rows = []
