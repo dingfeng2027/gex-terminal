@@ -270,7 +270,6 @@ def fetch_stock_metrics(symbol, live=True):
             "pe": fb.get("pe"), "eps": 5.0, "mcap": fb.get("mcap", "100B")
         }
 
-    # Market Watch 与行情指标优先使用配置了 API Key 的 Nasdaq 接口
     nasdaq_res = _query_nasdaq_stock_data(symbol)
     if nasdaq_res:
         calc = _calc_indicators_from_closes(
@@ -643,9 +642,12 @@ def extract_top3_walls(col_cdf, col_pdf, curr_p):
     if col_cdf is None or col_pdf is None or col_cdf.empty or col_pdf.empty:
         return [], None, [], None
 
-    above_df = col_cdf[col_cdf["strike"] > curr_p].copy()
+    cdf_clean = col_cdf.sort_values("openInterest", ascending=False).drop_duplicates(subset=["strike"])
+    pdf_clean = col_pdf.sort_values("openInterest", ascending=False).drop_duplicates(subset=["strike"])
+
+    above_df = cdf_clean[cdf_clean["strike"] > curr_p].copy()
     if above_df.empty:
-        above_df = col_cdf.copy()
+        above_df = cdf_clean.copy()
     top3_calls = (
         above_df.sort_values(by="openInterest", ascending=False)
         .head(3)
@@ -654,9 +656,9 @@ def extract_top3_walls(col_cdf, col_pdf, curr_p):
     c_top_list = [(float(r["strike"]), int(r["openInterest"])) for _, r in top3_calls.iterrows()]
     call_wall_val = max(c_top_list, key=lambda x: x[1])[0] if c_top_list else None
 
-    below_df = col_pdf[col_pdf["strike"] < curr_p].copy()
+    below_df = pdf_clean[pdf_clean["strike"] < curr_p].copy()
     if below_df.empty:
-        below_df = col_pdf.copy()
+        below_df = pdf_clean.copy()
     top3_puts = (
         below_df.sort_values(by="openInterest", ascending=False)
         .head(3)
@@ -696,75 +698,44 @@ def build_custom_option_matrix_html(symbol, spot, real_exp_timestamps=None):
     if real_exp_timestamps is None:
         real_exp_timestamps, _, _ = fetch_real_option_chain_for_date(symbol)
 
-    past_candidates = []
-    d_cursor = today - timedelta(days=1)
-    while len(past_candidates) < 2:
-        if d_cursor.weekday() in [0, 2, 4]:
-            past_candidates.insert(0, d_cursor)
-        d_cursor -= timedelta(days=1)
-
-    target_dates = list(past_candidates)
-    target_dates.append(today)
-
-    d_cursor = today + timedelta(days=1)
-    while len(target_dates) < 10:
-        if d_cursor.weekday() in [0, 2, 4]:
-            target_dates.append(d_cursor)
-        d_cursor += timedelta(days=1)
-
-    hdf_hist = fetch_history_df(symbol, "1个月", spot)
-    hist_dict = {}
-    if not hdf_hist.empty and "Date" in hdf_hist.columns and "Close" in hdf_hist.columns:
-        for _, row in hdf_hist.iterrows():
-            d_key = row["Date"].strftime("%Y-%m-%d")
-            hist_dict[d_key] = float(row["Close"])
+    # 10 个独立到期日与矩阵 10 列日期完全一一对齐
+    separate_exp_timestamps = _build_10_separate_exp_timestamps(real_exp_timestamps, today)
 
     cols_data = []
-    for dt in target_dates:
+    nearest_idx = 0
+    min_abs_diff = 999999
+
+    for idx, ts_target in enumerate(separate_exp_timestamps):
+        dt = datetime.fromtimestamp(ts_target)
         delta_days = (dt.date() - today.date()).days
+        if abs(delta_days) < min_abs_diff:
+            min_abs_diff = abs(delta_days)
+            nearest_idx = idx
+
         if delta_days == 0:
-            tag = "今天"
-            is_today = True
-        elif delta_days == -1:
-            tag = "昨天"
-            is_today = False
+            tag = "今天到期"
         elif delta_days < 0:
             tag = f"{abs(delta_days)}天前"
-            is_today = False
         else:
-            tag = f"到期 +{delta_days}天"
-            is_today = False
+            tag = f"+{delta_days}天到期"
 
         d_str = dt.strftime("%d/%m")
         cols_data.append({
+            "ts": ts_target,
             "date": dt,
             "date_str": d_str,
             "tag": tag,
-            "is_today": is_today,
+            "is_today": False,
             "delta": delta_days
         })
 
-    n_total = len(cols_data)
-    today_idx = next((i for i, c in enumerate(cols_data) if c["is_today"]), n_total // 2)
-    spot_series = [None] * n_total
-    spot_series[today_idx] = spot
-
-    for i in range(today_idx - 1, -1, -1):
-        d_key = cols_data[i]["date"].strftime("%Y-%m-%d")
-        if d_key in hist_dict:
-            spot_series[i] = round(hist_dict[d_key], 2)
-        else:
-            spot_series[i] = spot_series[i + 1]
-
-    for i in range(today_idx + 1, n_total):
-        spot_series[i] = spot_series[i - 1]
-
-    separate_exp_timestamps = _build_10_separate_exp_timestamps(real_exp_timestamps, today)
+    if cols_data:
+        cols_data[nearest_idx]["is_today"] = True
 
     has_any_real_data = False
-    for i, c_info in enumerate(cols_data):
-        curr_p = spot_series[i] if spot_series[i] is not None else spot
-        ts_target = separate_exp_timestamps[i]
+    for c_info in cols_data:
+        curr_p = spot
+        ts_target = c_info["ts"]
 
         _, col_cdf, col_pdf = fetch_real_option_chain_for_date(symbol, ts_target)
         if not col_cdf.empty and not col_pdf.empty:
@@ -773,12 +744,7 @@ def build_custom_option_matrix_html(symbol, spot, real_exp_timestamps=None):
         c_top_list, call_wall_val, p_bot_list, put_wall_val = extract_top3_walls(col_cdf, col_pdf, curr_p)
         raw_mp = round((curr_p * 0.55 + call_wall_val * 0.25 + put_wall_val * 0.20), 2) if (call_wall_val is not None and put_wall_val is not None) else None
 
-        try:
-            exp_label = "到期:" + datetime.fromtimestamp(ts_target).strftime("%d/%m")
-        except Exception:
-            exp_label = c_info["tag"]
-
-        c_info["exp_label"] = exp_label
+        c_info["exp_label"] = c_info["tag"]
         c_info["c_top"] = c_top_list
         c_info["p_bot"] = p_bot_list
         c_info["call_wall"] = call_wall_val
@@ -899,7 +865,7 @@ def build_custom_option_matrix_html(symbol, spot, real_exp_timestamps=None):
                     <span>下3档 Put</span>
                     <span style="font-size:11px; font-weight:800;">行权价 &lt; Spot</span>
                 </div>
-                <div style="height:{footer_h}px; display:flex; align-items:center; justify-content:center; font-weight:900; font-size:13px; background:#f8fafc; box-sizing:border-box;">日期轴</div>
+                <div style="height:{footer_h}px; display:flex; align-items:center; justify-content:center; font-weight:900; font-size:13px; background:#f8fafc; box-sizing:border-box;">到期轴</div>
             </div>
 
             <div style="display:flex; flex:1; min-width:0;">
@@ -1258,12 +1224,15 @@ elif st.session_state.page == "Options Intelligence":
 
     has_real_chain = (not cdf.empty and not pdf.empty)
     if has_real_chain:
-        coi = safe_col_sum(cdf, "openInterest")
-        poi = safe_col_sum(pdf, "openInterest")
-        cvol = safe_col_sum(cdf, "volume")
-        pvol = safe_col_sum(pdf, "volume")
+        cdf_unique = cdf.sort_values("openInterest", ascending=False).drop_duplicates(subset=["strike"]).copy()
+        pdf_unique = pdf.sort_values("openInterest", ascending=False).drop_duplicates(subset=["strike"]).copy()
+        coi = safe_col_sum(cdf_unique, "openInterest")
+        poi = safe_col_sum(pdf_unique, "openInterest")
+        cvol = safe_col_sum(cdf_unique, "volume")
+        pvol = safe_col_sum(pdf_unique, "volume")
         pcr = round(poi / coi, 2) if coi > 0 else 0.0
     else:
+        cdf_unique, pdf_unique = pd.DataFrame(), pd.DataFrame()
         coi, poi, cvol, pvol, pcr = 0, 0, 0, 0, 0.0
 
     m1, m2, m3, m4 = st.columns(4)
@@ -1274,12 +1243,11 @@ elif st.session_state.page == "Options Intelligence":
 
     st.markdown("<br>", unsafe_allow_html=True)
     if has_real_chain:
-        cdf_tmp = cdf.copy()
-        cdf_tmp["dist"] = (cdf_tmp["strike"] - spot).abs()
-        n_strikes = len(cdf_tmp["strike"].unique()) if st.session_state.show_all_strikes else 29
-        strikes = cdf_tmp.nsmallest(n_strikes, "dist")["strike"].sort_values().tolist()
-        cf = cdf[cdf["strike"].isin(strikes)].drop_duplicates(subset=["strike"]).set_index("strike")
-        pf = pdf[pdf["strike"].isin(strikes)].drop_duplicates(subset=["strike"]).set_index("strike")
+        cdf_unique["dist"] = (cdf_unique["strike"] - spot).abs()
+        n_strikes = len(cdf_unique) if st.session_state.show_all_strikes else 29
+        strikes = sorted(cdf_unique.nsmallest(n_strikes, "dist")["strike"].unique().tolist())
+        cf = cdf_unique.set_index("strike")
+        pf = pdf_unique.set_index("strike")
         s_rows = []
         for k in strikes:
             if k in cf.index and k in pf.index:
