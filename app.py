@@ -138,7 +138,7 @@ def _query_yahoo_chart_payload(symbol, range_str="1y", interval_str="1d"):
         url = f"https://{host}/v8/finance/chart/{symbol}?interval={interval_str}&range={range_str}"
         headers = headers_list[idx % len(headers_list)]
         try:
-            res = requests.get(url, headers=headers, timeout=5)
+            res = requests.get(url, headers=headers, timeout=2.5)
             if res.status_code == 200:
                 data = res.json()
                 result = data.get("chart", {}).get("result", [])
@@ -160,7 +160,7 @@ def _query_nasdaq_stock_data(symbol):
     for ac in asset_classes:
         try:
             url_info = f"https://api.nasdaq.com/api/quote/{clean_sym}/info?assetclass={ac}"
-            res = requests.get(url_info, headers=headers, timeout=5)
+            res = requests.get(url_info, headers=headers, timeout=2.5)
             if res.status_code == 200:
                 d = res.json().get("data")
                 if isinstance(d, dict) and d.get("primaryData"):
@@ -201,7 +201,7 @@ def _query_nasdaq_stock_data(symbol):
         to_dt = datetime.today().strftime("%Y-%m-%d")
         from_dt = (datetime.today() - timedelta(days=365)).strftime("%Y-%m-%d")
         url_hist = f"https://api.nasdaq.com/api/quote/{clean_sym}/historical?assetclass={ac}&fromdate={from_dt}&limit=300&todate={to_dt}"
-        h_res = requests.get(url_hist, headers=headers, timeout=6)
+        h_res = requests.get(url_hist, headers=headers, timeout=3.0)
         if h_res.status_code == 200:
             rows = h_res.json().get("data", {}).get("tradesTable", {}).get("rows", [])
             if isinstance(rows, list) and rows:
@@ -259,7 +259,7 @@ def _calc_indicators_from_closes(closes, last_price, prev_price, high52=None, lo
         "rsi": round(float(rsi), 1)
     }
 
-@st.cache_data(ttl=180, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False)
 def fetch_stock_metrics(symbol, live=True):
     fb = FALLBACK_DATA.get(symbol, {"name": symbol, "price": 150.0, "prev": 148.0, "pe": 25.0, "mcap": "100B"})
     if not live:
@@ -326,7 +326,7 @@ def fetch_stock_metrics(symbol, live=True):
         "pe": fb.get("pe"), "eps": 5.0, "mcap": fb.get("mcap", "100B")
     }
 
-@st.cache_data(ttl=180, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False)
 def fetch_history_df(symbol, period_str, current_price):
     pmap = {"1日": "1d", "1星期": "5d", "1个月": "1mo", "3个月": "3mo", "6个月": "6mo", "1年": "1y", "全部": "max"}
     yfp = pmap.get(period_str, "6mo")
@@ -343,7 +343,7 @@ def fetch_history_df(symbol, period_str, current_price):
         ac = "etf" if clean_sym in ["QQQ", "SPY", "IWM", "DIA", "TLT"] else "stocks"
         try:
             url_hist = f"https://api.nasdaq.com/api/quote/{clean_sym}/historical?assetclass={ac}&fromdate={from_dt}&limit=1500&todate={to_dt}"
-            h_res = requests.get(url_hist, headers=headers, timeout=6)
+            h_res = requests.get(url_hist, headers=headers, timeout=3.0)
             if h_res.status_code == 200:
                 rows = h_res.json().get("data", {}).get("tradesTable", {}).get("rows", [])
                 if isinstance(rows, list) and rows:
@@ -400,14 +400,14 @@ def _query_yahoo_options_api(symbol, target_dt_timestamp=None):
     ]
     hosts = ["query1.finance.yahoo.com", "query2.finance.yahoo.com"]
 
-    for attempt in range(3):
+    for attempt in range(2):
         host = hosts[attempt % len(hosts)]
         headers = headers_list[attempt % len(headers_list)]
         url = f"https://{host}/v7/finance/options/{symbol}"
         if target_dt_timestamp:
             url += f"?date={target_dt_timestamp}"
         try:
-            res = requests.get(url, headers=headers, timeout=6)
+            res = requests.get(url, headers=headers, timeout=2.5)
             if res.status_code == 200:
                 data = res.json()
                 result = data.get('optionChain', {}).get('result', [])
@@ -436,7 +436,6 @@ def _query_yahoo_options_api(symbol, target_dt_timestamp=None):
                         if not cdf.empty and not pdf.empty:
                             return exp_dates, cdf, pdf
         except Exception:
-            time.sleep(0.2)
             continue
     return [], pd.DataFrame(), pd.DataFrame()
 
@@ -534,7 +533,7 @@ def _query_nasdaq_options_api(symbol, target_dt_timestamp=None):
 
     for url in endpoints:
         try:
-            res = requests.get(url, headers=headers, timeout=8)
+            res = requests.get(url, headers=headers, timeout=3.0)
             if res.status_code != 200:
                 continue
             payload = res.json()
@@ -957,7 +956,7 @@ def build_custom_option_matrix_html(symbol, spot, real_exp_timestamps=None):
     """
     return html
 
-top_bar_html = "<div class='top-bar'><div class='brand-title'>CAPITAL QUANT v2</div><div class='live-badge'>Auto-Sync Every 3m (180s) | " + datetime.now().strftime('%b %d, %Y %H:%M:%S') + " | UK Institutional Terminal</div></div>"
+top_bar_html = "<div class='top-bar'><div class='brand-title'>CAPITAL QUANT v2</div><div class='live-badge'>Auto-Sync Every 5m (300s) | " + datetime.now().strftime('%b %d, %Y %H:%M:%S') + " | UK Institutional Terminal</div></div>"
 st.markdown(top_bar_html, unsafe_allow_html=True)
 
 n1, n2, n3, n4 = st.columns([1.3, 1.3, 1.6, 2.2])
@@ -975,7 +974,7 @@ st.session_state.use_live_api = n4.toggle("启用 API Key 行情接口", value=s
 st.markdown("<div style='border-bottom: 1px solid #1e3a8a; margin: 4px 0 6px 0;'></div>", unsafe_allow_html=True)
 
 # ==================== PAGE 1: MARKET WATCH ====================
-@st.fragment(run_every=180)
+@st.fragment(run_every=300)
 def render_native_market_watch():
     c1, c2, c3, c4 = st.columns([2.0, 2.2, 1.2, 1.3])
     c1.markdown("### Market Watch")
@@ -1103,17 +1102,32 @@ elif st.session_state.page == "Stock Analysis":
                 st.session_state.chart_period = p
                 st.rerun()
 
-        st.session_state.show_walls = p_cols[-1].toggle("期权防守通道 (Wall)", value=st.session_state.show_walls)
+        st.session_state.show_walls = p_cols[-1].toggle("真实期权墙 (Wall)", value=st.session_state.show_walls)
 
         hdf = fetch_history_df(sym, st.session_state.chart_period, cur_price)
 
+        real_call_wall = None
+        real_put_wall = None
+        if st.session_state.show_walls and st.session_state.use_live_api:
+            _, opt_cdf, opt_pdf = fetch_real_option_chain_for_date(sym)
+            _, real_call_wall, _, real_put_wall = extract_top3_walls(opt_cdf, opt_pdf, cur_price)
+
         if st.session_state.show_walls:
-            rolling_mid = hdf['Close'].rolling(window=5, min_periods=1).mean()
-            call_wall_tmp = rolling_mid * 1.07
-            put_wall_tmp = rolling_mid * 0.93
-            c_min = min(hdf["Close"].min(), put_wall_tmp.min())
-            c_max = max(hdf["Close"].max(), call_wall_tmp.max())
+            if real_call_wall is not None and real_put_wall is not None:
+                call_wall_series = pd.Series([float(real_call_wall)] * len(hdf), index=hdf.index)
+                put_wall_series = pd.Series([float(real_put_wall)] * len(hdf), index=hdf.index)
+                wall_source_tag = "真实期权墙"
+            else:
+                rolling_mid = hdf['Close'].rolling(window=5, min_periods=1).mean()
+                call_wall_series = rolling_mid * 1.07
+                put_wall_series = rolling_mid * 0.93
+                wall_source_tag = "均线±7%参考"
+            c_min = min(hdf["Close"].min(), put_wall_series.min())
+            c_max = max(hdf["Close"].max(), call_wall_series.max())
         else:
+            call_wall_series = None
+            put_wall_series = None
+            wall_source_tag = ""
             c_min = hdf["Close"].min()
             c_max = hdf["Close"].max()
 
@@ -1123,11 +1137,7 @@ elif st.session_state.page == "Stock Analysis":
 
         fig = go.Figure(go.Scatter(x=hdf["Date"], y=hdf["Close"], mode="lines", line=dict(color="#0284c7", width=2.5), showlegend=False))
 
-        if st.session_state.show_walls:
-            rolling_mid = hdf['Close'].rolling(window=5, min_periods=1).mean()
-            call_wall_series = rolling_mid * 1.07
-            put_wall_series = rolling_mid * 0.93
-
+        if st.session_state.show_walls and call_wall_series is not None and put_wall_series is not None:
             latest_call_val = float(call_wall_series.iloc[-1])
             latest_put_val = float(put_wall_series.iloc[-1])
 
@@ -1138,7 +1148,7 @@ elif st.session_state.page == "Stock Analysis":
             ))
             fig.add_annotation(
                 x=hdf["Date"].iloc[-1], y=latest_call_val,
-                text=f" 🟢 CALL Wall: ${latest_call_val:.2f} ",
+                text=f" 🟢 CALL Wall ({wall_source_tag}): ${latest_call_val:.2f} ",
                 showarrow=False, xanchor="left", yanchor="middle",
                 font=dict(color="#16a34a", size=12, family="sans-serif")
             )
@@ -1151,7 +1161,7 @@ elif st.session_state.page == "Stock Analysis":
             ))
             fig.add_annotation(
                 x=hdf["Date"].iloc[-1], y=latest_put_val,
-                text=f" 🔴 PUT Wall: ${latest_put_val:.2f} ",
+                text=f" 🔴 PUT Wall ({wall_source_tag}): ${latest_put_val:.2f} ",
                 showarrow=False, xanchor="left", yanchor="middle",
                 font=dict(color="#dc2626", size=12, family="sans-serif")
             )
@@ -1171,7 +1181,7 @@ elif st.session_state.page == "Stock Analysis":
             template="plotly_white", paper_bgcolor="#fff", plot_bgcolor="#fff",
             xaxis_rangeslider_visible=False, height=390,
             font=dict(size=15, color="#1e293b"),
-            margin=dict(l=10, r=110, t=10, b=10), showlegend=False
+            margin=dict(l=10, r=175, t=10, b=10), showlegend=False
         )
         fig.update_yaxes(side="right", gridcolor="#e2e8f0", range=[y_min, y_max])
         st.plotly_chart(fig, use_container_width=True)
@@ -1261,11 +1271,9 @@ elif st.session_state.page == "Options Intelligence":
         if st.session_state.show_all_strikes:
             strikes = common_strikes
         else:
-            # 默认覆盖现价上下 30% 波段区间（如 NVDA $146 -> $102 ~ $190）
             band_strikes = [k for k in common_strikes if spot * 0.70 <= k <= spot * 1.30]
             if not band_strikes:
                 band_strikes = common_strikes
-            # 若区间内超过 45 档，按总 OI 筛选最活跃的 45 档再按价格升序排列，确保 110-190 头尾完整覆盖
             if len(band_strikes) > 45:
                 scored = sorted(
                     band_strikes,
