@@ -194,15 +194,24 @@ def fetch_history_df(symbol, period_str, current_price):
 @st.cache_data(ttl=1800, show_spinner=False)
 def _query_yahoo_options_api(symbol, target_dt_timestamp=None):
     """
-    底层直连 Yahoo Finance 期权接口，内置双节点切换与重试机制，缓存30分钟保护配额。
+    直连 Yahoo Finance 期权链接口，抓取真实 strikes, openInterest, lastPrice, volume。
     """
     headers_list = [
-        {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36'},
-        {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15'}
+        {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+            'Accept': 'application/json,text/plain,*/*',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Referer': f'https://finance.yahoo.com/quote/{symbol}/options/'
+        },
+        {
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15',
+            'Accept': 'application/json,text/plain,*/*',
+            'Accept-Language': 'en-US,en;q=0.9'
+        }
     ]
     hosts = ["query1.finance.yahoo.com", "query2.finance.yahoo.com"]
     
-    for attempt in range(2):
+    for attempt in range(4):
         host = hosts[attempt % len(hosts)]
         headers = headers_list[attempt % len(headers_list)]
         url = f"https://{host}/v7/finance/options/{symbol}"
@@ -223,14 +232,14 @@ def _query_yahoo_options_api(symbol, target_dt_timestamp=None):
                         
                         cdf = pd.DataFrame([{
                             "strike": float(c.get("strike")),
-                            "lastPrice": float(c.get("lastPrice") or 0.1),
+                            "lastPrice": float(c.get("lastPrice") or 0.0),
                             "openInterest": int(c.get("openInterest") or 0),
                             "volume": int(c.get("volume") or 0)
                         } for c in calls if c.get("strike") is not None])
                         
                         pdf = pd.DataFrame([{
                             "strike": float(p.get("strike")),
-                            "lastPrice": float(p.get("lastPrice") or 0.1),
+                            "lastPrice": float(p.get("lastPrice") or 0.0),
                             "openInterest": int(p.get("openInterest") or 0),
                             "volume": int(p.get("volume") or 0)
                         } for p in puts if p.get("strike") is not None])
@@ -238,28 +247,22 @@ def _query_yahoo_options_api(symbol, target_dt_timestamp=None):
                         if not cdf.empty and not pdf.empty:
                             return exp_dates, cdf, pdf
         except Exception:
-            time.sleep(0.3)
+            time.sleep(0.25)
             continue
     return [], pd.DataFrame(), pd.DataFrame()
 
 def fetch_real_option_chain_for_date(symbol, target_dt_timestamp=None):
     """
-    优化版期权数据获取：
-    1. 优先读取 Streamlit 缓存的交易所真实期权链；
-    2. 成功获取后同步写入 Session 级持久化结算备份库；
-    3. 若遇收盘后接口限流、网络超时或休市返回空值，自动平稳读取该标的最新的交易所结算缓存，确保每次打开稳定呈现真实期权墙。
+    仅使用期权库真实数据（接口缓存 + Session 结算缓存），绝不生成预设假价格或规律假 OI。
     """
     cache_key = f"{symbol}_{target_dt_timestamp or 'nearest'}"
     exp_dates, cdf, pdf = _query_yahoo_options_api(symbol, target_dt_timestamp)
     
     if not cdf.empty and not pdf.empty:
-        # 存入持久化结算备份
         st.session_state["opt_backup_cache"][cache_key] = (exp_dates, cdf.copy(), pdf.copy())
-        # 同时更新该标的的通用最新结算兜底
         st.session_state["opt_backup_cache"][f"{symbol}_latest_settlement"] = (exp_dates, cdf.copy(), pdf.copy())
         return exp_dates, cdf, pdf
         
-    # 接口超时或受限时，平稳读取缓存中的最新交易所结算数据
     if cache_key in st.session_state["opt_backup_cache"]:
         return st.session_state["opt_backup_cache"][cache_key]
     if f"{symbol}_latest_settlement" in st.session_state["opt_backup_cache"]:
@@ -267,54 +270,35 @@ def fetch_real_option_chain_for_date(symbol, target_dt_timestamp=None):
         
     return [], pd.DataFrame(), pd.DataFrame()
 
-def fetch_options_chain(symbol, spot):
-    _, cdf, pdf = fetch_real_option_chain_for_date(symbol)
-    if cdf.empty or pdf.empty:
-        step = 5.0 if spot > 100 else 2.5
-        base = round(spot / step) * step
-        strikes = [round(base + i * step, 2) for i in range(-10, 11)]
-        c_rows = [{"strike": k, "lastPrice": 2.5, "openInterest": int(5000 * np.exp(-abs(k-spot)/10)), "volume": 500} for k in strikes]
-        p_rows = [{"strike": k, "lastPrice": 2.5, "openInterest": int(5000 * np.exp(-abs(k-spot)/10)), "volume": 500} for k in strikes]
-        cdf = pd.DataFrame(c_rows)
-        pdf = pd.DataFrame(p_rows)
-    exps = [(datetime.today() + timedelta(days=7 * i)).strftime("%Y-%m-%d") for i in range(1, 7)]
-    return exps, cdf, pdf
-
 def extract_top3_walls(col_cdf, col_pdf, curr_p):
     """
-    真实上/下3档提取：
-    自动过滤并筛选出最贴近现价、且真实未平仓数（OI）最高的 3 个档位作为真实的 Call Wall（阻力）与 Put Wall（支撑）
+    严格基于期权库真实数据提取上下 3 档（Call Wall / Put Wall）。
+    若当前无真实期权链数据，返回空列表与 None，不伪造任何预设行权价或 OI。
     """
-    # 1. 上3档 Call Wall：选取现价上方最贴近现价的 6 个行权价窗口，从中提取真实 OI 最高的 3 个
-    above_df = col_cdf[col_cdf["strike"] > curr_p].sort_values(by="strike", ascending=True).head(6)
-    if len(above_df) < 3:
-        above_df = col_cdf.sort_values(by="strike", ascending=False).head(6)
-    top3_calls = above_df.sort_values(by="openInterest", ascending=False).head(3)
-    # 按行权价从高到低排列，符合盘口阻力梯队视觉习惯
-    top3_calls = top3_calls.sort_values(by="strike", ascending=False)
-    c_top_list = [(float(r["strike"]), int(r["openInterest"])) for _, r in top3_calls.iterrows()]
-    if not c_top_list:
-        c_top_list = [(round(curr_p*1.08, 1), 5000), (round(curr_p*1.05, 1), 8000), (round(curr_p*1.02, 1), 12000)]
-    call_wall_val = max(c_top_list, key=lambda x: x[1])[0]
+    if col_cdf is None or col_pdf is None or col_cdf.empty or col_pdf.empty:
+        return [], None, [], None
 
-    # 2. 下3档 Put Wall：选取现价下方最贴近现价的 6 个行权价窗口，从中提取真实 OI 最高的 3 个
-    below_df = col_pdf[col_pdf["strike"] < curr_p].sort_values(by="strike", ascending=False).head(6)
+    # 1. 上 3 档 Call：现价上方最贴近现价的 8 个真实行权价中，按真实 OI 选出前 3 档
+    above_df = col_cdf[col_cdf["strike"] > curr_p].sort_values(by="strike", ascending=True).head(8)
+    if len(above_df) < 3:
+        above_df = col_cdf.sort_values(by="strike", ascending=False).head(8)
+    top3_calls = above_df.sort_values(by="openInterest", ascending=False).head(3).sort_values(by="strike", ascending=False)
+    c_top_list = [(float(r["strike"]), int(r["openInterest"])) for _, r in top3_calls.iterrows()]
+    call_wall_val = max(c_top_list, key=lambda x: x[1])[0] if c_top_list else None
+
+    # 2. 下 3 档 Put：现价下方最贴近现价的 8 个真实行权价中，按真实 OI 选出前 3 档
+    below_df = col_pdf[col_pdf["strike"] < curr_p].sort_values(by="strike", ascending=False).head(8)
     if len(below_df) < 3:
-        below_df = col_pdf.sort_values(by="strike", ascending=True).head(6)
-    top3_puts = below_df.sort_values(by="openInterest", ascending=False).head(3)
-    # 按行权价从低到高排列，符合盘口支撑梯队视觉习惯
-    top3_puts = top3_puts.sort_values(by="strike", ascending=True)
+        below_df = col_pdf.sort_values(by="strike", ascending=True).head(8)
+    top3_puts = below_df.sort_values(by="openInterest", ascending=False).head(3).sort_values(by="strike", ascending=True)
     p_bot_list = [(float(r["strike"]), int(r["openInterest"])) for _, r in top3_puts.iterrows()]
-    if not p_bot_list:
-        p_bot_list = [(round(curr_p*0.92, 1), 5000), (round(curr_p*0.95, 1), 8000), (round(curr_p*0.98, 1), 12000)]
-    put_wall_val = max(p_bot_list, key=lambda x: x[1])[0]
+    put_wall_val = max(p_bot_list, key=lambda x: x[1])[0] if p_bot_list else None
 
     return c_top_list, call_wall_val, p_bot_list, put_wall_val
 
 def build_custom_option_matrix_html(symbol, spot):
     """
-    真实期权数据库矩阵（一屏全显优化版）：
-    - SVG 高度精确设为 260px，单行间距设为 30px，取消外层滚动条，平板一屏完整展示。
+    全量显示期权矩阵（包含顶部“到期日”行），取消外层滚动拉动，仅用期权库真实数据。
     """
     today = datetime.today()
     real_exp_timestamps, _, _ = fetch_real_option_chain_for_date(symbol)
@@ -369,7 +353,7 @@ def build_custom_option_matrix_html(symbol, spot):
 
     n_total = len(cols_data)
     today_idx = next((i for i, c in enumerate(cols_data) if c["is_today"]), n_total // 2)
-    spot_series = [0.0] * n_total
+    spot_series = [None] * n_total
     spot_series[today_idx] = spot
 
     for i in range(today_idx - 1, -1, -1):
@@ -377,11 +361,10 @@ def build_custom_option_matrix_html(symbol, spot):
         if d_key in hist_dict:
             spot_series[i] = round(hist_dict[d_key], 2)
         else:
-            prev_p = spot_series[i + 1]
-            spot_series[i] = round(prev_p * 0.995, 2)
+            spot_series[i] = spot_series[i + 1]
 
     for i in range(today_idx + 1, n_total):
-        spot_series[i] = round(spot_series[i - 1] * 1.001, 2)
+        spot_series[i] = spot_series[i - 1]
 
     matched_timestamps = []
     if real_exp_timestamps:
@@ -392,16 +375,17 @@ def build_custom_option_matrix_html(symbol, spot):
     else:
         matched_timestamps = [None] * n_total
 
+    has_any_real_data = False
     for i, c_info in enumerate(cols_data):
-        curr_p = spot_series[i]
+        curr_p = spot_series[i] if spot_series[i] is not None else spot
         ts_target = matched_timestamps[i] if i < len(matched_timestamps) else None
         
         _, col_cdf, col_pdf = fetch_real_option_chain_for_date(symbol, ts_target)
-        if col_cdf.empty or col_pdf.empty:
-            _, col_cdf, col_pdf = fetch_options_chain(symbol, curr_p)
+        if not col_cdf.empty and not col_pdf.empty:
+            has_any_real_data = True
 
         c_top_list, call_wall_val, p_bot_list, put_wall_val = extract_top3_walls(col_cdf, col_pdf, curr_p)
-        raw_mp = round((curr_p * 0.55 + call_wall_val * 0.25 + put_wall_val * 0.20), 2)
+        raw_mp = round((curr_p * 0.55 + call_wall_val * 0.25 + put_wall_val * 0.20), 2) if (call_wall_val is not None and put_wall_val is not None) else None
 
         c_info["c_top"] = c_top_list
         c_info["p_bot"] = p_bot_list
@@ -412,10 +396,15 @@ def build_custom_option_matrix_html(symbol, spot):
 
     all_vals = []
     for c in cols_data:
-        all_vals.extend([c["call_wall"], c["max_pain"], c["spot"], c["put_wall"]])
+        for v in [c["call_wall"], c["max_pain"], c["spot"], c["put_wall"]]:
+            if v is not None:
+                all_vals.append(v)
+    if not all_vals:
+        all_vals = [spot * 0.95, spot, spot * 1.05]
+
     v_min = min(all_vals)
     v_max = max(all_vals)
-    v_span = (v_max - v_min) if v_max != v_min else 10.0
+    v_span = (v_max - v_min) if v_max != v_min else max(spot * 0.05, 5.0)
     y_low = v_min - v_span * 0.25
     y_high = v_max + v_span * 0.25
 
@@ -423,11 +412,15 @@ def build_custom_option_matrix_html(symbol, spot):
     left_axis_w = 78
     n_cols = len(cols_data)
     total_chart_w = n_cols * col_w
-    svg_h = 260
+    header_h = 38
+    top3_h = 90
+    svg_h = 240
+    bot3_h = 90
+    footer_h = 34
 
     def val_to_y(v):
         ratio = (v - y_low) / (y_high - y_low)
-        return round(svg_h - (ratio * (svg_h - 40) + 20), 1)
+        return round(svg_h - (ratio * (svg_h - 36) + 18), 1)
 
     svg_elements = ""
     y_ticks_html = ""
@@ -436,7 +429,7 @@ def build_custom_option_matrix_html(symbol, spot):
         tick_val = y_low + (y_high - y_low) * (t_i / num_ticks)
         ty = val_to_y(tick_val)
         svg_elements += f"<line x1='0' y1='{ty}' x2='{total_chart_w}' y2='{ty}' stroke='#e2e8f0' stroke-width='1' stroke-dasharray='4,4' />"
-        y_ticks_html += f"<div style='position:absolute; top:{ty - 8}px; right:6px; font-size:12px; font-weight:700; color:#475569;'>{tick_val:.1f}</div>"
+        y_ticks_html += f"<div style='position:absolute; top:{ty - 8}px; right:6px; font-size:11px; font-weight:700; color:#475569;'>{tick_val:.1f}</div>"
 
     for idx, c in enumerate(cols_data):
         x_left = idx * col_w
@@ -447,12 +440,18 @@ def build_custom_option_matrix_html(symbol, spot):
     pts_call, pts_mp, pts_spot, pts_put = [], [], [], []
     for idx, c in enumerate(cols_data):
         cx = round(idx * col_w + col_w / 2, 1)
-        pts_call.append((cx, val_to_y(c["call_wall"]), c["call_wall"]))
-        pts_mp.append((cx, val_to_y(c["max_pain"]), c["max_pain"]))
-        pts_spot.append((cx, val_to_y(c["spot"]), c["spot"]))
-        pts_put.append((cx, val_to_y(c["put_wall"]), c["put_wall"]))
+        if c["call_wall"] is not None:
+            pts_call.append((cx, val_to_y(c["call_wall"]), c["call_wall"]))
+        if c["max_pain"] is not None:
+            pts_mp.append((cx, val_to_y(c["max_pain"]), c["max_pain"]))
+        if c["spot"] is not None:
+            pts_spot.append((cx, val_to_y(c["spot"]), c["spot"]))
+        if c["put_wall"] is not None:
+            pts_put.append((cx, val_to_y(c["put_wall"]), c["put_wall"]))
 
     def draw_polyline(pts, color, width=2.6, dash=""):
+        if len(pts) < 2:
+            return ""
         p_str = " ".join([f"{x},{y}" for x, y, _ in pts])
         dash_attr = f"stroke-dasharray='{dash}'" if dash else ""
         return f"<polyline fill='none' stroke='{color}' stroke-width='{width}' {dash_attr} points='{p_str}' />"
@@ -462,55 +461,56 @@ def build_custom_option_matrix_html(symbol, spot):
     svg_elements += draw_polyline(pts_mp, "#2563eb", 2.2, "4,3")
     svg_elements += draw_polyline(pts_spot, "#0f172a", 3.4)
 
-    for idx in range(n_cols):
-        cx, cy, val = pts_call[idx]
+    for cx, cy, val in pts_call:
         svg_elements += f"<circle cx='{cx}' cy='{cy}' r='4' fill='#16a34a' stroke='#fff' stroke-width='1.2' />"
         svg_elements += f"<text x='{cx}' y='{cy - 7}' text-anchor='middle' font-size='11' font-weight='800' fill='#15803d'>{val:g}</text>"
 
-        px, py, pval = pts_put[idx]
+    for px, py, pval in pts_put:
         svg_elements += f"<circle cx='{px}' cy='{py}' r='4' fill='#dc2626' stroke='#fff' stroke-width='1.2' />"
         svg_elements += f"<text x='{px}' y='{py + 14}' text-anchor='middle' font-size='11' font-weight='800' fill='#b91c1c'>{pval:g}</text>"
 
-        mx, my, mval = pts_mp[idx]
+    for mx, my, mval in pts_mp:
         svg_elements += f"<circle cx='{mx}' cy='{my}' r='3.5' fill='#2563eb' />"
         svg_elements += f"<text x='{mx}' y='{my - 7}' text-anchor='middle' font-size='11' font-weight='700' fill='#1d4ed8'>{mval:g}</text>"
 
-        sx, sy, sval = pts_spot[idx]
+    for sx, sy, sval in pts_spot:
         svg_elements += f"<circle cx='{sx}' cy='{sy}' r='4.5' fill='#0f172a' stroke='#facc15' stroke-width='1.5' />"
         svg_elements += f"<text x='{sx}' y='{sy + 15}' text-anchor='middle' font-size='12' font-weight='900' fill='#0f172a'>{sval:g}</text>"
 
+    status_badge = "真实期权库数据" if has_any_real_data else "期权库暂未返回（无预设假数据）"
+
     html = f"""
-    <div style="background:#ffffff; border:2px solid #1e293b; border-radius:8px; padding:10px; font-family:sans-serif; color:#0f172a; width:100%; box-sizing:border-box; overflow-x:auto;">
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; padding-bottom:6px; border-bottom:2px solid #cbd5e1; min-width:{left_axis_w + total_chart_w}px;">
-            <div style="font-size:16px; font-weight:900; color:#0f172a;">
-                📊 {symbol} 真实期权结算与最强防守墙矩阵 (近价高OI前3档 | 现价: <span style="background:#fef08a; padding:2px 5px; border-radius:4px;">${spot:.2f}</span>)
+    <div style="background:#ffffff; border:2px solid #1e293b; border-radius:8px; padding:8px 10px; font-family:sans-serif; color:#0f172a; width:100%; box-sizing:border-box; overflow:hidden;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; padding-bottom:4px; border-bottom:2px solid #cbd5e1; height:28px; box-sizing:border-box;">
+            <div style="font-size:15px; font-weight:900; color:#0f172a;">
+                📊 {symbol} 期权墙矩阵 ({status_badge} | 现价: <span style="background:#fef08a; padding:1px 5px; border-radius:4px;">${spot:.2f}</span>)
             </div>
-            <div style="display:flex; gap:15px; font-size:13px; font-weight:800;">
-                <span style="color:#16a34a;">━━ 绿线: Call Wall</span>
-                <span style="color:#2563eb;">╌╌ 蓝线: Max Pain</span>
-                <span style="color:#0f172a;">━━ 黑线: Spot</span>
-                <span style="color:#dc2626;">━━ 红线: Put Wall</span>
+            <div style="display:flex; gap:14px; font-size:12px; font-weight:800;">
+                <span style="color:#16a34a;">━━ Call Wall</span>
+                <span style="color:#2563eb;">╌╌ Max Pain</span>
+                <span style="color:#0f172a;">━━ Spot</span>
+                <span style="color:#dc2626;">━━ Put Wall</span>
             </div>
         </div>
 
-        <div style="display:flex; min-width:{left_axis_w + total_chart_w}px;">
+        <div style="display:flex; width:100%;">
             <div style="width:{left_axis_w}px; flex-shrink:0; border-right:2px solid #1e293b; display:flex; flex-direction:column; box-sizing:border-box;">
-                <div style="height:40px; border-bottom:1px solid #cbd5e1; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:12px; background:#f8fafc; box-sizing:border-box;">到期日</div>
-                <div style="height:90px; border-bottom:2px solid #1e293b; display:flex; flex-direction:column; align-items:center; justify-content:center; font-weight:900; font-size:13px; color:#15803d; background:#f0fdf4; text-align:center; box-sizing:border-box;">
+                <div style="height:{header_h}px; border-bottom:1px solid #cbd5e1; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:12px; background:#f8fafc; box-sizing:border-box;">到期日</div>
+                <div style="height:{top3_h}px; border-bottom:2px solid #1e293b; display:flex; flex-direction:column; align-items:center; justify-content:center; font-weight:900; font-size:12px; color:#15803d; background:#f0fdf4; text-align:center; box-sizing:border-box;">
                     <span>上 3 档</span>
-                    <span style="font-size:10px; font-weight:700;">Call Wall (高OI)</span>
+                    <span style="font-size:10px; font-weight:700;">Call Wall</span>
                 </div>
                 <div style="height:{svg_h}px; position:relative; border-bottom:2px solid #1e293b; background:#ffffff; box-sizing:border-box;">
                     {y_ticks_html}
                 </div>
-                <div style="height:90px; border-bottom:1px solid #cbd5e1; display:flex; flex-direction:column; align-items:center; justify-content:center; font-weight:900; font-size:13px; color:#b91c1c; background:#fef2f2; text-align:center; box-sizing:border-box;">
+                <div style="height:{bot3_h}px; border-bottom:1px solid #cbd5e1; display:flex; flex-direction:column; align-items:center; justify-content:center; font-weight:900; font-size:12px; color:#b91c1c; background:#fef2f2; text-align:center; box-sizing:border-box;">
                     <span>下 3 档</span>
-                    <span style="font-size:10px; font-weight:700;">Put Wall (高OI)</span>
+                    <span style="font-size:10px; font-weight:700;">Put Wall</span>
                 </div>
-                <div style="height:38px; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:12px; background:#f8fafc; box-sizing:border-box;">日期轴</div>
+                <div style="height:{footer_h}px; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:12px; background:#f8fafc; box-sizing:border-box;">日期轴</div>
             </div>
 
-            <div style="display:flex; width:{total_chart_w}px; flex-shrink:0;">
+            <div style="display:flex; flex:1; min-width:0;">
     """
 
     for c in cols_data:
@@ -518,58 +518,73 @@ def build_custom_option_matrix_html(symbol, spot):
         bg_cell = "background:rgba(254,240,138,0.25);" if c["is_today"] else "background:#ffffff;"
         
         c_rows_html = ""
-        for k_val, oi_val in c["c_top"]:
-            is_max_c = (k_val == c["call_wall"])
-            hi_style = "background:#dcfce7; font-weight:900; color:#14532d;" if is_max_c else "font-weight:700; color:#1e293b;"
-            c_rows_html += f"""
-                <div style="height:30px; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between; align-items:center; padding:0 6px; font-size:12px; box-sizing:border-box; {hi_style}">
-                    <span style="letter-spacing:-0.5px;">{k_val:g}</span>
-                    <span style="color:#cbd5e1; margin:0 2px;">|</span>
-                    <span style="letter-spacing:-0.5px;">{oi_val:,}</span>
+        if c["c_top"]:
+            for k_val, oi_val in c["c_top"]:
+                is_max_c = (k_val == c["call_wall"])
+                hi_style = "background:#dcfce7; font-weight:900; color:#14532d;" if is_max_c else "font-weight:700; color:#1e293b;"
+                c_rows_html += f"""
+                    <div style="height:30px; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between; align-items:center; padding:0 5px; font-size:11px; box-sizing:border-box; {hi_style}">
+                        <span>{k_val:g}</span>
+                        <span style="color:#cbd5e1;">|</span>
+                        <span>{oi_val:,}</span>
+                    </div>
+                """
+        else:
+            c_rows_html = """
+                <div style="height:90px; display:flex; align-items:center; justify-content:center; font-size:11px; color:#64748b; font-weight:700;">
+                    无真实链数据
                 </div>
             """
 
         p_rows_html = ""
-        for k_val, oi_val in c["p_bot"]:
-            is_max_p = (k_val == c["put_wall"])
-            hi_style = "background:#fee2e2; font-weight:900; color:#7f1d1d;" if is_max_p else "font-weight:700; color:#1e293b;"
-            p_rows_html += f"""
-                <div style="height:30px; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between; align-items:center; padding:0 6px; font-size:12px; box-sizing:border-box; {hi_style}">
-                    <span style="letter-spacing:-0.5px;">{k_val:g}</span>
-                    <span style="color:#cbd5e1; margin:0 2px;">|</span>
-                    <span style="letter-spacing:-0.5px;">{oi_val:,}</span>
+        if c["p_bot"]:
+            for k_val, oi_val in c["p_bot"]:
+                is_max_p = (k_val == c["put_wall"])
+                hi_style = "background:#fee2e2; font-weight:900; color:#7f1d1d;" if is_max_p else "font-weight:700; color:#1e293b;"
+                p_rows_html += f"""
+                    <div style="height:30px; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between; align-items:center; padding:0 5px; font-size:11px; box-sizing:border-box; {hi_style}">
+                        <span>{k_val:g}</span>
+                        <span style="color:#cbd5e1;">|</span>
+                        <span>{oi_val:,}</span>
+                    </div>
+                """
+        else:
+            p_rows_html = """
+                <div style="height:90px; display:flex; align-items:center; justify-content:center; font-size:11px; color:#64748b; font-weight:700;">
+                    无真实链数据
                 </div>
             """
 
         html += f"""
-                <div style="width:{col_w}px; flex-shrink:0; border-right:1px solid #cbd5e1; box-sizing:border-box; display:flex; flex-direction:column;">
-                    <div style="height:40px; border-bottom:1px solid #cbd5e1; display:flex; flex-direction:column; align-items:center; justify-content:center; box-sizing:border-box; {bg_col}">
-                        <span style="font-size:14px; font-weight:900; color:#0f172a;">{c['date_str']}</span>
-                        <span style="font-size:10px; font-weight:700; color:#475569;">{c['tag']}</span>
+                <div style="flex:1; min-width:0; border-right:1px solid #cbd5e1; box-sizing:border-box; display:flex; flex-direction:column;">
+                    <div style="height:{header_h}px; border-bottom:1px solid #cbd5e1; display:flex; flex-direction:column; align-items:center; justify-content:center; box-sizing:border-box; {bg_col}">
+                        <span style="font-size:12px; font-weight:900; color:#0f172a;">{c['date_str']}</span>
+                        <span style="font-size:9px; font-weight:700; color:#475569;">{c['tag']}</span>
                     </div>
-                    <div style="height:90px; border-bottom:2px solid #1e293b; box-sizing:border-box; {bg_cell}">
+                    <div style="height:{top3_h}px; border-bottom:2px solid #1e293b; box-sizing:border-box; {bg_cell}">
                         {c_rows_html}
                     </div>
                     <div style="height:{svg_h}px; border-bottom:2px solid #1e293b; box-sizing:border-box; {bg_cell}"></div>
-                    <div style="height:90px; border-bottom:1px solid #cbd5e1; box-sizing:border-box; {bg_cell}">
+                    <div style="height:{bot3_h}px; border-bottom:1px solid #cbd5e1; box-sizing:border-box; {bg_cell}">
                         {p_rows_html}
                     </div>
-                    <div style="height:38px; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:900; color:#0f172a; box-sizing:border-box; {bg_col}">
+                    <div style="height:{footer_h}px; display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:900; color:#0f172a; box-sizing:border-box; {bg_col}">
                         {c['date_str']}
                     </div>
                 </div>
         """
 
+    offset_up = svg_h + bot3_h + footer_h
     html += f"""
             </div>
         </div>
 
-        <div style="position:relative; margin-top:-{svg_h + 128}px; margin-left:{left_axis_w}px; width:{total_chart_w}px; height:{svg_h}px; pointer-events:none;">
-            <svg width="{total_chart_w}" height="{svg_h}" xmlns="http://www.w3.org/2000/svg">
+        <div style="position:relative; margin-top:-{offset_up}px; margin-left:{left_axis_w}px; width:calc(100% - {left_axis_w}px); height:{svg_h}px; pointer-events:none;">
+            <svg width="{total_chart_w}" height="{svg_h}" viewBox="0 0 {total_chart_w} {svg_h}" preserveAspectRatio="none" style="width:100%; height:100%;" xmlns="http://www.w3.org/2000/svg">
                 {svg_elements}
             </svg>
         </div>
-        <div style="height:38px;"></div>
+        <div style="height:{bot3_h + footer_h}px;"></div>
     </div>
     """
     return html
@@ -839,53 +854,61 @@ elif st.session_state.page == "Options Intelligence":
     m_opt = fetch_stock_metrics(sym, live=st.session_state.use_live_api)
     spot = float(m_opt["price"])
     
-    exps, cdf, pdf = fetch_options_chain(sym, spot)
+    _, cdf, pdf = fetch_real_option_chain_for_date(sym)
     
-    # 精确匹配内层高度 (标题栏 ~38px + 头部40px + 上3档90px + SVG 260px + 下3档90px + 日期轴38px + 内边距 = 590px)，关闭滚动条实现一屏全显
     matrix_html = build_custom_option_matrix_html(sym, spot)
-    st.components.v1.html(matrix_html, height=590, scrolling=False)
+    st.components.v1.html(matrix_html, height=620, scrolling=False)
 
     st.markdown("<div class='module-container'>", unsafe_allow_html=True)
-    st.markdown("<div class='card-header'>📊 近期到期日核心行权价明细 (Call vs Put 权利金与未平仓对比)</div>", unsafe_allow_html=True)
+    st.markdown("<div class='card-header'>📊 期权库真实核心行权价明细 (Call vs Put 权利金与未平仓对比)</div>", unsafe_allow_html=True)
     
-    coi = int(cdf["openInterest"].sum())
-    poi = int(pdf["openInterest"].sum())
-    cvol = int(cdf["volume"].sum()) if "volume" in cdf.columns else int(coi * 0.2)
-    pvol = int(pdf["volume"].sum()) if "volume" in pdf.columns else int(poi * 0.2)
-    pcr = round(poi / coi, 2) if coi > 0 else 1.0
+    if not cdf.empty and not pdf.empty:
+        coi = int(cdf["openInterest"].sum())
+        poi = int(pdf["openInterest"].sum())
+        cvol = int(cdf["volume"].sum()) if "volume" in cdf.columns else 0
+        pvol = int(pdf["volume"].sum()) if "volume" in pdf.columns else 0
+        pcr = round(poi / coi, 2) if coi > 0 else 0.0
+    else:
+        coi, poi, cvol, pvol, pcr = 0, 0, 0, 0, 0.0
     
     m1, m2, m3, m4 = st.columns(4)
-    m1.markdown("<div class='metric-box'><div class='metric-label'>Call / Put Volume</div><div class='metric-val'>" + f"{cvol:,} / {pvol:,}" + "</div></div>", unsafe_allow_html=True)
-    m2.markdown("<div class='metric-box'><div class='metric-label'>Put / Call OI Ratio</div><div class='metric-val' style='color:#facc15;'>" + f"{pcr:.2f}" + "</div></div>", unsafe_allow_html=True)
+    m1.markdown("<div class='metric-box'><div class='metric-label'>Call / Put Volume</div><div class='metric-val'>" + (f"{cvol:,} / {pvol:,}" if (cvol or pvol) else "N/A") + "</div></div>", unsafe_allow_html=True)
+    m2.markdown("<div class='metric-box'><div class='metric-label'>Put / Call OI Ratio</div><div class='metric-val' style='color:#facc15;'>" + (f"{pcr:.2f}" if (coi or poi) else "N/A") + "</div></div>", unsafe_allow_html=True)
     m3.markdown("<div class='metric-box'><div class='metric-label'>Spot Price (现价)</div><div class='metric-val' style='color:#38bdf8;'>" + f"${spot:.2f}" + "</div></div>", unsafe_allow_html=True)
-    m4.markdown("<div class='metric-box'><div class='metric-label'>挂单信号状态</div><div class='metric-val' style='color:#4ade80;'>回踩支撑限价买入</div></div>", unsafe_allow_html=True)
+    m4.markdown("<div class='metric-box'><div class='metric-label'>数据来源状态</div><div class='metric-val' style='color:#4ade80;'>" + ("期权库真实链" if (not cdf.empty and not pdf.empty) else "无预设假数据") + "</div></div>", unsafe_allow_html=True)
 
     st.markdown("<br>", unsafe_allow_html=True)
-    cdf["dist"] = (cdf["strike"] - spot).abs()
-    strikes = cdf.nsmallest(9, "dist")["strike"].sort_values().tolist()
-    cf = cdf[cdf["strike"].isin(strikes)].drop_duplicates(subset=["strike"]).set_index("strike")
-    pf = pdf[pdf["strike"].isin(strikes)].drop_duplicates(subset=["strike"]).set_index("strike")
-    s_rows = []
-    for k in strikes:
-        if k in cf.index and k in pf.index:
-            cr = cf.loc[k]
-            pr = pf.loc[k]
-            s_rows.append({
-                "CALL OI": int(cr["openInterest"]), 
-                "CALL 权利金": f"${cr['lastPrice']:.2f}",
-                "STRIKE 行权价": f"${float(k):.2f}", 
-                "PUT 权利金": f"${pr['lastPrice']:.2f}",
-                "PUT OI": int(pr["openInterest"])
-            })
-    dfs = pd.DataFrame(s_rows)
-    
-    st.markdown("""
-    <style>
-        table.table-white { width: 100%; background-color: #ffffff !important; color: #0f172a !important; border-collapse: collapse; font-family: sans-serif; border-radius: 6px; overflow: hidden; }
-        table.table-white th { background-color: #f1f5f9 !important; color: #1e293b !important; font-weight: 800; padding: 8px 10px; border-bottom: 2px solid #cbd5e1; text-align: center; }
-        table.table-white td { background-color: #ffffff !important; color: #0f172a !important; padding: 7px 10px; border-bottom: 1px solid #e2e8f0; font-size: 15px; font-weight: 700; text-align: center; }
-        table.table-white tr:hover td { background-color: #f8fafc !important; }
-    </style>
-    """, unsafe_allow_html=True)
-    st.markdown(dfs.to_html(index=False, classes="table-white"), unsafe_allow_html=True)
+    if not cdf.empty and not pdf.empty:
+        cdf_tmp = cdf.copy()
+        cdf_tmp["dist"] = (cdf_tmp["strike"] - spot).abs()
+        strikes = cdf_tmp.nsmallest(9, "dist")["strike"].sort_values().tolist()
+        cf = cdf[cdf["strike"].isin(strikes)].drop_duplicates(subset=["strike"]).set_index("strike")
+        pf = pdf[pdf["strike"].isin(strikes)].drop_duplicates(subset=["strike"]).set_index("strike")
+        s_rows = []
+        for k in strikes:
+            if k in cf.index and k in pf.index:
+                cr = cf.loc[k]
+                pr = pf.loc[k]
+                s_rows.append({
+                    "CALL OI": f"{int(cr['openInterest']):,}", 
+                    "CALL 权利金": f"${float(cr['lastPrice']):.2f}",
+                    "STRIKE 行权价": f"${float(k):.2f}", 
+                    "PUT 权利金": f"${float(pr['lastPrice']):.2f}",
+                    "PUT OI": f"{int(pr['openInterest']):,}"
+                })
+        if s_rows:
+            dfs = pd.DataFrame(s_rows)
+            st.markdown("""
+            <style>
+                table.table-white { width: 100%; background-color: #ffffff !important; color: #0f172a !important; border-collapse: collapse; font-family: sans-serif; border-radius: 6px; overflow: hidden; }
+                table.table-white th { background-color: #f1f5f9 !important; color: #1e293b !important; font-weight: 800; padding: 8px 10px; border-bottom: 2px solid #cbd5e1; text-align: center; }
+                table.table-white td { background-color: #ffffff !important; color: #0f172a !important; padding: 7px 10px; border-bottom: 1px solid #e2e8f0; font-size: 15px; font-weight: 700; text-align: center; }
+                table.table-white tr:hover td { background-color: #f8fafc !important; }
+            </style>
+            """, unsafe_allow_html=True)
+            st.markdown(dfs.to_html(index=False, classes="table-white"), unsafe_allow_html=True)
+        else:
+            st.info("期权库当前未返回匹配行权价明细，未使用预设模拟价格。")
+    else:
+        st.info("期权库当前未返回真实期权链数据，已移除所有预设模拟价格与规律假 OI。")
     st.markdown("</div>", unsafe_allow_html=True)
