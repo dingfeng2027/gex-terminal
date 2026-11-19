@@ -80,6 +80,9 @@ if "show_walls" not in st.session_state:
 if "show_all_strikes" not in st.session_state:
     st.session_state["show_all_strikes"] = False
 
+if "selected_exp_ts" not in st.session_state:
+    st.session_state["selected_exp_ts"] = None
+
 if "opt_backup_cache" not in st.session_state:
     st.session_state["opt_backup_cache"] = {}
 
@@ -256,7 +259,7 @@ def _query_yahoo_options_api(symbol, target_dt_timestamp=None):
                 result = data.get('optionChain', {}).get('result', [])
                 if result:
                     r_opt = result[0]
-                    exp_dates = r_opt.get('expirationDates', [])
+                    exp_dates = sorted([int(x) for x in r_opt.get('expirationDates', []) if x])
                     options_data = r_opt.get('options', [])
                     if options_data:
                         calls = options_data[0].get('calls', [])
@@ -284,7 +287,6 @@ def _query_yahoo_options_api(symbol, target_dt_timestamp=None):
     return [], pd.DataFrame(), pd.DataFrame()
 
 def _extract_nasdaq_expirations(data_obj):
-    """从 Nasdaq option-chain 响应对象中提取真实到期日时间戳列表。"""
     exp_set = set()
     if not isinstance(data_obj, dict):
         return []
@@ -337,10 +339,6 @@ def _extract_nasdaq_expirations(data_obj):
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def _query_nasdaq_options_api(symbol, target_dt_timestamp=None):
-    """
-    备用源：纳斯达克期权链接口适配。
-    提取真实到期日列表并按列目标日期过滤/查询，支持大小写无关字段匹配。
-    """
     clean_sym = symbol.split(".")[0].upper()
     api_key, bearer = get_nasdaq_credentials()
     headers = {
@@ -427,7 +425,6 @@ def _query_nasdaq_options_api(symbol, target_dt_timestamp=None):
             extracted_exps = _extract_nasdaq_expirations(data_obj)
             chain_rows = data_obj.get("table", {}).get("rows") if isinstance(data_obj, dict) else None
             if isinstance(chain_rows, list) and chain_rows:
-                # 若行内带到期日字段且匹配目标到期日，优先筛出对应到期日合约
                 matched_rows = []
                 if target_date_str:
                     for r in chain_rows:
@@ -522,9 +519,10 @@ def extract_top3_walls(col_cdf, col_pdf, curr_p):
 
     return c_top_list, call_wall_val, p_bot_list, put_wall_val
 
-def build_custom_option_matrix_html(symbol, spot):
+def build_custom_option_matrix_html(symbol, spot, real_exp_timestamps=None):
     today = datetime.today()
-    real_exp_timestamps, _, _ = fetch_real_option_chain_for_date(symbol)
+    if real_exp_timestamps is None:
+        real_exp_timestamps, _, _ = fetch_real_option_chain_for_date(symbol)
 
     past_candidates = []
     d_cursor = today - timedelta(days=1)
@@ -589,7 +587,6 @@ def build_custom_option_matrix_html(symbol, spot):
     for i in range(today_idx + 1, n_total):
         spot_series[i] = spot_series[i - 1]
 
-    # 按列日期匹配最近真实到期日时间戳
     matched_timestamps = []
     if real_exp_timestamps:
         for c in cols_data:
@@ -1076,6 +1073,7 @@ elif st.session_state.page == "Options Intelligence":
     chosen_o = o2.selectbox("期权标的", st.session_state.tickers, index=idx, label_visibility="collapsed")
     if chosen_o != st.session_state.selected_ticker:
         st.session_state.selected_ticker = chosen_o
+        st.session_state.selected_exp_ts = None
         st.rerun()
     if o3.button("← Stock Analysis", use_container_width=True):
         st.session_state.page = "Stock Analysis"
@@ -1088,9 +1086,28 @@ elif st.session_state.page == "Options Intelligence":
     m_opt = fetch_stock_metrics(sym, live=st.session_state.use_live_api)
     spot = float(m_opt["price"])
 
-    _, cdf, pdf = fetch_real_option_chain_for_date(sym)
+    base_exp_dates, _, _ = fetch_real_option_chain_for_date(sym)
 
-    matrix_html = build_custom_option_matrix_html(sym, spot)
+    exp_sel_col1, exp_sel_col2 = st.columns([2.5, 3.5])
+    if base_exp_dates:
+        exp_options = {ts: datetime.fromtimestamp(ts).strftime("%Y-%m-%d") for ts in base_exp_dates}
+        exp_ts_list = list(exp_options.keys())
+        default_ts = st.session_state.selected_exp_ts if st.session_state.selected_exp_ts in exp_ts_list else exp_ts_list[0]
+        picked_ts = exp_sel_col1.selectbox(
+            "选择真实到期日（查看该到期日的 OI 与行权价明细）",
+            options=exp_ts_list,
+            index=exp_ts_list.index(default_ts),
+            format_func=lambda ts: exp_options[ts]
+        )
+        st.session_state.selected_exp_ts = picked_ts
+        exp_sel_col2.markdown(f"<div style='padding-top:34px; font-size:15px; color:#93c5fd;'>已匹配 <b>{len(exp_ts_list)}</b> 个真实到期日，切换到期日可联动下方行权价明细。</div>", unsafe_allow_html=True)
+    else:
+        picked_ts = None
+        exp_sel_col2.markdown("<div style='padding-top:10px; font-size:15px; color:#facc15;'>当前接口未单独列出多到期日列表，展示最近/默认真实期权链。</div>", unsafe_allow_html=True)
+
+    _, cdf, pdf = fetch_real_option_chain_for_date(sym, picked_ts)
+
+    matrix_html = build_custom_option_matrix_html(sym, spot, real_exp_timestamps=base_exp_dates)
     st.components.v1.html(matrix_html, height=620, scrolling=False)
 
     st.markdown("<div class='module-container'>", unsafe_allow_html=True)
@@ -1118,7 +1135,7 @@ elif st.session_state.page == "Options Intelligence":
     if has_real_chain:
         cdf_tmp = cdf.copy()
         cdf_tmp["dist"] = (cdf_tmp["strike"] - spot).abs()
-        n_strikes = len(cdf_tmp["strike"].unique()) if st.session_state.show_all_strikes else 21
+        n_strikes = len(cdf_tmp["strike"].unique()) if st.session_state.show_all_strikes else 29
         strikes = cdf_tmp.nsmallest(n_strikes, "dist")["strike"].sort_values().tolist()
         cf = cdf[cdf["strike"].isin(strikes)].drop_duplicates(subset=["strike"]).set_index("strike")
         pf = pdf[pdf["strike"].isin(strikes)].drop_duplicates(subset=["strike"]).set_index("strike")
