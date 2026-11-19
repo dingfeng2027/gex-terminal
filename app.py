@@ -1,3 +1,4 @@
+import os
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -81,6 +82,23 @@ if "opt_backup_cache" not in st.session_state:
 
 def sync_watchlist_to_url():
     st.query_params["watchlist"] = ",".join(st.session_state.tickers)
+
+def safe_col_sum(df, col_name):
+    if df is None or df.empty or col_name not in df.columns:
+        return 0
+    return int(pd.to_numeric(df[col_name], errors="coerce").fillna(0).sum())
+
+def get_nasdaq_credentials():
+    api_key = os.getenv("NASDAQ_API_KEY", "")
+    bearer = os.getenv("NASDAQ_BEARER_TOKEN", "")
+    try:
+        if not api_key and "NASDAQ_API_KEY" in st.secrets:
+            api_key = str(st.secrets["NASDAQ_API_KEY"])
+        if not bearer and "NASDAQ_BEARER_TOKEN" in st.secrets:
+            bearer = str(st.secrets["NASDAQ_BEARER_TOKEN"])
+    except Exception:
+        pass
+    return api_key.strip(), bearer.strip()
 
 @st.cache_data(ttl=60, show_spinner=False)
 def fetch_stock_metrics(symbol, live=True):
@@ -193,9 +211,6 @@ def fetch_history_df(symbol, period_str, current_price):
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def _query_yahoo_options_api(symbol, target_dt_timestamp=None):
-    """
-    直连 Yahoo Finance 期权链接口，抓取真实 strikes, openInterest, lastPrice, volume。
-    """
     headers_list = [
         {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
@@ -211,14 +226,14 @@ def _query_yahoo_options_api(symbol, target_dt_timestamp=None):
     ]
     hosts = ["query1.finance.yahoo.com", "query2.finance.yahoo.com"]
     
-    for attempt in range(4):
+    for attempt in range(3):
         host = hosts[attempt % len(hosts)]
         headers = headers_list[attempt % len(headers_list)]
         url = f"https://{host}/v7/finance/options/{symbol}"
         if target_dt_timestamp:
             url += f"?date={target_dt_timestamp}"
         try:
-            res = requests.get(url, headers=headers, timeout=8)
+            res = requests.get(url, headers=headers, timeout=6)
             if res.status_code == 200:
                 data = res.json()
                 result = data.get('optionChain', {}).get('result', [])
@@ -247,38 +262,139 @@ def _query_yahoo_options_api(symbol, target_dt_timestamp=None):
                         if not cdf.empty and not pdf.empty:
                             return exp_dates, cdf, pdf
         except Exception:
-            time.sleep(0.25)
+            time.sleep(0.2)
             continue
+    return [], pd.DataFrame(), pd.DataFrame()
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def _query_nasdaq_options_api(symbol, target_dt_timestamp=None):
+    """
+    备用源：纳斯达克期权链接口适配。
+    支持可选环境变量/Secrets 中的 NASDAQ_API_KEY 与 NASDAQ_BEARER_TOKEN；
+    无凭证时尝试公开行情端点，若受限或未授权则返回空表并交由缓存/提示兜底。
+    """
+    clean_sym = symbol.split(".")[0].upper()
+    api_key, bearer = get_nasdaq_credentials()
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Referer": "https://www.nasdaq.com/"
+    }
+    if bearer:
+        headers["Authorization"] = f"Bearer {bearer}"
+
+    endpoints = []
+    if api_key:
+        endpoints.append(f"https://data.nasdaq.com/api/v3/datatables/NDAQ/CHAIN?offset=delayed&symbol={clean_sym}&api_key={api_key}")
+    endpoints.append(f"https://api.nasdaq.com/api/quote/{clean_sym}/option-chain?assetclass=stocks&limit=50")
+
+    for url in endpoints:
+        try:
+            res = requests.get(url, headers=headers, timeout=6)
+            if res.status_code != 200:
+                continue
+            payload = res.json()
+
+            # 1) 解析 Nasdaq Data Link datatables 结构 (NDAQ/CHAIN)
+            datatable = payload.get("datatable", {})
+            if isinstance(datatable, dict) and datatable.get("data") and datatable.get("columns"):
+                cols = [c.get("name") for c in datatable["columns"]]
+                rows_raw = [dict(zip(cols, r)) for r in datatable["data"]]
+                c_rows, p_rows, exp_set = [], [], set()
+                for item in rows_raw:
+                    strike = item.get("strikePrice") or item.get("strike")
+                    if strike is None:
+                        continue
+                    opt_type = str(item.get("optionType") or item.get("type") or "").upper()
+                    exp_str = str(item.get("expiration") or "")
+                    if exp_str:
+                        try:
+                            exp_set.add(int(datetime.strptime(exp_str[:10], "%Y-%m-%d").timestamp()))
+                        except Exception:
+                            pass
+                    rec = {
+                        "strike": float(strike),
+                        "lastPrice": float(item.get("lastPrice") or 0.0),
+                        "openInterest": int(item.get("openInterest") or 0),
+                        "volume": int(item.get("volume") or 0),
+                    }
+                    if opt_type.startswith("C"):
+                        c_rows.append(rec)
+                    elif opt_type.startswith("P"):
+                        p_rows.append(rec)
+                if c_rows and p_rows:
+                    return sorted(exp_set), pd.DataFrame(c_rows), pd.DataFrame(p_rows)
+
+            # 2) 解析 api.nasdaq.com 响应结构
+            data_obj = payload.get("data", {})
+            chain_rows = data_obj.get("table", {}).get("rows") if isinstance(data_obj, dict) else None
+            if isinstance(chain_rows, list) and chain_rows:
+                c_rows, p_rows = [], []
+                for r in chain_rows:
+                    if not isinstance(r, dict):
+                        continue
+                    strike_raw = r.get("strike")
+                    if strike_raw in (None, "", "--"):
+                        continue
+                    try:
+                        strike_val = float(str(strike_raw).replace("$", "").replace(",", ""))
+                    except Exception:
+                        continue
+                    c_oi_raw = r.get("c_openInterest") or r.get("callOpenInterest") or 0
+                    p_oi_raw = r.get("p_openInterest") or r.get("putOpenInterest") or 0
+                    c_last_raw = r.get("c_last") or r.get("callLast") or 0.0
+                    p_last_raw = r.get("p_last") or r.get("putLast") or 0.0
+                    c_vol_raw = r.get("c_volume") or r.get("callVolume") or 0
+                    p_vol_raw = r.get("p_volume") or r.get("putVolume") or 0
+
+                    c_rows.append({
+                        "strike": strike_val,
+                        "lastPrice": float(str(c_last_raw).replace("$", "") or 0.0),
+                        "openInterest": int(str(c_oi_raw).replace(",", "") or 0),
+                        "volume": int(str(c_vol_raw).replace(",", "") or 0),
+                    })
+                    p_rows.append({
+                        "strike": strike_val,
+                        "lastPrice": float(str(p_last_raw).replace("$", "") or 0.0),
+                        "openInterest": int(str(p_oi_raw).replace(",", "") or 0),
+                        "volume": int(str(p_vol_raw).replace(",", "") or 0),
+                    })
+                if c_rows and p_rows:
+                    return [], pd.DataFrame(c_rows), pd.DataFrame(p_rows)
+        except Exception:
+            continue
+
     return [], pd.DataFrame(), pd.DataFrame()
 
 def fetch_real_option_chain_for_date(symbol, target_dt_timestamp=None):
     """
-    仅使用期权库真实数据（接口缓存 + Session 结算缓存），绝不生成预设假价格或规律假 OI。
+    优先请求 Yahoo 期权接口，失败时自动切换 Nasdaq 备用接口；
+    成功后写入 Session 缓存，失败时读取最近真实缓存，绝不伪造数据。
     """
     cache_key = f"{symbol}_{target_dt_timestamp or 'nearest'}"
     exp_dates, cdf, pdf = _query_yahoo_options_api(symbol, target_dt_timestamp)
-    
+
+    if cdf.empty or pdf.empty:
+        n_exp, n_cdf, n_pdf = _query_nasdaq_options_api(symbol, target_dt_timestamp)
+        if not n_cdf.empty and not n_pdf.empty:
+            exp_dates, cdf, pdf = n_exp, n_cdf, n_pdf
+
     if not cdf.empty and not pdf.empty:
         st.session_state["opt_backup_cache"][cache_key] = (exp_dates, cdf.copy(), pdf.copy())
         st.session_state["opt_backup_cache"][f"{symbol}_latest_settlement"] = (exp_dates, cdf.copy(), pdf.copy())
         return exp_dates, cdf, pdf
-        
+
     if cache_key in st.session_state["opt_backup_cache"]:
         return st.session_state["opt_backup_cache"][cache_key]
     if f"{symbol}_latest_settlement" in st.session_state["opt_backup_cache"]:
         return st.session_state["opt_backup_cache"][f"{symbol}_latest_settlement"]
-        
+
     return [], pd.DataFrame(), pd.DataFrame()
 
 def extract_top3_walls(col_cdf, col_pdf, curr_p):
-    """
-    严格基于期权库真实数据提取上下 3 档（Call Wall / Put Wall）。
-    若当前无真实期权链数据，返回空列表与 None，不伪造任何预设行权价或 OI。
-    """
     if col_cdf is None or col_pdf is None or col_cdf.empty or col_pdf.empty:
         return [], None, [], None
 
-    # 1. 上 3 档 Call：现价上方最贴近现价的 8 个真实行权价中，按真实 OI 选出前 3 档
     above_df = col_cdf[col_cdf["strike"] > curr_p].sort_values(by="strike", ascending=True).head(8)
     if len(above_df) < 3:
         above_df = col_cdf.sort_values(by="strike", ascending=False).head(8)
@@ -286,7 +402,6 @@ def extract_top3_walls(col_cdf, col_pdf, curr_p):
     c_top_list = [(float(r["strike"]), int(r["openInterest"])) for _, r in top3_calls.iterrows()]
     call_wall_val = max(c_top_list, key=lambda x: x[1])[0] if c_top_list else None
 
-    # 2. 下 3 档 Put：现价下方最贴近现价的 8 个真实行权价中，按真实 OI 选出前 3 档
     below_df = col_pdf[col_pdf["strike"] < curr_p].sort_values(by="strike", ascending=False).head(8)
     if len(below_df) < 3:
         below_df = col_pdf.sort_values(by="strike", ascending=True).head(8)
@@ -297,9 +412,6 @@ def extract_top3_walls(col_cdf, col_pdf, curr_p):
     return c_top_list, call_wall_val, p_bot_list, put_wall_val
 
 def build_custom_option_matrix_html(symbol, spot):
-    """
-    全量显示期权矩阵（包含顶部“到期日”行），取消外层滚动拉动，仅用期权库真实数据。
-    """
     today = datetime.today()
     real_exp_timestamps, _, _ = fetch_real_option_chain_for_date(symbol)
     
@@ -477,7 +589,7 @@ def build_custom_option_matrix_html(symbol, spot):
         svg_elements += f"<circle cx='{sx}' cy='{sy}' r='4.5' fill='#0f172a' stroke='#facc15' stroke-width='1.5' />"
         svg_elements += f"<text x='{sx}' y='{sy + 15}' text-anchor='middle' font-size='12' font-weight='900' fill='#0f172a'>{sval:g}</text>"
 
-    status_badge = "真实期权库数据" if has_any_real_data else "期权库暂未返回（无预设假数据）"
+    status_badge = "Yahoo/Nasdaq 真实链" if has_any_real_data else "接口暂未返回真实链"
 
     html = f"""
     <div style="background:#ffffff; border:2px solid #1e293b; border-radius:8px; padding:8px 10px; font-family:sans-serif; color:#0f172a; width:100%; box-sizing:border-box; overflow:hidden;">
@@ -862,23 +974,24 @@ elif st.session_state.page == "Options Intelligence":
     st.markdown("<div class='module-container'>", unsafe_allow_html=True)
     st.markdown("<div class='card-header'>📊 期权库真实核心行权价明细 (Call vs Put 权利金与未平仓对比)</div>", unsafe_allow_html=True)
     
-    if not cdf.empty and not pdf.empty:
-        coi = int(cdf["openInterest"].sum())
-        poi = int(pdf["openInterest"].sum())
-        cvol = int(cdf["volume"].sum()) if "volume" in cdf.columns else 0
-        pvol = int(pdf["volume"].sum()) if "volume" in pdf.columns else 0
+    has_real_chain = (not cdf.empty and not pdf.empty)
+    if has_real_chain:
+        coi = safe_col_sum(cdf, "openInterest")
+        poi = safe_col_sum(pdf, "openInterest")
+        cvol = safe_col_sum(cdf, "volume")
+        pvol = safe_col_sum(pdf, "volume")
         pcr = round(poi / coi, 2) if coi > 0 else 0.0
     else:
         coi, poi, cvol, pvol, pcr = 0, 0, 0, 0, 0.0
     
     m1, m2, m3, m4 = st.columns(4)
-    m1.markdown("<div class='metric-box'><div class='metric-label'>Call / Put Volume</div><div class='metric-val'>" + (f"{cvol:,} / {pvol:,}" if (cvol or pvol) else "N/A") + "</div></div>", unsafe_allow_html=True)
-    m2.markdown("<div class='metric-box'><div class='metric-label'>Put / Call OI Ratio</div><div class='metric-val' style='color:#facc15;'>" + (f"{pcr:.2f}" if (coi or poi) else "N/A") + "</div></div>", unsafe_allow_html=True)
+    m1.markdown("<div class='metric-box'><div class='metric-label'>Call / Put Volume</div><div class='metric-val'>" + (f"{cvol:,} / {pvol:,}" if has_real_chain else "N/A") + "</div></div>", unsafe_allow_html=True)
+    m2.markdown("<div class='metric-box'><div class='metric-label'>Put / Call OI Ratio</div><div class='metric-val' style='color:#facc15;'>" + (f"{pcr:.2f}" if (has_real_chain and coi > 0) else "N/A") + "</div></div>", unsafe_allow_html=True)
     m3.markdown("<div class='metric-box'><div class='metric-label'>Spot Price (现价)</div><div class='metric-val' style='color:#38bdf8;'>" + f"${spot:.2f}" + "</div></div>", unsafe_allow_html=True)
-    m4.markdown("<div class='metric-box'><div class='metric-label'>数据来源状态</div><div class='metric-val' style='color:#4ade80;'>" + ("期权库真实链" if (not cdf.empty and not pdf.empty) else "无预设假数据") + "</div></div>", unsafe_allow_html=True)
+    m4.markdown("<div class='metric-box'><div class='metric-label'>数据来源状态</div><div class='metric-val' style='color:#4ade80;'>" + ("真实链已接入" if has_real_chain else "待接口返回真实链") + "</div></div>", unsafe_allow_html=True)
 
     st.markdown("<br>", unsafe_allow_html=True)
-    if not cdf.empty and not pdf.empty:
+    if has_real_chain:
         cdf_tmp = cdf.copy()
         cdf_tmp["dist"] = (cdf_tmp["strike"] - spot).abs()
         strikes = cdf_tmp.nsmallest(9, "dist")["strike"].sort_values().tolist()
@@ -890,11 +1003,11 @@ elif st.session_state.page == "Options Intelligence":
                 cr = cf.loc[k]
                 pr = pf.loc[k]
                 s_rows.append({
-                    "CALL OI": f"{int(cr['openInterest']):,}", 
-                    "CALL 权利金": f"${float(cr['lastPrice']):.2f}",
+                    "CALL OI": f"{int(cr.get('openInterest', 0)):,}", 
+                    "CALL 权利金": f"${float(cr.get('lastPrice', 0.0)):.2f}",
                     "STRIKE 行权价": f"${float(k):.2f}", 
-                    "PUT 权利金": f"${float(pr['lastPrice']):.2f}",
-                    "PUT OI": f"{int(pr['openInterest']):,}"
+                    "PUT 权利金": f"${float(pr.get('lastPrice', 0.0)):.2f}",
+                    "PUT OI": f"{int(pr.get('openInterest', 0)):,}"
                 })
         if s_rows:
             dfs = pd.DataFrame(s_rows)
@@ -910,5 +1023,5 @@ elif st.session_state.page == "Options Intelligence":
         else:
             st.info("期权库当前未返回匹配行权价明细，未使用预设模拟价格。")
     else:
-        st.info("期权库当前未返回真实期权链数据，已移除所有预设模拟价格与规律假 OI。")
+        st.info("Yahoo 与 Nasdaq 接口当前均未返回真实期权链数据（未启用任何预设模拟价格）。若您有 Nasdaq API Key/Token，可在 Streamlit Secrets 中配置 NASDAQ_API_KEY 或 NASDAQ_BEARER_TOKEN。")
     st.markdown("</div>", unsafe_allow_html=True)
