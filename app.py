@@ -748,7 +748,7 @@ def fetch_real_option_chain_for_date(symbol, target_dt_timestamp=None, spot=None
     return merged_exps, pd.DataFrame(), pd.DataFrame()
 
 def filter_near_spot_3_each_side(df, curr_p, side_mode="above"):
-    """按现价筛出上下各 3 档行权价（先优先 ±5%~30% 区间，若不足则按现价上下最近/OI排序兜底）"""
+    """按现价筛出上下各 3 档行权价（先优先 ±5%~30% 波段区间，不足时按现价上下最近/OI排序）"""
     if df is None or df.empty or "strike" not in df.columns:
         return pd.DataFrame()
     work = df.copy()
@@ -1425,5 +1425,5 @@ elif st.session_state.page == "Options Intelligence":
         else:
             st.info("期权库当前未返回匹配行权价明细，未使用预设模拟价格。")
     else:
-        st.info("当前接口暂未返回真实期权链数据（未启用任何预设模拟价格）。请确认 Streamlit Secrets 中已配置 `MARKETDATA_API_TOKEN`。")
+        st.info("Yahoo 与 Nasdaq 接口当前均未返回真实期权链数据（未启用任何预设模拟价格）。请确认 Streamlit Secrets 中已配置 `MARKETDATA_API_TOKEN`。")
     st.markdown("</div>", unsafe_allow_html=True)
