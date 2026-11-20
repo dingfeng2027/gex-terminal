@@ -1,3 +1,4 @@
+import hmac
 import os
 import time
 from datetime import datetime, timedelta
@@ -30,6 +31,39 @@ st.markdown("""
     .metric-val { font-size: 26px !important; font-weight: 900; color: #fff; }
 </style>
 """, unsafe_allow_html=True)
+
+def _get_app_password() -> str:
+    pwd = os.getenv("APP_ACCESS_PASSWORD", "")
+    try:
+        if "APP_ACCESS_PASSWORD" in st.secrets and str(st.secrets["APP_ACCESS_PASSWORD"]).strip():
+            pwd = str(st.secrets["APP_ACCESS_PASSWORD"])
+    except Exception:
+        pass
+    return pwd.strip()
+
+def _require_owner_access() -> None:
+    expected = _get_app_password()
+    if not expected:
+        return
+    if st.session_state.get("cq_authenticated") is True:
+        return
+
+    st.markdown("<div class='top-bar'><div class='brand-title'>CAPITAL QUANT v2</div><div class='live-badge'>Private Terminal Lock</div></div>", unsafe_allow_html=True)
+    _, mid, _ = st.columns([1, 1.4, 1])
+    with mid:
+        st.markdown("<div class='module-container' style='margin-top: 40px;'>", unsafe_allow_html=True)
+        st.markdown("<div class='card-header'>🔒 PRIVATE ACCESS REQUIRED</div>", unsafe_allow_html=True)
+        entered = st.text_input("访问密码", type="password", placeholder="输入访问密码解锁终端")
+        if st.button("解锁进入", use_container_width=True):
+            if hmac.compare_digest(entered.strip(), expected):
+                st.session_state["cq_authenticated"] = True
+                st.rerun()
+            else:
+                st.error("密码不正确")
+        st.markdown("</div>", unsafe_allow_html=True)
+    st.stop()
+
+_require_owner_access()
 
 DEFAULT_TICKERS = ["NVDA", "GOOGL", "TSM", "AMD", "MSFT", "META", "AMZN", "AAPL", "ASML", "TSLA", "CBRS", "SPCX", "CEG", "SMCI", "MPWR", "MRVL", "NFLX", "QQQ", "VUAG.L", "EQQQ.L", "NG.L"]
 
@@ -768,29 +802,6 @@ def _build_10_separate_exp_timestamps(real_exp_timestamps, base_dt):
 
     return pool[:10]
 
-def estimate_expiry_price(col_cdf: pd.DataFrame, col_pdf: pd.DataFrame, spot: float) -> tuple[float, bool]:
-    """计算该到期日的隐含/参考价格（返回: (价格, 是否来自期权链平值推算)）"""
-    if col_cdf is None or col_pdf is None or col_cdf.empty or col_pdf.empty:
-        return round(float(spot), 2), False
-    try:
-        c_work = col_cdf.copy()
-        p_work = col_pdf.copy()
-        c_work["dist"] = (c_work["strike"] - spot).abs()
-        p_work["dist"] = (p_work["strike"] - spot).abs()
-        c_best = c_work.sort_values("dist").iloc[0]
-        p_best = p_work.sort_values("dist").iloc[0]
-        k_mid = (float(c_best["strike"]) + float(p_best["strike"])) / 2.0
-        c_lp = float(c_best.get("lastPrice") or 0.0)
-        p_lp = float(p_best.get("lastPrice") or 0.0)
-        # 合成远期/到期隐含价格: Strike + (Call - Put)
-        if c_lp > 0 or p_lp > 0:
-            imp = round(k_mid + (c_lp - p_lp), 2)
-            if spot * 0.5 <= imp <= spot * 1.5:
-                return imp, True
-        return round(k_mid, 2), True
-    except Exception:
-        return round(float(spot), 2), False
-
 def extract_top3_walls(col_cdf, col_pdf, curr_p):
     """在现价上下 5%~30% 区间内筛选前 3 档最大未平仓压力位/支撑位"""
     if col_cdf is None or col_pdf is None or col_cdf.empty or col_pdf.empty:
@@ -843,7 +854,6 @@ def pull_and_filter_10_expirations_locally(symbol: str, spot: float, real_exp_ti
     batch_key = f"{symbol}_{today.strftime('%Y-%m-%d')}"
     local_batch: dict[str, dict[str, Any]] = st.session_state["opt_local_store"].get(batch_key, {})
 
-    # 1) 逐个拉取 10 个到期日数据到本地容器
     for idx, ts_target in enumerate(exp_10):
         d_key = datetime.fromtimestamp(int(ts_target)).strftime("%Y-%m-%d")
         if d_key not in local_batch:
@@ -860,7 +870,6 @@ def pull_and_filter_10_expirations_locally(symbol: str, spot: float, real_exp_ti
 
     st.session_state["opt_local_store"][batch_key] = local_batch
 
-    # 2) 在本地统一筛选上下各 3 档、计算墙位与到期价格
     cols_data = []
     nearest_idx = 0
     min_abs_diff = 999999
@@ -894,8 +903,9 @@ def pull_and_filter_10_expirations_locally(symbol: str, spot: float, real_exp_ti
             if (call_wall_val is not None and put_wall_val is not None)
             else None
         )
-        exp_px, is_implied = estimate_expiry_price(col_cdf, col_pdf, spot)
-        px_label = f"${exp_px:.2f}" if is_implied else f"~${exp_px:.2f}"
+
+        call_wall_px_label = f"Call {call_wall_val:g}" if call_wall_val is not None else "Call —"
+        put_wall_px_label = f"Put {put_wall_val:g}" if put_wall_val is not None else "Put —"
 
         cols_data.append({
             "ts": int(ts_target),
@@ -903,8 +913,8 @@ def pull_and_filter_10_expirations_locally(symbol: str, spot: float, real_exp_ti
             "date_str": dt.strftime("%d/%m"),
             "tag": tag,
             "exp_label": tag,
-            "exp_price": exp_px,
-            "exp_price_label": px_label,
+            "call_wall_px_label": call_wall_px_label,
+            "put_wall_px_label": put_wall_px_label,
             "is_today": False,
             "delta": delta_days,
             "has_chain": has_chain,
@@ -928,7 +938,7 @@ def build_custom_option_matrix_html(symbol, spot, real_exp_timestamps=None):
 
     all_vals = []
     for c in cols_data:
-        for v in [c["call_wall"], c["max_pain"], c["spot"], c["put_wall"], c["exp_price"]]:
+        for v in [c["call_wall"], c["max_pain"], c["spot"], c["put_wall"]]:
             if v is not None:
                 all_vals.append(v)
     if not all_vals:
@@ -1030,7 +1040,7 @@ def build_custom_option_matrix_html(symbol, spot, real_exp_timestamps=None):
             <div style="width:{left_axis_w}px; flex-shrink:0; border-right:2px solid #1e293b; display:flex; flex-direction:column; box-sizing:border-box;">
                 <div style="height:{header_h}px; border-bottom:1px solid #cbd5e1; display:flex; flex-direction:column; align-items:center; justify-content:center; font-weight:900; font-size:13px; background:#f8fafc; box-sizing:border-box;">
                     <span>到期日</span>
-                    <span style="font-size:10.5px; font-weight:800; color:#2563eb;">到期价格</span>
+                    <span style="font-size:10.5px; font-weight:800; color:#15803d;">Call Wall 价</span>
                 </div>
                 <div style="height:{top3_h}px; border-bottom:2px solid #1e293b; display:flex; flex-direction:column; align-items:center; justify-content:center; font-weight:900; font-size:13px; color:#15803d; background:#f0fdf4; text-align:center; box-sizing:border-box;">
                     <span>上3档 Call</span>
@@ -1045,7 +1055,7 @@ def build_custom_option_matrix_html(symbol, spot, real_exp_timestamps=None):
                 </div>
                 <div style="height:{footer_h}px; display:flex; flex-direction:column; align-items:center; justify-content:center; font-weight:900; font-size:13px; background:#f8fafc; box-sizing:border-box;">
                     <span>到期轴</span>
-                    <span style="font-size:10.5px; font-weight:800; color:#2563eb;">到期价格</span>
+                    <span style="font-size:10.5px; font-weight:800; color:#b91c1c;">Put Wall 价</span>
                 </div>
             </div>
 
@@ -1098,7 +1108,7 @@ def build_custom_option_matrix_html(symbol, spot, real_exp_timestamps=None):
                 <div style="flex:1; min-width:0; border-right:1px solid #cbd5e1; box-sizing:border-box; display:flex; flex-direction:column;">
                     <div style="height:{header_h}px; border-bottom:1px solid #cbd5e1; display:flex; flex-direction:column; align-items:center; justify-content:center; box-sizing:border-box; {bg_col}">
                         <span style="font-size:12.5px; font-weight:900; color:#0f172a;">{c['date_str']} <span style="color:#475569; font-size:10.5px;">{c['exp_label']}</span></span>
-                        <span style="font-size:11.5px; font-weight:900; color:#1d4ed8;">{c['exp_price_label']}</span>
+                        <span style="font-size:11.5px; font-weight:900; color:#15803d;">{c['call_wall_px_label']}</span>
                     </div>
                     <div style="height:{top3_h}px; border-bottom:2px solid #1e293b; box-sizing:border-box; {bg_cell}">
                         {c_rows_html}
@@ -1109,7 +1119,7 @@ def build_custom_option_matrix_html(symbol, spot, real_exp_timestamps=None):
                     </div>
                     <div style="height:{footer_h}px; display:flex; flex-direction:column; align-items:center; justify-content:center; box-sizing:border-box; {bg_col}">
                         <span style="font-size:12.5px; font-weight:900; color:#0f172a;">{c['date_str']}</span>
-                        <span style="font-size:11px; font-weight:900; color:#1d4ed8;">{c['exp_price_label']}</span>
+                        <span style="font-size:11.5px; font-weight:900; color:#b91c1c;">{c['put_wall_px_label']}</span>
                     </div>
                 </div>
         """
