@@ -1,11 +1,13 @@
 import os
-import streamlit as st
-import pandas as pd
-import numpy as np
-import requests
 import time
-import plotly.graph_objects as go
 from datetime import datetime, timedelta
+from typing import Any
+
+import numpy as np
+import pandas as pd
+import plotly.graph_objects as go
+import requests
+import streamlit as st
 
 st.set_page_config(page_title="CAPITAL QUANT v2", layout="wide", initial_sidebar_state="collapsed")
 
@@ -91,9 +93,17 @@ def safe_col_sum(df, col_name):
         return 0
     return int(pd.to_numeric(df[col_name], errors="coerce").fillna(0).sum())
 
+def get_marketdata_token() -> str:
+    token = os.getenv("MARKETDATA_API_TOKEN", "")
+    try:
+        if "MARKETDATA_API_TOKEN" in st.secrets and str(st.secrets["MARKETDATA_API_TOKEN"]).strip():
+            token = str(st.secrets["MARKETDATA_API_TOKEN"])
+    except Exception:
+        pass
+    return token.strip()
+
 def get_nasdaq_credentials():
-    default_token = "TEFreHNZQUxVOGhmR2RhRmYyZjNPbDATA2FpRjFlaVQycklOelZmV2NEVTO"
-    api_key = os.getenv("NASDAQ_API_KEY", default_token)
+    api_key = os.getenv("NASDAQ_API_KEY", "")
     bearer = os.getenv("NASDAQ_BEARER_TOKEN", "")
     try:
         if "NASDAQ_API_KEY" in st.secrets and str(st.secrets["NASDAQ_API_KEY"]).strip():
@@ -383,6 +393,102 @@ def fetch_history_df(symbol, period_str, current_price):
     prices = current_price * np.exp(np.cumsum(np.random.normal(0.0005, 0.015, size=len(dates))))
     return pd.DataFrame({"Date": dates, "Close": prices * (current_price / prices[-1])})
 
+def _marketdata_get(path: str, params: dict[str, Any] | None = None, max_retries: int = 2) -> tuple[int, dict[str, Any]]:
+    token = get_marketdata_token()
+    if not token:
+        return 0, {}
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json",
+    }
+    url = f"https://api.marketdata.app/v1{path}"
+    last_resp = None
+    for attempt in range(max_retries + 1):
+        try:
+            resp = requests.get(url, headers=headers, params=params or {}, timeout=12)
+            last_resp = resp
+            if resp.status_code != 429:
+                break
+            if attempt < max_retries:
+                time.sleep(1.5 * (attempt + 1))
+        except Exception:
+            return 0, {}
+    if last_resp is None:
+        return 0, {}
+    try:
+        data = last_resp.json()
+    except Exception:
+        data = {}
+    return last_resp.status_code, data
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _query_marketdata_options_api(symbol: str, target_dt_timestamp: int | None = None, spot: float | None = None):
+    if not get_marketdata_token() or "." in symbol:
+        return [], pd.DataFrame(), pd.DataFrame()
+    clean_sym = symbol.upper().strip()
+
+    status_exp, exp_payload = _marketdata_get(f"/options/expirations/{clean_sym}/")
+    exp_timestamps: list[int] = []
+    exp_date_strs: list[str] = []
+    if status_exp == 200 and exp_payload.get("s") == "ok":
+        for d_str in sorted({str(x) for x in (exp_payload.get("expirations") or []) if x}):
+            try:
+                dt_obj = datetime.strptime(d_str[:10], "%Y-%m-%d").replace(hour=16, minute=0, second=0)
+                exp_timestamps.append(int(dt_obj.timestamp()))
+                exp_date_strs.append(d_str[:10])
+            except Exception:
+                continue
+
+    if target_dt_timestamp is not None:
+        target_exp_str = datetime.fromtimestamp(int(target_dt_timestamp)).strftime("%Y-%m-%d")
+    elif exp_date_strs:
+        target_exp_str = exp_date_strs[0]
+    else:
+        return exp_timestamps, pd.DataFrame(), pd.DataFrame()
+
+    params: dict[str, Any] = {"expiration": target_exp_str}
+    if spot and spot > 0:
+        params["strike"] = f"{round(spot * 0.70, 2)}-{round(spot * 1.30, 2)}"
+
+    status_chain, chain_payload = _marketdata_get(f"/options/chain/{clean_sym}/", params=params)
+    if status_chain != 200 or chain_payload.get("s") != "ok":
+        return exp_timestamps, pd.DataFrame(), pd.DataFrame()
+
+    strikes = chain_payload.get("strike") or []
+    sides = chain_payload.get("side") or []
+    lasts = chain_payload.get("last") or []
+    bids = chain_payload.get("bid") or []
+    asks = chain_payload.get("ask") or []
+    ois = chain_payload.get("openInterest") or []
+    vols = chain_payload.get("volume") or []
+
+    c_rows, p_rows = [], []
+    for i in range(len(strikes)):
+        k = strikes[i]
+        if k is None:
+            continue
+        side = str(sides[i] if i < len(sides) else "").lower()
+        last_v = lasts[i] if i < len(lasts) else None
+        bid_v = bids[i] if i < len(bids) else None
+        ask_v = asks[i] if i < len(asks) else None
+        price_v = float(last_v) if last_v is not None else (
+            round((float(bid_v) + float(ask_v)) / 2, 2) if (bid_v is not None and ask_v is not None) else 0.0
+        )
+        rec = {
+            "strike": float(k),
+            "lastPrice": price_v,
+            "openInterest": int(ois[i]) if i < len(ois) and ois[i] is not None else 0,
+            "volume": int(vols[i]) if i < len(vols) and vols[i] is not None else 0,
+        }
+        if side == "call":
+            c_rows.append(rec)
+        elif side == "put":
+            p_rows.append(rec)
+
+    if c_rows and p_rows:
+        return exp_timestamps, pd.DataFrame(c_rows), pd.DataFrame(p_rows)
+    return exp_timestamps, pd.DataFrame(), pd.DataFrame()
+
 @st.cache_data(ttl=300, show_spinner=False)
 def _query_yahoo_options_api(symbol, target_dt_timestamp=None):
     headers_list = [
@@ -616,73 +722,73 @@ def _query_nasdaq_options_api(symbol, target_dt_timestamp=None):
 
     return [], pd.DataFrame(), pd.DataFrame()
 
-def fetch_real_option_chain_for_date(symbol, target_dt_timestamp=None):
-    cache_key = f"{symbol}_{target_dt_timestamp or 'nearest'}"
+def fetch_real_option_chain_for_date(symbol, target_dt_timestamp=None, spot=None):
+    date_tag = datetime.fromtimestamp(int(target_dt_timestamp)).strftime("%Y-%m-%d") if target_dt_timestamp else "nearest"
+    cache_key = f"{symbol}_{date_tag}"
+
+    md_exp, md_cdf, md_pdf = _query_marketdata_options_api(symbol, target_dt_timestamp, spot=spot)
+    if not md_cdf.empty and not md_pdf.empty:
+        st.session_state["opt_backup_cache"][cache_key] = (md_exp, md_cdf.copy(), md_pdf.copy())
+        return md_exp, md_cdf, md_pdf
+
     exp_dates, cdf, pdf = _query_nasdaq_options_api(symbol, target_dt_timestamp)
-
-    if cdf.empty or pdf.empty:
-        y_exp, y_cdf, y_pdf = _query_yahoo_options_api(symbol, target_dt_timestamp)
-        if not y_cdf.empty and not y_pdf.empty:
-            exp_dates, cdf, pdf = y_exp, y_cdf, y_pdf
-
     if not cdf.empty and not pdf.empty:
         st.session_state["opt_backup_cache"][cache_key] = (exp_dates, cdf.copy(), pdf.copy())
-        st.session_state["opt_backup_cache"][f"{symbol}_latest_settlement"] = (exp_dates, cdf.copy(), pdf.copy())
         return exp_dates, cdf, pdf
+
+    y_exp, y_cdf, y_pdf = _query_yahoo_options_api(symbol, target_dt_timestamp)
+    if not y_cdf.empty and not y_pdf.empty:
+        st.session_state["opt_backup_cache"][cache_key] = (y_exp, y_cdf.copy(), y_pdf.copy())
+        return y_exp, y_cdf, y_pdf
 
     if cache_key in st.session_state["opt_backup_cache"]:
         return st.session_state["opt_backup_cache"][cache_key]
-    if f"{symbol}_latest_settlement" in st.session_state["opt_backup_cache"]:
-        return st.session_state["opt_backup_cache"][f"{symbol}_latest_settlement"]
 
-    return [], pd.DataFrame(), pd.DataFrame()
+    merged_exps = sorted(set(md_exp or []) | set(exp_dates or []) | set(y_exp or []))
+    return merged_exps, pd.DataFrame(), pd.DataFrame()
+
+def filter_near_spot_3_each_side(df, curr_p, side_mode="above"):
+    """按现价筛出上下各 3 档行权价（先优先 ±5%~30% 区间，若不足则按现价上下最近/OI排序兜底）"""
+    if df is None or df.empty or "strike" not in df.columns:
+        return pd.DataFrame()
+    work = df.copy()
+    work["strike"] = pd.to_numeric(work["strike"], errors="coerce")
+    work["openInterest"] = pd.to_numeric(work["openInterest"], errors="coerce").fillna(0).astype(int)
+    work = work.dropna(subset=["strike"]).drop_duplicates(subset=["strike"])
+
+    if side_mode == "above":
+        band = work[(work["strike"] >= curr_p * 1.05) & (work["strike"] <= curr_p * 1.30)]
+        if band.empty:
+            band = work[work["strike"] > curr_p]
+        if band.empty:
+            band = work
+        return band.sort_values("openInterest", ascending=False).head(3).sort_values("strike", ascending=False)
+    else:
+        band = work[(work["strike"] >= curr_p * 0.70) & (work["strike"] <= curr_p * 0.95)]
+        if band.empty:
+            band = work[work["strike"] < curr_p]
+        if band.empty:
+            band = work
+        return band.sort_values("openInterest", ascending=False).head(3).sort_values("strike", ascending=True)
 
 def extract_top3_walls(col_cdf, col_pdf, curr_p):
-    """在现价上下 5%~30% 区间内筛选前 3 档最大未平仓压力位/支撑位"""
+    """在现价上下各 3 档中提取 Call Wall / Put Wall"""
     if col_cdf is None or col_pdf is None or col_cdf.empty or col_pdf.empty:
         return [], None, [], None
 
-    cdf_clean = col_cdf.sort_values("openInterest", ascending=False).drop_duplicates(subset=["strike"])
-    pdf_clean = col_pdf.sort_values("openInterest", ascending=False).drop_duplicates(subset=["strike"])
-
-    c_min_bound = curr_p * 1.05
-    c_max_bound = curr_p * 1.30
-    above_df = cdf_clean[(cdf_clean["strike"] >= c_min_bound) & (cdf_clean["strike"] <= c_max_bound)].copy()
-    if above_df.empty:
-        above_df = cdf_clean[cdf_clean["strike"] > curr_p].copy()
-    if above_df.empty:
-        above_df = cdf_clean.copy()
-
-    top3_calls = (
-        above_df.sort_values(by="openInterest", ascending=False)
-        .head(3)
-        .sort_values(by="strike", ascending=False)
-    )
+    top3_calls = filter_near_spot_3_each_side(col_cdf, curr_p, side_mode="above")
     c_top_list = [(float(r["strike"]), int(r["openInterest"])) for _, r in top3_calls.iterrows()]
     call_wall_val = max(c_top_list, key=lambda x: x[1])[0] if c_top_list else None
 
-    p_min_bound = curr_p * 0.70
-    p_max_bound = curr_p * 0.95
-    below_df = pdf_clean[(pdf_clean["strike"] >= p_min_bound) & (pdf_clean["strike"] <= p_max_bound)].copy()
-    if below_df.empty:
-        below_df = pdf_clean[pdf_clean["strike"] < curr_p].copy()
-    if below_df.empty:
-        below_df = pdf_clean.copy()
-
-    top3_puts = (
-        below_df.sort_values(by="openInterest", ascending=False)
-        .head(3)
-        .sort_values(by="strike", ascending=True)
-    )
+    top3_puts = filter_near_spot_3_each_side(col_pdf, curr_p, side_mode="below")
     p_bot_list = [(float(r["strike"]), int(r["openInterest"])) for _, r in top3_puts.iterrows()]
     put_wall_val = max(p_bot_list, key=lambda x: x[1])[0] if p_bot_list else None
 
     return c_top_list, call_wall_val, p_bot_list, put_wall_val
 
-def _build_10_separate_exp_timestamps(real_exp_timestamps, base_dt):
+def _build_10_separate_exp_timestamps(real_exp_timestamps):
     pool = []
     seen_days = set()
-
     for ts in sorted(real_exp_timestamps or []):
         try:
             d_key = datetime.fromtimestamp(int(ts)).strftime("%Y-%m-%d")
@@ -691,24 +797,14 @@ def _build_10_separate_exp_timestamps(real_exp_timestamps, base_dt):
                 pool.append(int(ts))
         except Exception:
             continue
-
-    cursor = base_dt
-    while len(pool) < 10:
-        cursor = cursor + timedelta(days=1)
-        if cursor.weekday() in [0, 2, 4]:
-            d_key = cursor.strftime("%Y-%m-%d")
-            if d_key not in seen_days:
-                seen_days.add(d_key)
-                pool.append(int(cursor.replace(hour=16, minute=0, second=0).timestamp()))
-
     return pool[:10]
 
 def build_custom_option_matrix_html(symbol, spot, real_exp_timestamps=None):
     today = datetime.today()
     if real_exp_timestamps is None:
-        real_exp_timestamps, _, _ = fetch_real_option_chain_for_date(symbol)
+        real_exp_timestamps, _, _ = fetch_real_option_chain_for_date(symbol, spot=spot)
 
-    separate_exp_timestamps = _build_10_separate_exp_timestamps(real_exp_timestamps, today)
+    separate_exp_timestamps = _build_10_separate_exp_timestamps(real_exp_timestamps)
 
     cols_data = []
     nearest_idx = 0
@@ -742,11 +838,13 @@ def build_custom_option_matrix_html(symbol, spot, real_exp_timestamps=None):
         cols_data[nearest_idx]["is_today"] = True
 
     has_any_real_data = False
-    for c_info in cols_data:
+    for idx, c_info in enumerate(cols_data):
+        if idx > 0 and get_marketdata_token():
+            time.sleep(0.15)
         curr_p = spot
         ts_target = c_info["ts"]
 
-        _, col_cdf, col_pdf = fetch_real_option_chain_for_date(symbol, ts_target)
+        _, col_cdf, col_pdf = fetch_real_option_chain_for_date(symbol, ts_target, spot=curr_p)
         if not col_cdf.empty and not col_pdf.empty:
             has_any_real_data = True
 
@@ -760,6 +858,23 @@ def build_custom_option_matrix_html(symbol, spot, real_exp_timestamps=None):
         c_info["max_pain"] = raw_mp
         c_info["spot"] = curr_p
         c_info["put_wall"] = put_wall_val
+
+    if not cols_data:
+        cols_data.append({
+            "ts": int(today.timestamp()),
+            "date": today,
+            "date_str": today.strftime("%d/%m"),
+            "tag": "暂无到期日",
+            "is_today": True,
+            "delta": 0,
+            "exp_label": "暂无到期日",
+            "c_top": [],
+            "p_bot": [],
+            "call_wall": None,
+            "max_pain": None,
+            "spot": spot,
+            "put_wall": None,
+        })
 
     all_vals = []
     for c in cols_data:
@@ -844,7 +959,8 @@ def build_custom_option_matrix_html(symbol, spot, real_exp_timestamps=None):
         svg_elements += f"<circle cx='{sx}' cy='{sy}' r='5' fill='#0f172a' stroke='#facc15' stroke-width='1.5' />"
         svg_elements += f"<text x='{sx}' y='{sy + 17}' text-anchor='middle' font-size='13.5' font-weight='900' fill='#0f172a'>{sval:g}</text>"
 
-    status_badge = "API Key 真实链 | ±5%~30% 波段区间" if has_any_real_data else "接口暂未返回真实链"
+    src_name = "Market Data 真实链" if get_marketdata_token() else "API Key 真实链"
+    status_badge = f"{src_name} | 上下各3档 | ±5%~30% 波段区间" if has_any_real_data else "接口暂未返回真实链"
 
     html = f"""
     <div style="background:#ffffff; border:2px solid #1e293b; border-radius:8px; padding:8px 10px; font-family:sans-serif; color:#0f172a; width:100%; box-sizing:border-box; overflow:hidden;">
@@ -1109,7 +1225,7 @@ elif st.session_state.page == "Stock Analysis":
         real_call_wall = None
         real_put_wall = None
         if st.session_state.show_walls and st.session_state.use_live_api:
-            _, opt_cdf, opt_pdf = fetch_real_option_chain_for_date(sym)
+            _, opt_cdf, opt_pdf = fetch_real_option_chain_for_date(sym, spot=cur_price)
             _, real_call_wall, _, real_put_wall = extract_top3_walls(opt_cdf, opt_pdf, cur_price)
 
         if st.session_state.show_walls:
@@ -1233,7 +1349,7 @@ elif st.session_state.page == "Options Intelligence":
     m_opt = fetch_stock_metrics(sym, live=st.session_state.use_live_api)
     spot = float(m_opt["price"])
 
-    base_exp_dates, cdf, pdf = fetch_real_option_chain_for_date(sym)
+    base_exp_dates, cdf, pdf = fetch_real_option_chain_for_date(sym, spot=spot)
 
     matrix_html = build_custom_option_matrix_html(sym, spot, real_exp_timestamps=base_exp_dates)
     st.components.v1.html(matrix_html, height=640, scrolling=False)
@@ -1309,5 +1425,5 @@ elif st.session_state.page == "Options Intelligence":
         else:
             st.info("期权库当前未返回匹配行权价明细，未使用预设模拟价格。")
     else:
-        st.info("Yahoo 与 Nasdaq 接口当前均未返回真实期权链数据（未启用任何预设模拟价格）。若您有 Nasdaq API Key/Token，可在 Streamlit Secrets 中配置 NASDAQ_API_KEY 或 NASDAQ_BEARER_TOKEN。")
+        st.info("当前接口暂未返回真实期权链数据（未启用任何预设模拟价格）。请确认 Streamlit Secrets 中已配置 `MARKETDATA_API_TOKEN`。")
     st.markdown("</div>", unsafe_allow_html=True)
