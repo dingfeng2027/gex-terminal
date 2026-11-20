@@ -422,37 +422,33 @@ def _marketdata_get(path: str, params: dict[str, Any] | None = None, max_retries
     return last_resp.status_code, data
 
 @st.cache_data(ttl=300, show_spinner=False)
-def _query_marketdata_options_api(symbol: str, target_dt_timestamp: int | None = None, spot: float | None = None):
+def _query_marketdata_expirations(symbol: str) -> list[int]:
     if not get_marketdata_token() or "." in symbol:
-        return [], pd.DataFrame(), pd.DataFrame()
+        return []
     clean_sym = symbol.upper().strip()
-
     status_exp, exp_payload = _marketdata_get(f"/options/expirations/{clean_sym}/")
     exp_timestamps: list[int] = []
-    exp_date_strs: list[str] = []
     if status_exp == 200 and exp_payload.get("s") == "ok":
         for d_str in sorted({str(x) for x in (exp_payload.get("expirations") or []) if x}):
             try:
                 dt_obj = datetime.strptime(d_str[:10], "%Y-%m-%d").replace(hour=16, minute=0, second=0)
                 exp_timestamps.append(int(dt_obj.timestamp()))
-                exp_date_strs.append(d_str[:10])
             except Exception:
                 continue
+    return exp_timestamps
 
-    if target_dt_timestamp is not None:
-        target_exp_str = datetime.fromtimestamp(int(target_dt_timestamp)).strftime("%Y-%m-%d")
-    elif exp_date_strs:
-        target_exp_str = exp_date_strs[0]
-    else:
-        return exp_timestamps, pd.DataFrame(), pd.DataFrame()
-
+@st.cache_data(ttl=300, show_spinner=False)
+def _query_marketdata_single_chain(symbol: str, target_exp_str: str, spot: float | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
+    if not get_marketdata_token() or "." in symbol or not target_exp_str:
+        return pd.DataFrame(), pd.DataFrame()
+    clean_sym = symbol.upper().strip()
     params: dict[str, Any] = {"expiration": target_exp_str}
     if spot and spot > 0:
         params["strike"] = f"{round(spot * 0.70, 2)}-{round(spot * 1.30, 2)}"
 
     status_chain, chain_payload = _marketdata_get(f"/options/chain/{clean_sym}/", params=params)
     if status_chain != 200 or chain_payload.get("s") != "ok":
-        return exp_timestamps, pd.DataFrame(), pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame()
 
     strikes = chain_payload.get("strike") or []
     sides = chain_payload.get("side") or []
@@ -486,8 +482,8 @@ def _query_marketdata_options_api(symbol: str, target_dt_timestamp: int | None =
             p_rows.append(rec)
 
     if c_rows and p_rows:
-        return exp_timestamps, pd.DataFrame(c_rows), pd.DataFrame(p_rows)
-    return exp_timestamps, pd.DataFrame(), pd.DataFrame()
+        return pd.DataFrame(c_rows), pd.DataFrame(p_rows)
+    return pd.DataFrame(), pd.DataFrame()
 
 @st.cache_data(ttl=300, show_spinner=False)
 def _query_yahoo_options_api(symbol, target_dt_timestamp=None):
@@ -726,10 +722,19 @@ def fetch_real_option_chain_for_date(symbol, target_dt_timestamp=None, spot=None
     date_tag = datetime.fromtimestamp(int(target_dt_timestamp)).strftime("%Y-%m-%d") if target_dt_timestamp else "nearest"
     cache_key = f"{symbol}_{date_tag}"
 
-    md_exp, md_cdf, md_pdf = _query_marketdata_options_api(symbol, target_dt_timestamp, spot=spot)
-    if not md_cdf.empty and not md_pdf.empty:
-        st.session_state["opt_backup_cache"][cache_key] = (md_exp, md_cdf.copy(), md_pdf.copy())
-        return md_exp, md_cdf, md_pdf
+    md_exp = _query_marketdata_expirations(symbol)
+    if get_marketdata_token() and "." not in symbol:
+        target_exp_str = (
+            datetime.fromtimestamp(int(target_dt_timestamp)).strftime("%Y-%m-%d")
+            if target_dt_timestamp
+            else (datetime.fromtimestamp(md_exp[0]).strftime("%Y-%m-%d") if md_exp else "")
+        )
+        md_cdf, md_pdf = _query_marketdata_single_chain(symbol, target_exp_str, spot=spot)
+        if not md_cdf.empty and not md_pdf.empty:
+            st.session_state["opt_backup_cache"][cache_key] = (md_exp, md_cdf.copy(), md_pdf.copy())
+            return md_exp, md_cdf, md_pdf
+        if md_exp:
+            return md_exp, pd.DataFrame(), pd.DataFrame()
 
     exp_dates, cdf, pdf = _query_nasdaq_options_api(symbol, target_dt_timestamp)
     if not cdf.empty and not pdf.empty:
@@ -747,48 +752,52 @@ def fetch_real_option_chain_for_date(symbol, target_dt_timestamp=None, spot=None
     merged_exps = sorted(set(md_exp or []) | set(exp_dates or []) | set(y_exp or []))
     return merged_exps, pd.DataFrame(), pd.DataFrame()
 
-def filter_near_spot_3_each_side(df, curr_p, side_mode="above"):
-    """按现价筛出上下各 3 档行权价（先优先 ±5%~30% 波段区间，不足时按现价上下最近/OI排序）"""
-    if df is None or df.empty or "strike" not in df.columns:
-        return pd.DataFrame()
-    work = df.copy()
-    work["strike"] = pd.to_numeric(work["strike"], errors="coerce")
-    work["openInterest"] = pd.to_numeric(work["openInterest"], errors="coerce").fillna(0).astype(int)
-    work = work.dropna(subset=["strike"]).drop_duplicates(subset=["strike"])
-
-    if side_mode == "above":
-        band = work[(work["strike"] >= curr_p * 1.05) & (work["strike"] <= curr_p * 1.30)]
-        if band.empty:
-            band = work[work["strike"] > curr_p]
-        if band.empty:
-            band = work
-        return band.sort_values("openInterest", ascending=False).head(3).sort_values("strike", ascending=False)
-    else:
-        band = work[(work["strike"] >= curr_p * 0.70) & (work["strike"] <= curr_p * 0.95)]
-        if band.empty:
-            band = work[work["strike"] < curr_p]
-        if band.empty:
-            band = work
-        return band.sort_values("openInterest", ascending=False).head(3).sort_values("strike", ascending=True)
-
 def extract_top3_walls(col_cdf, col_pdf, curr_p):
-    """在现价上下各 3 档中提取 Call Wall / Put Wall"""
+    """在现价上下 5%~30% 区间内筛选前 3 档最大未平仓压力位/支撑位"""
     if col_cdf is None or col_pdf is None or col_cdf.empty or col_pdf.empty:
         return [], None, [], None
 
-    top3_calls = filter_near_spot_3_each_side(col_cdf, curr_p, side_mode="above")
+    cdf_clean = col_cdf.sort_values("openInterest", ascending=False).drop_duplicates(subset=["strike"])
+    pdf_clean = col_pdf.sort_values("openInterest", ascending=False).drop_duplicates(subset=["strike"])
+
+    c_min_bound = curr_p * 1.05
+    c_max_bound = curr_p * 1.30
+    above_df = cdf_clean[(cdf_clean["strike"] >= c_min_bound) & (cdf_clean["strike"] <= c_max_bound)].copy()
+    if above_df.empty:
+        above_df = cdf_clean[cdf_clean["strike"] > curr_p].copy()
+    if above_df.empty:
+        above_df = cdf_clean.copy()
+
+    top3_calls = (
+        above_df.sort_values(by="openInterest", ascending=False)
+        .head(3)
+        .sort_values(by="strike", ascending=False)
+    )
     c_top_list = [(float(r["strike"]), int(r["openInterest"])) for _, r in top3_calls.iterrows()]
     call_wall_val = max(c_top_list, key=lambda x: x[1])[0] if c_top_list else None
 
-    top3_puts = filter_near_spot_3_each_side(col_pdf, curr_p, side_mode="below")
+    p_min_bound = curr_p * 0.70
+    p_max_bound = curr_p * 0.95
+    below_df = pdf_clean[(pdf_clean["strike"] >= p_min_bound) & (pdf_clean["strike"] <= p_max_bound)].copy()
+    if below_df.empty:
+        below_df = pdf_clean[pdf_clean["strike"] < curr_p].copy()
+    if below_df.empty:
+        below_df = pdf_clean.copy()
+
+    top3_puts = (
+        below_df.sort_values(by="openInterest", ascending=False)
+        .head(3)
+        .sort_values(by="strike", ascending=True)
+    )
     p_bot_list = [(float(r["strike"]), int(r["openInterest"])) for _, r in top3_puts.iterrows()]
     put_wall_val = max(p_bot_list, key=lambda x: x[1])[0] if p_bot_list else None
 
     return c_top_list, call_wall_val, p_bot_list, put_wall_val
 
-def _build_10_separate_exp_timestamps(real_exp_timestamps):
+def _build_10_separate_exp_timestamps(real_exp_timestamps, base_dt):
     pool = []
     seen_days = set()
+
     for ts in sorted(real_exp_timestamps or []):
         try:
             d_key = datetime.fromtimestamp(int(ts)).strftime("%Y-%m-%d")
@@ -797,6 +806,16 @@ def _build_10_separate_exp_timestamps(real_exp_timestamps):
                 pool.append(int(ts))
         except Exception:
             continue
+
+    cursor = base_dt
+    while len(pool) < 10:
+        cursor = cursor + timedelta(days=1)
+        if cursor.weekday() in [0, 2, 4]:
+            d_key = cursor.strftime("%Y-%m-%d")
+            if d_key not in seen_days:
+                seen_days.add(d_key)
+                pool.append(int(cursor.replace(hour=16, minute=0, second=0).timestamp()))
+
     return pool[:10]
 
 def build_custom_option_matrix_html(symbol, spot, real_exp_timestamps=None):
@@ -804,7 +823,7 @@ def build_custom_option_matrix_html(symbol, spot, real_exp_timestamps=None):
     if real_exp_timestamps is None:
         real_exp_timestamps, _, _ = fetch_real_option_chain_for_date(symbol, spot=spot)
 
-    separate_exp_timestamps = _build_10_separate_exp_timestamps(real_exp_timestamps)
+    separate_exp_timestamps = _build_10_separate_exp_timestamps(real_exp_timestamps, today)
 
     cols_data = []
     nearest_idx = 0
@@ -858,23 +877,6 @@ def build_custom_option_matrix_html(symbol, spot, real_exp_timestamps=None):
         c_info["max_pain"] = raw_mp
         c_info["spot"] = curr_p
         c_info["put_wall"] = put_wall_val
-
-    if not cols_data:
-        cols_data.append({
-            "ts": int(today.timestamp()),
-            "date": today,
-            "date_str": today.strftime("%d/%m"),
-            "tag": "暂无到期日",
-            "is_today": True,
-            "delta": 0,
-            "exp_label": "暂无到期日",
-            "c_top": [],
-            "p_bot": [],
-            "call_wall": None,
-            "max_pain": None,
-            "spot": spot,
-            "put_wall": None,
-        })
 
     all_vals = []
     for c in cols_data:
@@ -960,7 +962,7 @@ def build_custom_option_matrix_html(symbol, spot, real_exp_timestamps=None):
         svg_elements += f"<text x='{sx}' y='{sy + 17}' text-anchor='middle' font-size='13.5' font-weight='900' fill='#0f172a'>{sval:g}</text>"
 
     src_name = "Market Data 真实链" if get_marketdata_token() else "API Key 真实链"
-    status_badge = f"{src_name} | 上下各3档 | ±5%~30% 波段区间" if has_any_real_data else "接口暂未返回真实链"
+    status_badge = f"{src_name} | ±5%~30% 波段区间" if has_any_real_data else "接口暂未返回真实链"
 
     html = f"""
     <div style="background:#ffffff; border:2px solid #1e293b; border-radius:8px; padding:8px 10px; font-family:sans-serif; color:#0f172a; width:100%; box-sizing:border-box; overflow:hidden;">
