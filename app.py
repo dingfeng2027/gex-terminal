@@ -779,17 +779,28 @@ def fetch_real_option_chain_for_date(symbol, target_dt_timestamp=None, spot=None
     return merged_exps, pd.DataFrame(), pd.DataFrame()
 
 def _build_10_separate_exp_timestamps(real_exp_timestamps, base_dt):
-    pool = []
-    seen_days = set()
+    """过滤过期日期，强制把今天放在第1列，再用后续到期日/交易日去重补齐至10列"""
+    today_date = base_dt.date()
+    today_ts = int(base_dt.replace(hour=16, minute=0, second=0).timestamp())
+    today_key = base_dt.strftime("%Y-%m-%d")
 
+    pool = [today_ts]
+    seen_days = {today_key}
+
+    future_real = []
     for ts in sorted(real_exp_timestamps or []):
         try:
-            d_key = datetime.fromtimestamp(int(ts)).strftime("%Y-%m-%d")
-            if d_key not in seen_days:
-                seen_days.add(d_key)
-                pool.append(int(ts))
+            dt_obj = datetime.fromtimestamp(int(ts))
+            if dt_obj.date() >= today_date:
+                d_key = dt_obj.strftime("%Y-%m-%d")
+                if d_key not in seen_days:
+                    seen_days.add(d_key)
+                    future_real.append(int(ts))
         except Exception:
             continue
+
+    for ts in future_real[:9]:
+        pool.append(ts)
 
     cursor = base_dt
     while len(pool) < 10:
@@ -850,62 +861,86 @@ def pull_and_filter_10_expirations_locally(symbol: str, spot: float, real_exp_ti
     if real_exp_timestamps is None:
         real_exp_timestamps, _, _ = fetch_real_option_chain_for_date(symbol, spot=spot)
 
+    real_exp_days = set()
+    for ts in real_exp_timestamps or []:
+        try:
+            real_exp_days.add(datetime.fromtimestamp(int(ts)).strftime("%Y-%m-%d"))
+        except Exception:
+            continue
+
     exp_10 = _build_10_separate_exp_timestamps(real_exp_timestamps, today)
     batch_key = f"{symbol}_{today.strftime('%Y-%m-%d')}"
     local_batch: dict[str, dict[str, Any]] = st.session_state["opt_local_store"].get(batch_key, {})
 
     for idx, ts_target in enumerate(exp_10):
         d_key = datetime.fromtimestamp(int(ts_target)).strftime("%Y-%m-%d")
+        is_official_exp = (d_key in real_exp_days)
         if d_key not in local_batch:
-            if idx > 0 and get_marketdata_token():
-                time.sleep(0.15)
-            _, col_cdf, col_pdf = fetch_real_option_chain_for_date(symbol, ts_target, spot=spot)
-            local_batch[d_key] = {
-                "ts": int(ts_target),
-                "cdf": col_cdf.copy() if not col_cdf.empty else pd.DataFrame(),
-                "pdf": col_pdf.copy() if not col_pdf.empty else pd.DataFrame(),
-                "has_chain": (not col_cdf.empty and not col_pdf.empty),
-                "pulled_at": datetime.now().strftime("%H:%M:%S"),
-            }
+            if is_official_exp:
+                if idx > 0 and get_marketdata_token():
+                    time.sleep(0.15)
+                _, col_cdf, col_pdf = fetch_real_option_chain_for_date(symbol, ts_target, spot=spot)
+                local_batch[d_key] = {
+                    "ts": int(ts_target),
+                    "is_official_exp": True,
+                    "cdf": col_cdf.copy() if not col_cdf.empty else pd.DataFrame(),
+                    "pdf": col_pdf.copy() if not col_pdf.empty else pd.DataFrame(),
+                    "has_chain": (not col_cdf.empty and not col_pdf.empty),
+                    "pulled_at": datetime.now().strftime("%H:%M:%S"),
+                }
+            else:
+                local_batch[d_key] = {
+                    "ts": int(ts_target),
+                    "is_official_exp": False,
+                    "cdf": pd.DataFrame(),
+                    "pdf": pd.DataFrame(),
+                    "has_chain": False,
+                    "pulled_at": datetime.now().strftime("%H:%M:%S"),
+                }
 
     st.session_state["opt_local_store"][batch_key] = local_batch
 
     cols_data = []
-    nearest_idx = 0
-    min_abs_diff = 999999
     has_any_real_data = False
 
     for idx, ts_target in enumerate(exp_10):
         dt = datetime.fromtimestamp(int(ts_target))
         d_key = dt.strftime("%Y-%m-%d")
         delta_days = (dt.date() - today.date()).days
-        if abs(delta_days) < min_abs_diff:
-            min_abs_diff = abs(delta_days)
-            nearest_idx = idx
+        is_today = (idx == 0 and delta_days == 0)
 
         if delta_days == 0:
             tag = "今天到期"
-        elif delta_days < 0:
-            tag = f"{abs(delta_days)}天前"
         else:
             tag = f"+{delta_days}天到期"
 
         rec = local_batch.get(d_key, {})
+        is_official_exp = bool(rec.get("is_official_exp", d_key in real_exp_days))
         col_cdf = rec.get("cdf", pd.DataFrame())
         col_pdf = rec.get("pdf", pd.DataFrame())
-        has_chain = bool(rec.get("has_chain"))
+        has_chain = bool(rec.get("has_chain")) and is_official_exp
         if has_chain:
             has_any_real_data = True
 
-        c_top_list, call_wall_val, p_bot_list, put_wall_val = extract_top3_walls(col_cdf, col_pdf, spot)
-        raw_mp = (
-            round((spot * 0.55 + call_wall_val * 0.25 + put_wall_val * 0.20), 2)
-            if (call_wall_val is not None and put_wall_val is not None)
-            else None
-        )
-
-        call_wall_px_label = f"Call {call_wall_val:g}" if call_wall_val is not None else "Call —"
-        put_wall_px_label = f"Put {put_wall_val:g}" if put_wall_val is not None else "Put —"
+        if is_official_exp and has_chain:
+            c_top_list, call_wall_val, p_bot_list, put_wall_val = extract_top3_walls(col_cdf, col_pdf, spot)
+            raw_mp = (
+                round((spot * 0.55 + call_wall_val * 0.25 + put_wall_val * 0.20), 2)
+                if (call_wall_val is not None and put_wall_val is not None)
+                else None
+            )
+            call_wall_px_label = f"Call {call_wall_val:g}" if call_wall_val is not None else "Call —"
+            put_wall_px_label = f"Put {put_wall_val:g}" if put_wall_val is not None else "Put —"
+        elif not is_official_exp:
+            c_top_list, call_wall_val, p_bot_list, put_wall_val = [], None, [], None
+            raw_mp = None
+            call_wall_px_label = "非到期日"
+            put_wall_px_label = "非到期日"
+        else:
+            c_top_list, call_wall_val, p_bot_list, put_wall_val = [], None, [], None
+            raw_mp = None
+            call_wall_px_label = "Call —"
+            put_wall_px_label = "Put —"
 
         cols_data.append({
             "ts": int(ts_target),
@@ -913,9 +948,10 @@ def pull_and_filter_10_expirations_locally(symbol: str, spot: float, real_exp_ti
             "date_str": dt.strftime("%d/%m"),
             "tag": tag,
             "exp_label": tag,
+            "is_official_exp": is_official_exp,
             "call_wall_px_label": call_wall_px_label,
             "put_wall_px_label": put_wall_px_label,
-            "is_today": False,
+            "is_today": is_today,
             "delta": delta_days,
             "has_chain": has_chain,
             "c_top": c_top_list,
@@ -925,9 +961,6 @@ def pull_and_filter_10_expirations_locally(symbol: str, spot: float, real_exp_ti
             "spot": spot,
             "put_wall": put_wall_val,
         })
-
-    if cols_data:
-        cols_data[nearest_idx]["is_today"] = True
 
     return cols_data, has_any_real_data
 
@@ -1066,49 +1099,61 @@ def build_custom_option_matrix_html(symbol, spot, real_exp_timestamps=None):
         bg_col = "background:#fef08a;" if c["is_today"] else ""
         bg_cell = "background:rgba(254,240,138,0.25);" if c["is_today"] else "background:#ffffff;"
 
-        c_rows_html = ""
-        if c["c_top"]:
-            for k_val, oi_val in c["c_top"]:
-                is_max_c = (k_val == c["call_wall"])
-                hi_style = "background:#dcfce7; font-weight:900; color:#14532d;" if is_max_c else "font-weight:800; color:#0f172a;"
-                c_rows_html += f"""
-                    <div style="height:33px; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between; align-items:center; padding:0 6px; font-size:13px; box-sizing:border-box; {hi_style}">
-                        <span>{k_val:g}</span>
-                        <span style="color:#cbd5e1;">|</span>
-                        <span>{oi_val:,}</span>
-                    </div>
-                """
-        else:
-            c_rows_html = """
-                <div style="height:99px; display:flex; align-items:center; justify-content:center; font-size:13px; color:#64748b; font-weight:800;">
-                    无真实链数据
+        if not c["is_official_exp"]:
+            empty_html = """
+                <div style="height:99px; display:flex; align-items:center; justify-content:center; font-size:12px; color:#94a3b8; font-weight:800; text-align:center; padding:0 4px;">
+                    不是期权到期日
                 </div>
             """
+            c_rows_html = empty_html
+            p_rows_html = empty_html
+        else:
+            c_rows_html = ""
+            if c["c_top"]:
+                for k_val, oi_val in c["c_top"]:
+                    is_max_c = (k_val == c["call_wall"])
+                    hi_style = "background:#dcfce7; font-weight:900; color:#14532d;" if is_max_c else "font-weight:800; color:#0f172a;"
+                    c_rows_html += f"""
+                        <div style="height:33px; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between; align-items:center; padding:0 6px; font-size:13px; box-sizing:border-box; {hi_style}">
+                            <span>{k_val:g}</span>
+                            <span style="color:#cbd5e1;">|</span>
+                            <span>{oi_val:,}</span>
+                        </div>
+                    """
+            else:
+                c_rows_html = """
+                    <div style="height:99px; display:flex; align-items:center; justify-content:center; font-size:13px; color:#64748b; font-weight:800;">
+                        无真实链数据
+                    </div>
+                """
 
-        p_rows_html = ""
-        if c["p_bot"]:
-            for k_val, oi_val in c["p_bot"]:
-                is_max_p = (k_val == c["put_wall"])
-                hi_style = "background:#fee2e2; font-weight:900; color:#7f1d1d;" if is_max_p else "font-weight:800; color:#0f172a;"
-                p_rows_html += f"""
-                    <div style="height:33px; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between; align-items:center; padding:0 6px; font-size:13px; box-sizing:border-box; {hi_style}">
-                        <span>{k_val:g}</span>
-                        <span style="color:#cbd5e1;">|</span>
-                        <span>{oi_val:,}</span>
+            p_rows_html = ""
+            if c["p_bot"]:
+                for k_val, oi_val in c["p_bot"]:
+                    is_max_p = (k_val == c["put_wall"])
+                    hi_style = "background:#fee2e2; font-weight:900; color:#7f1d1d;" if is_max_p else "font-weight:800; color:#0f172a;"
+                    p_rows_html += f"""
+                        <div style="height:33px; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between; align-items:center; padding:0 6px; font-size:13px; box-sizing:border-box; {hi_style}">
+                            <span>{k_val:g}</span>
+                            <span style="color:#cbd5e1;">|</span>
+                            <span>{oi_val:,}</span>
+                        </div>
+                    """
+            else:
+                p_rows_html = """
+                    <div style="height:99px; display:flex; align-items:center; justify-content:center; font-size:13px; color:#64748b; font-weight:800;">
+                        无真实链数据
                     </div>
                 """
-        else:
-            p_rows_html = """
-                <div style="height:99px; display:flex; align-items:center; justify-content:center; font-size:13px; color:#64748b; font-weight:800;">
-                    无真实链数据
-                </div>
-            """
+
+        top_px_color = "#15803d" if c["is_official_exp"] else "#94a3b8"
+        bot_px_color = "#b91c1c" if c["is_official_exp"] else "#94a3b8"
 
         html += f"""
                 <div style="flex:1; min-width:0; border-right:1px solid #cbd5e1; box-sizing:border-box; display:flex; flex-direction:column;">
                     <div style="height:{header_h}px; border-bottom:1px solid #cbd5e1; display:flex; flex-direction:column; align-items:center; justify-content:center; box-sizing:border-box; {bg_col}">
                         <span style="font-size:12.5px; font-weight:900; color:#0f172a;">{c['date_str']} <span style="color:#475569; font-size:10.5px;">{c['exp_label']}</span></span>
-                        <span style="font-size:11.5px; font-weight:900; color:#15803d;">{c['call_wall_px_label']}</span>
+                        <span style="font-size:11.5px; font-weight:900; color:{top_px_color};">{c['call_wall_px_label']}</span>
                     </div>
                     <div style="height:{top3_h}px; border-bottom:2px solid #1e293b; box-sizing:border-box; {bg_cell}">
                         {c_rows_html}
@@ -1119,7 +1164,7 @@ def build_custom_option_matrix_html(symbol, spot, real_exp_timestamps=None):
                     </div>
                     <div style="height:{footer_h}px; display:flex; flex-direction:column; align-items:center; justify-content:center; box-sizing:border-box; {bg_col}">
                         <span style="font-size:12.5px; font-weight:900; color:#0f172a;">{c['date_str']}</span>
-                        <span style="font-size:11.5px; font-weight:900; color:#b91c1c;">{c['put_wall_px_label']}</span>
+                        <span style="font-size:11.5px; font-weight:900; color:{bot_px_color};">{c['put_wall_px_label']}</span>
                     </div>
                 </div>
         """
