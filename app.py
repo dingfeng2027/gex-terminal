@@ -82,8 +82,8 @@ if "show_walls" not in st.session_state:
 if "show_all_strikes" not in st.session_state:
     st.session_state["show_all_strikes"] = False
 
-if "opt_backup_cache" not in st.session_state:
-    st.session_state["opt_backup_cache"] = {}
+if "opt_local_store" not in st.session_state:
+    st.session_state["opt_local_store"] = {}
 
 def sync_watchlist_to_url():
     st.query_params["watchlist"] = ",".join(st.session_state.tickers)
@@ -719,9 +719,7 @@ def _query_nasdaq_options_api(symbol, target_dt_timestamp=None):
     return [], pd.DataFrame(), pd.DataFrame()
 
 def fetch_real_option_chain_for_date(symbol, target_dt_timestamp=None, spot=None):
-    date_tag = datetime.fromtimestamp(int(target_dt_timestamp)).strftime("%Y-%m-%d") if target_dt_timestamp else "nearest"
-    cache_key = f"{symbol}_{date_tag}"
-
+    """单到期日拉取（严格隔离日期，不使用跨日结算兜底）"""
     md_exp = _query_marketdata_expirations(symbol)
     if get_marketdata_token() and "." not in symbol:
         target_exp_str = (
@@ -731,26 +729,67 @@ def fetch_real_option_chain_for_date(symbol, target_dt_timestamp=None, spot=None
         )
         md_cdf, md_pdf = _query_marketdata_single_chain(symbol, target_exp_str, spot=spot)
         if not md_cdf.empty and not md_pdf.empty:
-            st.session_state["opt_backup_cache"][cache_key] = (md_exp, md_cdf.copy(), md_pdf.copy())
             return md_exp, md_cdf, md_pdf
         if md_exp:
             return md_exp, pd.DataFrame(), pd.DataFrame()
 
     exp_dates, cdf, pdf = _query_nasdaq_options_api(symbol, target_dt_timestamp)
     if not cdf.empty and not pdf.empty:
-        st.session_state["opt_backup_cache"][cache_key] = (exp_dates, cdf.copy(), pdf.copy())
         return exp_dates, cdf, pdf
 
     y_exp, y_cdf, y_pdf = _query_yahoo_options_api(symbol, target_dt_timestamp)
     if not y_cdf.empty and not y_pdf.empty:
-        st.session_state["opt_backup_cache"][cache_key] = (y_exp, y_cdf.copy(), y_pdf.copy())
         return y_exp, y_cdf, y_pdf
-
-    if cache_key in st.session_state["opt_backup_cache"]:
-        return st.session_state["opt_backup_cache"][cache_key]
 
     merged_exps = sorted(set(md_exp or []) | set(exp_dates or []) | set(y_exp or []))
     return merged_exps, pd.DataFrame(), pd.DataFrame()
+
+def _build_10_separate_exp_timestamps(real_exp_timestamps, base_dt):
+    pool = []
+    seen_days = set()
+
+    for ts in sorted(real_exp_timestamps or []):
+        try:
+            d_key = datetime.fromtimestamp(int(ts)).strftime("%Y-%m-%d")
+            if d_key not in seen_days:
+                seen_days.add(d_key)
+                pool.append(int(ts))
+        except Exception:
+            continue
+
+    cursor = base_dt
+    while len(pool) < 10:
+        cursor = cursor + timedelta(days=1)
+        if cursor.weekday() in [0, 2, 4]:
+            d_key = cursor.strftime("%Y-%m-%d")
+            if d_key not in seen_days:
+                seen_days.add(d_key)
+                pool.append(int(cursor.replace(hour=16, minute=0, second=0).timestamp()))
+
+    return pool[:10]
+
+def estimate_expiry_price(col_cdf: pd.DataFrame, col_pdf: pd.DataFrame, spot: float) -> tuple[float, bool]:
+    """计算该到期日的隐含/参考价格（返回: (价格, 是否来自期权链平值推算)）"""
+    if col_cdf is None or col_pdf is None or col_cdf.empty or col_pdf.empty:
+        return round(float(spot), 2), False
+    try:
+        c_work = col_cdf.copy()
+        p_work = col_pdf.copy()
+        c_work["dist"] = (c_work["strike"] - spot).abs()
+        p_work["dist"] = (p_work["strike"] - spot).abs()
+        c_best = c_work.sort_values("dist").iloc[0]
+        p_best = p_work.sort_values("dist").iloc[0]
+        k_mid = (float(c_best["strike"]) + float(p_best["strike"])) / 2.0
+        c_lp = float(c_best.get("lastPrice") or 0.0)
+        p_lp = float(p_best.get("lastPrice") or 0.0)
+        # 合成远期/到期隐含价格: Strike + (Call - Put)
+        if c_lp > 0 or p_lp > 0:
+            imp = round(k_mid + (c_lp - p_lp), 2)
+            if spot * 0.5 <= imp <= spot * 1.5:
+                return imp, True
+        return round(k_mid, 2), True
+    except Exception:
+        return round(float(spot), 2), False
 
 def extract_top3_walls(col_cdf, col_pdf, curr_p):
     """在现价上下 5%~30% 区间内筛选前 3 档最大未平仓压力位/支撑位"""
@@ -794,43 +833,42 @@ def extract_top3_walls(col_cdf, col_pdf, curr_p):
 
     return c_top_list, call_wall_val, p_bot_list, put_wall_val
 
-def _build_10_separate_exp_timestamps(real_exp_timestamps, base_dt):
-    pool = []
-    seen_days = set()
-
-    for ts in sorted(real_exp_timestamps or []):
-        try:
-            d_key = datetime.fromtimestamp(int(ts)).strftime("%Y-%m-%d")
-            if d_key not in seen_days:
-                seen_days.add(d_key)
-                pool.append(int(ts))
-        except Exception:
-            continue
-
-    cursor = base_dt
-    while len(pool) < 10:
-        cursor = cursor + timedelta(days=1)
-        if cursor.weekday() in [0, 2, 4]:
-            d_key = cursor.strftime("%Y-%m-%d")
-            if d_key not in seen_days:
-                seen_days.add(d_key)
-                pool.append(int(cursor.replace(hour=16, minute=0, second=0).timestamp()))
-
-    return pool[:10]
-
-def build_custom_option_matrix_html(symbol, spot, real_exp_timestamps=None):
+def pull_and_filter_10_expirations_locally(symbol: str, spot: float, real_exp_timestamps=None) -> tuple[list[dict[str, Any]], bool]:
+    """第一步：每次更新先把 10 个到期日逐一回调到本地容器；第二步：在本地统一筛选与计算"""
     today = datetime.today()
     if real_exp_timestamps is None:
         real_exp_timestamps, _, _ = fetch_real_option_chain_for_date(symbol, spot=spot)
 
-    separate_exp_timestamps = _build_10_separate_exp_timestamps(real_exp_timestamps, today)
+    exp_10 = _build_10_separate_exp_timestamps(real_exp_timestamps, today)
+    batch_key = f"{symbol}_{today.strftime('%Y-%m-%d')}"
+    local_batch: dict[str, dict[str, Any]] = st.session_state["opt_local_store"].get(batch_key, {})
 
+    # 1) 逐个拉取 10 个到期日数据到本地容器
+    for idx, ts_target in enumerate(exp_10):
+        d_key = datetime.fromtimestamp(int(ts_target)).strftime("%Y-%m-%d")
+        if d_key not in local_batch:
+            if idx > 0 and get_marketdata_token():
+                time.sleep(0.15)
+            _, col_cdf, col_pdf = fetch_real_option_chain_for_date(symbol, ts_target, spot=spot)
+            local_batch[d_key] = {
+                "ts": int(ts_target),
+                "cdf": col_cdf.copy() if not col_cdf.empty else pd.DataFrame(),
+                "pdf": col_pdf.copy() if not col_pdf.empty else pd.DataFrame(),
+                "has_chain": (not col_cdf.empty and not col_pdf.empty),
+                "pulled_at": datetime.now().strftime("%H:%M:%S"),
+            }
+
+    st.session_state["opt_local_store"][batch_key] = local_batch
+
+    # 2) 在本地统一筛选上下各 3 档、计算墙位与到期价格
     cols_data = []
     nearest_idx = 0
     min_abs_diff = 999999
+    has_any_real_data = False
 
-    for idx, ts_target in enumerate(separate_exp_timestamps):
-        dt = datetime.fromtimestamp(ts_target)
+    for idx, ts_target in enumerate(exp_10):
+        dt = datetime.fromtimestamp(int(ts_target))
+        d_key = dt.strftime("%Y-%m-%d")
         delta_days = (dt.date() - today.date()).days
         if abs(delta_days) < min_abs_diff:
             min_abs_diff = abs(delta_days)
@@ -843,44 +881,54 @@ def build_custom_option_matrix_html(symbol, spot, real_exp_timestamps=None):
         else:
             tag = f"+{delta_days}天到期"
 
-        d_str = dt.strftime("%d/%m")
+        rec = local_batch.get(d_key, {})
+        col_cdf = rec.get("cdf", pd.DataFrame())
+        col_pdf = rec.get("pdf", pd.DataFrame())
+        has_chain = bool(rec.get("has_chain"))
+        if has_chain:
+            has_any_real_data = True
+
+        c_top_list, call_wall_val, p_bot_list, put_wall_val = extract_top3_walls(col_cdf, col_pdf, spot)
+        raw_mp = (
+            round((spot * 0.55 + call_wall_val * 0.25 + put_wall_val * 0.20), 2)
+            if (call_wall_val is not None and put_wall_val is not None)
+            else None
+        )
+        exp_px, is_implied = estimate_expiry_price(col_cdf, col_pdf, spot)
+        px_label = f"${exp_px:.2f}" if is_implied else f"~${exp_px:.2f}"
+
         cols_data.append({
-            "ts": ts_target,
+            "ts": int(ts_target),
             "date": dt,
-            "date_str": d_str,
+            "date_str": dt.strftime("%d/%m"),
             "tag": tag,
+            "exp_label": tag,
+            "exp_price": exp_px,
+            "exp_price_label": px_label,
             "is_today": False,
-            "delta": delta_days
+            "delta": delta_days,
+            "has_chain": has_chain,
+            "c_top": c_top_list,
+            "p_bot": p_bot_list,
+            "call_wall": call_wall_val,
+            "max_pain": raw_mp,
+            "spot": spot,
+            "put_wall": put_wall_val,
         })
 
     if cols_data:
         cols_data[nearest_idx]["is_today"] = True
 
-    has_any_real_data = False
-    for idx, c_info in enumerate(cols_data):
-        if idx > 0 and get_marketdata_token():
-            time.sleep(0.15)
-        curr_p = spot
-        ts_target = c_info["ts"]
+    return cols_data, has_any_real_data
 
-        _, col_cdf, col_pdf = fetch_real_option_chain_for_date(symbol, ts_target, spot=curr_p)
-        if not col_cdf.empty and not col_pdf.empty:
-            has_any_real_data = True
-
-        c_top_list, call_wall_val, p_bot_list, put_wall_val = extract_top3_walls(col_cdf, col_pdf, curr_p)
-        raw_mp = round((curr_p * 0.55 + call_wall_val * 0.25 + put_wall_val * 0.20), 2) if (call_wall_val is not None and put_wall_val is not None) else None
-
-        c_info["exp_label"] = c_info["tag"]
-        c_info["c_top"] = c_top_list
-        c_info["p_bot"] = p_bot_list
-        c_info["call_wall"] = call_wall_val
-        c_info["max_pain"] = raw_mp
-        c_info["spot"] = curr_p
-        c_info["put_wall"] = put_wall_val
+def build_custom_option_matrix_html(symbol, spot, real_exp_timestamps=None):
+    cols_data, has_any_real_data = pull_and_filter_10_expirations_locally(
+        symbol, spot, real_exp_timestamps=real_exp_timestamps
+    )
 
     all_vals = []
     for c in cols_data:
-        for v in [c["call_wall"], c["max_pain"], c["spot"], c["put_wall"]]:
+        for v in [c["call_wall"], c["max_pain"], c["spot"], c["put_wall"], c["exp_price"]]:
             if v is not None:
                 all_vals.append(v)
     if not all_vals:
@@ -896,11 +944,11 @@ def build_custom_option_matrix_html(symbol, spot, real_exp_timestamps=None):
     left_axis_w = 96
     n_cols = len(cols_data)
     total_chart_w = n_cols * col_w
-    header_h = 42
+    header_h = 54
     top3_h = 99
     svg_h = 246
     bot3_h = 99
-    footer_h = 36
+    footer_h = 48
 
     def val_to_y(v):
         ratio = (v - y_low) / (y_high - y_low)
@@ -962,7 +1010,7 @@ def build_custom_option_matrix_html(symbol, spot, real_exp_timestamps=None):
         svg_elements += f"<text x='{sx}' y='{sy + 17}' text-anchor='middle' font-size='13.5' font-weight='900' fill='#0f172a'>{sval:g}</text>"
 
     src_name = "Market Data 真实链" if get_marketdata_token() else "API Key 真实链"
-    status_badge = f"{src_name} | ±5%~30% 波段区间" if has_any_real_data else "接口暂未返回真实链"
+    status_badge = f"{src_name} | 本地10期回调筛选 | ±5%~30% 波段区间" if has_any_real_data else "接口暂未返回真实链"
 
     html = f"""
     <div style="background:#ffffff; border:2px solid #1e293b; border-radius:8px; padding:8px 10px; font-family:sans-serif; color:#0f172a; width:100%; box-sizing:border-box; overflow:hidden;">
@@ -980,7 +1028,10 @@ def build_custom_option_matrix_html(symbol, spot, real_exp_timestamps=None):
 
         <div style="display:flex; width:100%;">
             <div style="width:{left_axis_w}px; flex-shrink:0; border-right:2px solid #1e293b; display:flex; flex-direction:column; box-sizing:border-box;">
-                <div style="height:{header_h}px; border-bottom:1px solid #cbd5e1; display:flex; align-items:center; justify-content:center; font-weight:900; font-size:13px; background:#f8fafc; box-sizing:border-box;">到期日</div>
+                <div style="height:{header_h}px; border-bottom:1px solid #cbd5e1; display:flex; flex-direction:column; align-items:center; justify-content:center; font-weight:900; font-size:13px; background:#f8fafc; box-sizing:border-box;">
+                    <span>到期日</span>
+                    <span style="font-size:10.5px; font-weight:800; color:#2563eb;">到期价格</span>
+                </div>
                 <div style="height:{top3_h}px; border-bottom:2px solid #1e293b; display:flex; flex-direction:column; align-items:center; justify-content:center; font-weight:900; font-size:13px; color:#15803d; background:#f0fdf4; text-align:center; box-sizing:border-box;">
                     <span>上3档 Call</span>
                     <span style="font-size:11px; font-weight:800;">+5% ~ +30%</span>
@@ -992,7 +1043,10 @@ def build_custom_option_matrix_html(symbol, spot, real_exp_timestamps=None):
                     <span>下3档 Put</span>
                     <span style="font-size:11px; font-weight:800;">-5% ~ -30%</span>
                 </div>
-                <div style="height:{footer_h}px; display:flex; align-items:center; justify-content:center; font-weight:900; font-size:13px; background:#f8fafc; box-sizing:border-box;">到期轴</div>
+                <div style="height:{footer_h}px; display:flex; flex-direction:column; align-items:center; justify-content:center; font-weight:900; font-size:13px; background:#f8fafc; box-sizing:border-box;">
+                    <span>到期轴</span>
+                    <span style="font-size:10.5px; font-weight:800; color:#2563eb;">到期价格</span>
+                </div>
             </div>
 
             <div style="display:flex; flex:1; min-width:0;">
@@ -1043,8 +1097,8 @@ def build_custom_option_matrix_html(symbol, spot, real_exp_timestamps=None):
         html += f"""
                 <div style="flex:1; min-width:0; border-right:1px solid #cbd5e1; box-sizing:border-box; display:flex; flex-direction:column;">
                     <div style="height:{header_h}px; border-bottom:1px solid #cbd5e1; display:flex; flex-direction:column; align-items:center; justify-content:center; box-sizing:border-box; {bg_col}">
-                        <span style="font-size:13px; font-weight:900; color:#0f172a;">{c['date_str']}</span>
-                        <span style="font-size:11px; font-weight:800; color:#475569;">{c['exp_label']}</span>
+                        <span style="font-size:12.5px; font-weight:900; color:#0f172a;">{c['date_str']} <span style="color:#475569; font-size:10.5px;">{c['exp_label']}</span></span>
+                        <span style="font-size:11.5px; font-weight:900; color:#1d4ed8;">{c['exp_price_label']}</span>
                     </div>
                     <div style="height:{top3_h}px; border-bottom:2px solid #1e293b; box-sizing:border-box; {bg_cell}">
                         {c_rows_html}
@@ -1053,8 +1107,9 @@ def build_custom_option_matrix_html(symbol, spot, real_exp_timestamps=None):
                     <div style="height:{bot3_h}px; border-bottom:1px solid #cbd5e1; box-sizing:border-box; {bg_cell}">
                         {p_rows_html}
                     </div>
-                    <div style="height:{footer_h}px; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:900; color:#0f172a; box-sizing:border-box; {bg_col}">
-                        {c['date_str']}
+                    <div style="height:{footer_h}px; display:flex; flex-direction:column; align-items:center; justify-content:center; box-sizing:border-box; {bg_col}">
+                        <span style="font-size:12.5px; font-weight:900; color:#0f172a;">{c['date_str']}</span>
+                        <span style="font-size:11px; font-weight:900; color:#1d4ed8;">{c['exp_price_label']}</span>
                     </div>
                 </div>
         """
@@ -1107,6 +1162,7 @@ def render_native_market_watch():
             st.warning("该代码已存在自选列表中！")
     if c4.button("MANUAL REFRESH", use_container_width=True):
         st.cache_data.clear()
+        st.session_state["opt_local_store"] = {}
         st.rerun()
 
     rows = []
@@ -1354,7 +1410,7 @@ elif st.session_state.page == "Options Intelligence":
     base_exp_dates, cdf, pdf = fetch_real_option_chain_for_date(sym, spot=spot)
 
     matrix_html = build_custom_option_matrix_html(sym, spot, real_exp_timestamps=base_exp_dates)
-    st.components.v1.html(matrix_html, height=640, scrolling=False)
+    st.components.v1.html(matrix_html, height=665, scrolling=False)
 
     st.markdown("<div class='module-container'>", unsafe_allow_html=True)
     hdr_c1, hdr_c2 = st.columns([4.5, 1.5])
