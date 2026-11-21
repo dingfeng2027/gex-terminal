@@ -878,12 +878,9 @@ DIZHI_ELEMENT = {
     "亥": "水", "子": "水",
 }
 
-# 生克映射: GENERATES[a] = b 表示 a 生 b
 GENERATES = {"木": "火", "火": "土", "土": "金", "金": "水", "水": "木"}
-# 克制映射: OVERCOMES[a] = b 表示 a 克 b
 OVERCOMES = {"木": "土", "土": "水", "水": "火", "火": "金", "金": "木"}
 
-# 六冲地支对
 CLASH_PAIRS = {
     frozenset({"子", "午"}),
     frozenset({"丑", "未"}),
@@ -893,7 +890,6 @@ CLASH_PAIRS = {
     frozenset({"巳", "亥"}),
 }
 
-# 六合地支对
 SIX_HARMONY_PAIRS = {
     frozenset({"子", "丑"}),
     frozenset({"寅", "亥"}),
@@ -903,13 +899,11 @@ SIX_HARMONY_PAIRS = {
     frozenset({"午", "未"}),
 }
 
-# 1~12月对应传统月支（1月寅、2月卯……12月丑）
 MONTH_TO_ZHI_IDX = {
     1: 2, 2: 3, 3: 4, 4: 5, 5: 6, 6: 7,
     7: 8, 8: 9, 9: 10, 10: 11, 11: 0, 12: 1,
 }
 
-# 锚点日（2000-01-07 为甲辰日，甲=0, 辰=4）用于公历日期自动推算干支
 _ANCHOR_DATE = date(2000, 1, 7)
 
 def _date_to_ganzhi(d: date) -> tuple[str, str]:
@@ -919,21 +913,18 @@ def _date_to_ganzhi(d: date) -> tuple[str, str]:
     return gan, zhi
 
 def _year_to_ganzhi(year: int) -> tuple[str, str]:
-    # 1984 为甲子年（gan_idx=0, zhi_idx=0）
     offset = year - 1984
     return TIANGAN[offset % 10], DIZHI[offset % 12]
 
 def _month_ganzhi(year: int, month: int) -> tuple[str, str]:
     y_gan, _ = _year_to_ganzhi(year)
     y_gan_idx = TIANGAN.index(y_gan)
-    # 五虎遁：甲己之年丙作首（1月寅月起丙，idx=2）
     start_gan_idx = ((y_gan_idx % 5) * 2 + 2) % 10
     m_gan = TIANGAN[(start_gan_idx + (month - 1)) % 10]
     m_zhi = DIZHI[MONTH_TO_ZHI_IDX[month]]
     return m_gan, m_zhi
 
 def auto_infer_stock_ganzhi(symbol: str) -> dict[str, Any]:
-    """自动为任意股票代码推算固定干支、五行与常见财报月（无需手动配置）"""
     clean_sym = symbol.upper().strip()
     digest = hashlib.sha256(clean_sym.encode("utf-8")).hexdigest()
     seed_int = int(digest[:12], 16)
@@ -943,7 +934,6 @@ def auto_infer_stock_ganzhi(symbol: str) -> dict[str, Any]:
     element = TIANGAN_ELEMENT[gan]
     zhi_element = DIZHI_ELEMENT[zhi]
 
-    # 按代码确定性分配 4 个常见财报季月份
     q_offset = (seed_int % 3)
     earnings_months = [1 + q_offset, 4 + q_offset, 7 + q_offset, 10 + q_offset]
     earnings_months = sorted({12 if m > 12 else m for m in earnings_months})
@@ -959,7 +949,6 @@ def auto_infer_stock_ganzhi(symbol: str) -> dict[str, Any]:
     }
 
 def _ganzhi_month_interaction(stock_gan: str, stock_zhi: str, stock_el: str, m_gan: str, m_zhi: str) -> tuple[float, str]:
-    """计算单股干支与流月干支的生克/冲合修正分"""
     m_el = TIANGAN_ELEMENT[m_gan]
     score = 0.0
     tags = []
@@ -1044,7 +1033,6 @@ def build_12_month_cycle_rows(symbol: str, ref_year: int) -> tuple[list[dict[str
     s_el = auto_info["element"]
     e_months = auto_info["earnings_months"]
 
-    # 1974-11-28 虎盘底色 + 九运离火基准
     _, birth_day_zhi = _date_to_ganzhi(date(1974, 11, 28))
     y_gan, y_zhi = _year_to_ganzhi(ref_year)
     year_shift = ((ref_year - 1974) % 12) - 5.5
@@ -1142,18 +1130,30 @@ def render_12m_cycle_block_above_options(symbol: str):
             marker=dict(size=6, color="#22c55e"),
         ))
 
-    if target_year == cur_year:
-        cur_m_label = f"{cur_month}月"
-        if cur_m_label in x_labels:
-            fig_12m.add_vline(
-                x=cur_m_label,
-                line_width=2,
-                line_dash="dot",
-                line_color="#0284c7",
-                annotation_text=f"本月({cur_m_label})",
-                annotation_position="top left",
-                annotation_font=dict(color="#0284c7", size=12),
-            )
+    if target_year == cur_year and 1 <= cur_month <= len(x_labels):
+        cur_x_idx = cur_month - 1
+        cur_m_label = x_labels[cur_x_idx]
+        fig_12m.add_shape(
+            type="line",
+            x0=cur_x_idx,
+            x1=cur_x_idx,
+            y0=0,
+            y1=105,
+            xref="x",
+            yref="y",
+            line=dict(color="#0284c7", width=2, dash="dot"),
+        )
+        fig_12m.add_annotation(
+            x=cur_x_idx,
+            y=102,
+            xref="x",
+            yref="y",
+            text=f"本月({cur_m_label})",
+            showarrow=False,
+            xanchor="left",
+            yanchor="top",
+            font=dict(color="#0284c7", size=12),
+        )
 
     fig_12m.update_layout(
         template="plotly_white",
@@ -1165,7 +1165,7 @@ def render_12m_cycle_block_above_options(symbol: str):
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
     )
     fig_12m.update_yaxes(range=[0, 105], gridcolor="#e2e8f0")
-    st.plotly_chart(fig_12m, use_container_width=True)
+    st.plotly_chart(fig_12m, width="stretch")
 
     cards_html = "<div style='display:grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap:8px; margin-top:4px;'>"
     for r in rows:
@@ -1424,7 +1424,7 @@ elif st.session_state.page == "Stock Analysis":
             margin=dict(l=10, r=175, t=10, b=10), showlegend=False
         )
         fig.update_yaxes(side="right", gridcolor="#e2e8f0", range=[y_min, y_max])
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
     with col_l:
         st.markdown("<div class='card-header'>PRICE LEVEL LADDER</div>", unsafe_allow_html=True)
