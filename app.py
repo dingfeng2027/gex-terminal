@@ -142,9 +142,6 @@ def _is_valid_chain_pair(cdf: pd.DataFrame, pdf: pd.DataFrame) -> bool:
     p_strikes = pd.to_numeric(pdf["strike"], errors="coerce").dropna()
     return (not c_strikes.empty) and (not p_strikes.empty) and ((c_strikes > 0).any()) and ((p_strikes > 0).any())
 
-def get_marketdata_token() -> str:
-    return _get_secret_or_env("MARKETDATA_API_TOKEN")
-
 def _parse_float_clean(val):
     if val is None:
         return None
@@ -156,93 +153,113 @@ def _parse_float_clean(val):
     except Exception:
         return None
 
-# ==================== 1. STOCK ENGINE (MARKET DATA PRIORITY + YFINANCE FALLBACK) ====================
+# ==================== 1. STOCK & ANALYSIS ENGINE (LOCKED TO NASDAQ) ====================
 
-def _marketdata_stock_get(path: str, params: dict[str, Any] | None = None) -> tuple[int, dict[str, Any]]:
-    token = get_marketdata_token()
-    if not token:
-        return 0, {}
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/json",
+def _build_nasdaq_headers() -> dict[str, str]:
+    return {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Origin": "https://www.nasdaq.com",
+        "Referer": "https://www.nasdaq.com/",
     }
-    url = f"https://api.marketdata.app/v1{path}"
-    try:
-        resp = requests.get(url, headers=headers, params=params or {}, timeout=5.0)
-        return resp.status_code, resp.json() if resp.content else {}
-    except Exception:
-        return 0, {}
 
-def _query_marketdata_stock_quote(symbol: str) -> dict[str, Any] | None:
+def _query_nasdaq_stock_quote(symbol: str) -> dict[str, Any] | None:
     if "." in symbol:
         return None
     clean_sym = symbol.upper().strip()
-    st_q, pl_q = _marketdata_stock_get(f"/stocks/quotes/{clean_sym}/")
-    if st_q != 200 or pl_q.get("s") != "ok":
-        return None
+    headers = _build_nasdaq_headers()
+    asset_classes = ["etf", "stocks"] if clean_sym in ["QQQ", "SPY", "IWM", "DIA", "TLT"] else ["stocks", "etf"]
 
-    last_arr = pl_q.get("last") or []
-    prev_arr = pl_q.get("prevClose") or []
-    mid_arr = pl_q.get("mid") or []
-    bid_arr = pl_q.get("bid") or []
-    ask_arr = pl_q.get("ask") or []
+    for ac in asset_classes:
+        try:
+            url_info = f"https://api.nasdaq.com/api/quote/{clean_sym}/info?assetclass={ac}"
+            res = requests.get(url_info, headers=headers, timeout=3.5)
+            if res.status_code != 200:
+                continue
+            d = res.json().get("data")
+            if not isinstance(d, dict) or not d.get("primaryData"):
+                continue
 
-    last_p = _parse_float_clean(last_arr[0] if last_arr else None)
-    if last_p is None:
-        last_p = _parse_float_clean(mid_arr[0] if mid_arr else None)
-    if last_p is None and bid_arr and ask_arr:
-        b = _parse_float_clean(bid_arr[0])
-        a = _parse_float_clean(ask_arr[0])
-        if b is not None and a is not None:
-            last_p = round((b + a) / 2.0, 4)
+            pdata = d.get("primaryData", {})
+            key_stats = d.get("keyStats", {}) if isinstance(d.get("keyStats"), dict) else {}
+            last_price = _parse_float_clean(pdata.get("lastSalePrice"))
+            net_chg = _parse_float_clean(pdata.get("netChange"))
+            if last_price is None or last_price <= 0:
+                continue
 
-    if last_p is None:
-        return None
+            prev_price = round(last_price - net_chg, 4) if net_chg is not None else last_price
+            high52, low52, mcap = None, None, None
 
-    prev_p = _parse_float_clean(prev_arr[0] if prev_arr else None)
-    if prev_p is None:
-        prev_p = last_p
+            hl_obj = key_stats.get("fiftyTwoWeekHighLow", {})
+            if isinstance(hl_obj, dict) and hl_obj.get("value"):
+                parts = str(hl_obj["value"]).split("/")
+                if len(parts) == 2:
+                    high52 = _parse_float_clean(parts[0])
+                    low52 = _parse_float_clean(parts[1])
 
-    return {"price": float(last_p), "prev": float(prev_p)}
+            mcap_obj = key_stats.get("MarketCap", {})
+            if isinstance(mcap_obj, dict) and mcap_obj.get("value"):
+                mcap = str(mcap_obj["value"]).strip()
 
-def _query_marketdata_stock_candles(symbol: str, days_back: int = 365) -> pd.DataFrame:
+            return {
+                "assetclass": ac,
+                "name": d.get("companyName") or clean_sym,
+                "price": float(last_price),
+                "prev": float(prev_price),
+                "high52": high52,
+                "low52": low52,
+                "mcap": mcap,
+            }
+        except Exception:
+            continue
+    return None
+
+def _query_nasdaq_stock_candles(symbol: str, days_back: int = 365) -> pd.DataFrame:
     if "." in symbol:
         return pd.DataFrame()
     clean_sym = symbol.upper().strip()
     to_dt = datetime.today().strftime("%Y-%m-%d")
     from_dt = (datetime.today() - timedelta(days=days_back)).strftime("%Y-%m-%d")
-    st_c, pl_c = _marketdata_stock_get(
-        f"/stocks/candles/D/{clean_sym}/",
-        params={"from": from_dt, "to": to_dt}
-    )
-    if st_c != 200 or pl_c.get("s") != "ok":
-        return pd.DataFrame()
+    headers = _build_nasdaq_headers()
+    ac_order = ["etf", "stocks"] if clean_sym in ["QQQ", "SPY", "IWM", "DIA", "TLT"] else ["stocks", "etf"]
 
-    closes = pl_c.get("c") or []
-    highs = pl_c.get("h") or []
-    lows = pl_c.get("l") or []
-    ts_list = pl_c.get("t") or []
-
-    records = []
-    for i in range(min(len(closes), len(ts_list))):
-        c_val = _parse_float_clean(closes[i])
-        if c_val is None or ts_list[i] is None:
+    for ac in ac_order:
+        try:
+            url_hist = (
+                f"https://api.nasdaq.com/api/quote/{clean_sym}/historical"
+                f"?assetclass={ac}&fromdate={from_dt}&limit=1500&todate={to_dt}"
+            )
+            h_res = requests.get(url_hist, headers=headers, timeout=4.0)
+            if h_res.status_code != 200:
+                continue
+            rows = h_res.json().get("data", {}).get("tradesTable", {}).get("rows", [])
+            if not isinstance(rows, list) or not rows:
+                continue
+            records = []
+            for row in reversed(rows):
+                c_val = _parse_float_clean(row.get("close"))
+                h_val = _parse_float_clean(row.get("high"))
+                l_val = _parse_float_clean(row.get("low"))
+                d_str = str(row.get("date", "")).strip()
+                if c_val is not None and d_str:
+                    try:
+                        dt_parsed = datetime.strptime(d_str, "%m/%d/%Y")
+                        records.append({
+                            "Date": dt_parsed,
+                            "Close": float(c_val),
+                            "High": float(h_val) if h_val is not None else float(c_val),
+                            "Low": float(l_val) if l_val is not None else float(c_val),
+                        })
+                    except Exception:
+                        continue
+            if records:
+                return pd.DataFrame(records).sort_values("Date").reset_index(drop=True)
+        except Exception:
             continue
-        dt_val = datetime.utcfromtimestamp(float(ts_list[i]))
-        h_val = _parse_float_clean(highs[i] if i < len(highs) else None)
-        l_val = _parse_float_clean(lows[i] if i < len(lows) else None)
-        records.append({
-            "Date": dt_val,
-            "Close": float(c_val),
-            "High": float(h_val) if h_val is not None else float(c_val),
-            "Low": float(l_val) if l_val is not None else float(c_val),
-        })
-    if not records:
-        return pd.DataFrame()
-    return pd.DataFrame(records).sort_values("Date").reset_index(drop=True)
+    return pd.DataFrame()
 
 def _query_yahoo_stock_fallback(symbol: str) -> dict[str, Any] | None:
-    """当非美股（如 .L）或 Market Data 无返回时，用 yfinance 兜底股票数据"""
     if not HAS_YF:
         return None
     try:
@@ -253,16 +270,12 @@ def _query_yahoo_stock_fallback(symbol: str) -> dict[str, Any] | None:
         closes = [float(x) for x in hist["Close"].dropna().tolist()]
         if len(closes) < 2:
             return None
-        last_p = closes[-1]
-        prev_p = closes[-2]
-        h52 = float(hist["High"].max()) if "High" in hist.columns else max(closes)
-        l52 = float(hist["Low"].min()) if "Low" in hist.columns else min(closes)
         return {
-            "price": last_p,
-            "prev": prev_p,
+            "price": closes[-1],
+            "prev": closes[-2],
             "closes": closes,
-            "high52": h52,
-            "low52": l52,
+            "high52": float(hist["High"].max()) if "High" in hist.columns else max(closes),
+            "low52": float(hist["Low"].min()) if "Low" in hist.columns else min(closes),
         }
     except Exception:
         return None
@@ -271,7 +284,6 @@ def _calc_indicators_from_closes(closes, last_price, prev_price, high52=None, lo
     ma20 = sum(closes[-20:]) / min(20, len(closes))
     ma50 = sum(closes[-50:]) / min(50, len(closes))
     ma200 = sum(closes[-200:]) / min(200, len(closes))
-
     h52 = high52 if high52 is not None else max(closes)
     l52 = low52 if low52 is not None else min(closes)
 
@@ -283,8 +295,7 @@ def _calc_indicators_from_closes(closes, last_price, prev_price, high52=None, lo
         avg_gain = sum(gains) / 14 if gains else 0.0
         avg_loss = sum(losses) / 14 if losses else 0.0
         if avg_loss > 0:
-            rs = avg_gain / avg_loss
-            rsi = 100 - (100 / (1 + rs))
+            rsi = 100 - (100 / (1 + (avg_gain / avg_loss)))
         elif avg_gain > 0:
             rsi = 100.0
 
@@ -296,10 +307,10 @@ def _calc_indicators_from_closes(closes, last_price, prev_price, high52=None, lo
         "ma200": round(float(ma200), 2),
         "high52": round(float(h52), 2),
         "low52": round(float(l52), 2),
-        "rsi": round(float(rsi), 1)
+        "rsi": round(float(rsi), 1),
     }
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=180, show_spinner=False)
 def fetch_stock_metrics(symbol, live=True):
     fb = FALLBACK_DATA.get(symbol, {"name": symbol, "price": 150.0, "prev": 148.0, "pe": 25.0, "mcap": "100B"})
     if not live:
@@ -307,29 +318,36 @@ def fetch_stock_metrics(symbol, live=True):
             "name": fb["name"], "price": fb["price"], "prev": fb["prev"],
             "ma20": fb["price"] * 0.98, "ma50": fb["price"] * 0.95, "ma200": fb["price"] * 0.88,
             "high52": fb["price"] * 1.15, "low52": fb["price"] * 0.80, "rsi": 55.0,
-            "pe": fb.get("pe"), "eps": 5.0, "mcap": fb.get("mcap", "100B"), "src": "OFFLINE"
+            "pe": fb.get("pe"), "eps": 5.0, "mcap": fb.get("mcap", "100B"), "src": "OFFLINE",
         }
 
-    # 1. 美股优先走 Market Data 已开通的 IEX/UTP 通道
-    md_quote = _query_marketdata_stock_quote(symbol)
-    md_candles = _query_marketdata_stock_candles(symbol, days_back=365) if md_quote else pd.DataFrame()
-    if md_quote and not md_candles.empty:
-        closes = list(md_candles["Close"])
-        if round(closes[-1], 2) != round(md_quote["price"], 2):
-            closes.append(md_quote["price"])
-        h52 = float(md_candles["High"].max()) if "High" in md_candles.columns else max(closes)
-        l52 = float(md_candles["Low"].min()) if "Low" in md_candles.columns else min(closes)
-        calc = _calc_indicators_from_closes(closes, md_quote["price"], md_quote["prev"], h52, l52)
+    nq_quote = _query_nasdaq_stock_quote(symbol)
+    if nq_quote:
+        nq_candles = _query_nasdaq_stock_candles(symbol, days_back=365)
+        if not nq_candles.empty:
+            closes = list(nq_candles["Close"])
+            if round(closes[-1], 2) != round(nq_quote["price"], 2):
+                closes.append(nq_quote["price"])
+            h52 = nq_quote.get("high52") or float(nq_candles["High"].max())
+            l52 = nq_quote.get("low52") or float(nq_candles["Low"].min())
+        else:
+            yf_hist_fb = _query_yahoo_stock_fallback(symbol)
+            closes = list(yf_hist_fb["closes"]) if yf_hist_fb else [nq_quote["prev"], nq_quote["price"]]
+            if round(closes[-1], 2) != round(nq_quote["price"], 2):
+                closes.append(nq_quote["price"])
+            h52 = nq_quote.get("high52") or (yf_hist_fb.get("high52") if yf_hist_fb else max(closes))
+            l52 = nq_quote.get("low52") or (yf_hist_fb.get("low52") if yf_hist_fb else min(closes))
+
+        calc = _calc_indicators_from_closes(closes, nq_quote["price"], nq_quote["prev"], h52, l52)
         calc.update({
-            "name": fb.get("name", symbol),
+            "name": nq_quote.get("name") or fb.get("name", symbol),
             "pe": fb.get("pe", 25.0),
             "eps": 5.0,
-            "mcap": fb.get("mcap", "100B"),
-            "src": "MD"
+            "mcap": nq_quote.get("mcap") or fb.get("mcap", "100B"),
+            "src": "NQ",
         })
         return calc
 
-    # 2. 英股 (.L) 或未命中时走 Yahoo Finance 兜底
     yf_res = _query_yahoo_stock_fallback(symbol)
     if yf_res:
         calc = _calc_indicators_from_closes(
@@ -341,7 +359,7 @@ def fetch_stock_metrics(symbol, live=True):
             "pe": fb.get("pe", 25.0),
             "eps": 5.0,
             "mcap": fb.get("mcap", "100B"),
-            "src": "YH"
+            "src": "YH",
         })
         return calc
 
@@ -351,22 +369,26 @@ def fetch_stock_metrics(symbol, live=True):
         "name": fb["name"], "price": p, "prev": prev,
         "ma20": p * 0.98, "ma50": p * 0.95, "ma200": p * 0.88,
         "high52": p * 1.15, "low52": p * 0.80, "rsi": 55.0,
-        "pe": fb.get("pe"), "eps": 5.0, "mcap": fb.get("mcap", "100B"), "src": "FB"
+        "pe": fb.get("pe"), "eps": 5.0, "mcap": fb.get("mcap", "100B"), "src": "FB",
     }
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=180, show_spinner=False)
 def fetch_history_df(symbol, period_str, current_price):
     pmap = {"1日": "1d", "1星期": "5d", "1个月": "1mo", "3个月": "3mo", "6个月": "6mo", "1年": "1y", "全部": "max"}
     yfp = pmap.get(period_str, "6mo")
     days_back = {"1d": 5, "5d": 10, "1mo": 32, "3mo": 95, "6mo": 185, "1y": 365, "max": 1825}.get(yfp, 185)
 
-    # 1. 美股优先走 Market Data 历史 K 线
     if yfp != "1d" and "." not in symbol:
-        md_df = _query_marketdata_stock_candles(symbol, days_back=days_back)
-        if not md_df.empty:
-            return md_df[["Date", "Close"]]
+        nq_df = _query_nasdaq_stock_candles(symbol, days_back=days_back)
+        if not nq_df.empty:
+            df_out = nq_df[["Date", "Close"]].copy()
+            if current_price and current_price > 0 and round(float(df_out["Close"].iloc[-1]), 2) != round(float(current_price), 2):
+                df_out = pd.concat(
+                    [df_out, pd.DataFrame({"Date": [datetime.today()], "Close": [float(current_price)]})],
+                    ignore_index=True
+                )
+            return df_out
 
-    # 2. 备选 yfinance 历史 K 线
     if HAS_YF:
         try:
             tk = yf.Ticker(symbol)
@@ -387,7 +409,7 @@ def fetch_history_df(symbol, period_str, current_price):
     prices = current_price * np.exp(np.cumsum(np.random.normal(0.0005, 0.015, size=len(dates))))
     return pd.DataFrame({"Date": dates, "Close": prices * (current_price / prices[-1])})
 
-# ==================== 2. OPTIONS ENGINE (YAHOO YFINANCE + PERSISTENT CACHE) ====================
+# ==================== 2. OPTIONS ENGINE (LOCKED TO YAHOO YFINANCE) ====================
 
 def _normalize_yf_option_side(df_raw: pd.DataFrame) -> pd.DataFrame:
     if df_raw is None or df_raw.empty or "strike" not in df_raw.columns:
@@ -402,10 +424,6 @@ def _normalize_yf_option_side(df_raw: pd.DataFrame) -> pd.DataFrame:
 
 @st.cache_data(ttl=300, show_spinner=False)
 def _query_yahoo_yfinance_bundle(symbol: str) -> tuple[list[str], dict[str, tuple[pd.DataFrame, pd.DataFrame]], str]:
-    """
-    通过 yfinance 自动处理 Yahoo Cookie + Crumb 获取延迟期权链。
-    返回: (真实到期日列表, {YYYY-MM-DD: (cdf, pdf)}, 状态/错误信息)
-    """
     if "." in symbol:
         return [], {}, "非美股代码无 Yahoo 美式期权链"
     if not HAS_YF:
@@ -416,7 +434,7 @@ def _query_yahoo_yfinance_bundle(symbol: str) -> tuple[list[str], dict[str, tupl
         tk = yf.Ticker(clean_sym)
         raw_exps = list(tk.options or [])
         if not raw_exps:
-            return [], {}, "Yahoo 未返回到期日列表 (可能触发限流或无期权)"
+            return [], {}, "Yahoo 未返回到期日列表"
 
         today_date = datetime.today().date()
         future_exps = [d for d in sorted(set(raw_exps)) if datetime.strptime(d, "%Y-%m-%d").date() >= today_date]
@@ -437,12 +455,11 @@ def _query_yahoo_yfinance_bundle(symbol: str) -> tuple[list[str], dict[str, tupl
 
         if day_map:
             return sorted(set(target_exps) | set(day_map.keys())), day_map, f"Yahoo 成功 ({len(day_map)}期)"
-        return target_exps, {}, f"Yahoo 链解析为空 ({last_err or 'IP限流/盘后空链'})"
+        return target_exps, {}, f"Yahoo 链解析为空 ({last_err or '空链'})"
     except Exception as e:
         return [], {}, f"Yahoo 异常: {str(e)[:45]}"
 
 def _collect_yahoo_with_cache(symbol: str) -> tuple[list[str], dict[str, dict[str, Any]], int, str, str]:
-    """拉取 Yahoo 期权链并结合本地持久化缓存，避免刷新时丢失已有期权墙"""
     yh_days, yh_map, status_msg = _query_yahoo_yfinance_bundle(symbol)
 
     cache_store: dict[str, dict[str, Any]] = st.session_state["opt_persistent_cache"]
@@ -838,7 +855,7 @@ def build_custom_option_matrix_html(symbol, spot):
     """
     return html
 
-top_bar_html = "<div class='top-bar'><div class='brand-title'>CAPITAL QUANT v2</div><div class='live-badge'>Auto-Sync Every 5m (300s) | " + datetime.now().strftime('%b %d, %Y %H:%M:%S') + " | UK Institutional Terminal</div></div>"
+top_bar_html = "<div class='top-bar'><div class='brand-title'>CAPITAL QUANT v2</div><div class='live-badge'>Auto-Sync Every 3m (180s) | " + datetime.now().strftime('%b %d, %Y %H:%M:%S') + " | Nasdaq Stock + Yahoo Options</div></div>"
 st.markdown(top_bar_html, unsafe_allow_html=True)
 
 n1, n2, n3, n4 = st.columns([1.3, 1.3, 1.6, 2.2])
@@ -856,7 +873,7 @@ st.session_state.use_live_api = n4.toggle("启用行情接口", value=st.session
 st.markdown("<div style='border-bottom: 1px solid #1e3a8a; margin: 4px 0 6px 0;'></div>", unsafe_allow_html=True)
 
 # ==================== PAGE 1: MARKET WATCH ====================
-@st.fragment(run_every=300)
+@st.fragment(run_every=180)
 def render_native_market_watch():
     c1, c2, c3, c4 = st.columns([2.0, 2.2, 1.2, 1.3])
     c1.markdown("### Market Watch")
@@ -914,7 +931,7 @@ def render_native_market_watch():
         if col == "COMPANY CODE":
             return base + " color: #60a5fa; font-weight: 900;"
         if col == "SRC":
-            c_src = "#4ade80" if val == "MD" else ("#38bdf8" if val == "YH" else "#f87171")
+            c_src = "#4ade80" if val == "NQ" else ("#38bdf8" if val == "YH" else "#f87171")
             return base + " color: " + c_src + "; font-size: 14px;"
         if col == "TODAY PRICE":
             return base + " color: #facc15; font-weight: 800;"
