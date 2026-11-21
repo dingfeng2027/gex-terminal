@@ -552,8 +552,21 @@ def _query_yahoo_options_api(symbol, target_dt_timestamp=None):
                     exp_dates = sorted([int(x) for x in r_opt.get('expirationDates', []) if x])
                     options_data = r_opt.get('options', [])
                     if options_data:
-                        calls = options_data[0].get('calls', [])
-                        puts = options_data[0].get('puts', [])
+                        opt_block = options_data[0]
+                        if target_dt_timestamp:
+                            req_day = datetime.fromtimestamp(int(target_dt_timestamp)).strftime("%Y-%m-%d")
+                            matched_block = None
+                            for blk in options_data:
+                                blk_exp = blk.get("expirationDate")
+                                if blk_exp and datetime.fromtimestamp(int(blk_exp)).strftime("%Y-%m-%d") == req_day:
+                                    matched_block = blk
+                                    break
+                            if matched_block is None:
+                                return exp_dates, pd.DataFrame(), pd.DataFrame()
+                            opt_block = matched_block
+
+                        calls = opt_block.get('calls', [])
+                        puts = opt_block.get('puts', [])
 
                         cdf = pd.DataFrame([{
                             "strike": float(c.get("strike")),
@@ -636,14 +649,15 @@ def _query_nasdaq_options_api(symbol, target_dt_timestamp=None):
     if target_dt_timestamp:
         dt_obj = datetime.fromtimestamp(target_dt_timestamp)
         target_date_str = dt_obj.strftime("%Y-%m-%d")
-        d_from = (dt_obj - timedelta(days=3)).strftime("%Y-%m-%d")
-        d_to = (dt_obj + timedelta(days=5)).strftime("%Y-%m-%d")
+        d_from = (dt_obj - timedelta(days=1)).strftime("%Y-%m-%d")
+        d_to = (dt_obj + timedelta(days=1)).strftime("%Y-%m-%d")
         date_query = f"&fromdate={d_from}&todate={d_to}&expiry={target_date_str}"
 
     endpoints = [
         f"https://api.nasdaq.com/api/quote/{clean_sym}/option-chain?assetclass=stocks&limit=200{date_query}",
-        f"https://api.nasdaq.com/api/quote/{clean_sym}/option-chain?assetclass=stocks&limit=200"
     ]
+    if not target_dt_timestamp:
+        endpoints.append(f"https://api.nasdaq.com/api/quote/{clean_sym}/option-chain?assetclass=stocks&limit=200")
     if api_key:
         endpoints.insert(0, f"https://data.nasdaq.com/api/v3/datatables/NDAQ/CHAIN?offset=delayed&symbol={clean_sym}&api_key={api_key}")
 
@@ -690,6 +704,8 @@ def _query_nasdaq_options_api(symbol, target_dt_timestamp=None):
                             exp_set.add(int(datetime.strptime(exp_str[:10], "%Y-%m-%d").timestamp()))
                         except Exception:
                             pass
+                    if target_date_str and exp_str[:10] != target_date_str:
+                        continue
                     rec = {
                         "strike": parse_num(strike, False),
                         "lastPrice": parse_num(item.get("lastPrice"), False),
@@ -715,7 +731,9 @@ def _query_nasdaq_options_api(symbol, target_dt_timestamp=None):
                         row_exp_txt = " ".join(str(v) for k, v in r.items() if any(w in k.lower() for w in ["expir", "expiry", "date"]))
                         if target_date_str in row_exp_txt:
                             matched_rows.append(r)
-                rows_to_parse = matched_rows if matched_rows else chain_rows
+                    if not matched_rows:
+                        continue
+                rows_to_parse = matched_rows if target_date_str else chain_rows
 
                 c_rows, p_rows = [], []
                 for r in rows_to_parse:
@@ -753,7 +771,7 @@ def _query_nasdaq_options_api(symbol, target_dt_timestamp=None):
     return [], pd.DataFrame(), pd.DataFrame()
 
 def fetch_real_option_chain_for_date(symbol, target_dt_timestamp=None, spot=None):
-    """单到期日拉取（严格隔离日期，不使用跨日结算兜底）"""
+    """严格按指定到期日拉取真实链，不做跨日或默认链顶替"""
     md_exp = _query_marketdata_expirations(symbol)
     if get_marketdata_token() and "." not in symbol:
         target_exp_str = (
@@ -764,12 +782,14 @@ def fetch_real_option_chain_for_date(symbol, target_dt_timestamp=None, spot=None
         md_cdf, md_pdf = _query_marketdata_single_chain(symbol, target_exp_str, spot=spot)
         if not md_cdf.empty and not md_pdf.empty:
             return md_exp, md_cdf, md_pdf
-        if md_exp:
+        if target_dt_timestamp:
             return md_exp, pd.DataFrame(), pd.DataFrame()
 
     exp_dates, cdf, pdf = _query_nasdaq_options_api(symbol, target_dt_timestamp)
     if not cdf.empty and not pdf.empty:
         return exp_dates, cdf, pdf
+    if target_dt_timestamp:
+        return exp_dates, pd.DataFrame(), pd.DataFrame()
 
     y_exp, y_cdf, y_pdf = _query_yahoo_options_api(symbol, target_dt_timestamp)
     if not y_cdf.empty and not y_pdf.empty:
@@ -778,44 +798,27 @@ def fetch_real_option_chain_for_date(symbol, target_dt_timestamp=None, spot=None
     merged_exps = sorted(set(md_exp or []) | set(exp_dates or []) | set(y_exp or []))
     return merged_exps, pd.DataFrame(), pd.DataFrame()
 
-def _build_10_separate_exp_timestamps(real_exp_timestamps, base_dt, symbol=""):
-    """第1列固定为今天，自动用真实到期日及后续标准到期日（个股周五 / 指数ETF周一、周三、周五）补齐后面9天，共10天"""
+def _build_company_real_exp_timestamps(real_exp_timestamps, base_dt, max_cols=10):
+    """按该公司真实返回的期权到期日时间排序并去重，优先保留今天及之后最多 max_cols 个真实到期日"""
     today_date = base_dt.date()
-    today_ts = int(base_dt.replace(hour=16, minute=0, second=0).timestamp())
-    today_key = base_dt.strftime("%Y-%m-%d")
+    unique_by_day: dict[str, int] = {}
 
-    pool = [today_ts]
-    seen_days = {today_key}
-
-    future_real = []
     for ts in sorted(real_exp_timestamps or []):
         try:
             dt_obj = datetime.fromtimestamp(int(ts))
-            if dt_obj.date() > today_date:
-                d_key = dt_obj.strftime("%Y-%m-%d")
-                if d_key not in seen_days:
-                    seen_days.add(d_key)
-                    future_real.append(int(ts))
+            d_key = dt_obj.strftime("%Y-%m-%d")
+            if d_key not in unique_by_day:
+                unique_by_day[d_key] = int(ts)
         except Exception:
             continue
 
-    for ts in future_real:
-        if len(pool) >= 10:
-            break
-        pool.append(ts)
-
-    clean_sym = symbol.upper().strip()
-    allowed_weekdays = [0, 2, 4] if clean_sym in {"SPY", "QQQ", "IWM", "DIA"} else [4]
-    cursor = base_dt
-    while len(pool) < 10:
-        cursor = cursor + timedelta(days=1)
-        if cursor.weekday() in allowed_weekdays:
-            d_key = cursor.strftime("%Y-%m-%d")
-            if d_key not in seen_days:
-                seen_days.add(d_key)
-                pool.append(int(cursor.replace(hour=16, minute=0, second=0).timestamp()))
-
-    return pool[:10]
+    sorted_all = [unique_by_day[k] for k in sorted(unique_by_day.keys())]
+    active_or_future = [
+        ts for ts in sorted_all
+        if datetime.fromtimestamp(int(ts)).date() >= today_date
+    ]
+    chosen = active_or_future if active_or_future else sorted_all
+    return chosen[:max_cols]
 
 def extract_top3_walls(col_cdf, col_pdf, curr_p):
     """在现价上下 5%~30% 区间内筛选前 3 档最大未平仓压力位/支撑位"""
@@ -859,17 +862,17 @@ def extract_top3_walls(col_cdf, col_pdf, curr_p):
 
     return c_top_list, call_wall_val, p_bot_list, put_wall_val
 
-def pull_and_filter_10_expirations_locally(symbol: str, spot: float, real_exp_timestamps=None) -> tuple[list[dict[str, Any]], bool]:
-    """第一步：每次更新先把今天 + 自动补齐的后面 9 个期权到期日（共 10 天）逐一回调到本地容器；第二步：在本地统一筛选与计算"""
+def pull_and_filter_real_expirations_locally(symbol: str, spot: float, real_exp_timestamps=None) -> tuple[list[dict[str, Any]], bool]:
+    """第一步：按该公司真实到期日逐一回调到本地容器；第二步：在本地按各到期日真实数据筛选"""
     today = datetime.today()
     if real_exp_timestamps is None:
         real_exp_timestamps, _, _ = fetch_real_option_chain_for_date(symbol, spot=spot)
 
-    exp_10 = _build_10_separate_exp_timestamps(real_exp_timestamps, today, symbol=symbol)
+    exp_list = _build_company_real_exp_timestamps(real_exp_timestamps, today, max_cols=10)
     batch_key = f"{symbol}_{today.strftime('%Y-%m-%d')}"
     local_batch: dict[str, dict[str, Any]] = st.session_state["opt_local_store"].get(batch_key, {})
 
-    for idx, ts_target in enumerate(exp_10):
+    for idx, ts_target in enumerate(exp_list):
         d_key = datetime.fromtimestamp(int(ts_target)).strftime("%Y-%m-%d")
         if d_key not in local_batch:
             if idx > 0 and get_marketdata_token():
@@ -888,14 +891,16 @@ def pull_and_filter_10_expirations_locally(symbol: str, spot: float, real_exp_ti
     cols_data = []
     has_any_real_data = False
 
-    for idx, ts_target in enumerate(exp_10):
+    for idx, ts_target in enumerate(exp_list):
         dt = datetime.fromtimestamp(int(ts_target))
         d_key = dt.strftime("%Y-%m-%d")
         delta_days = (dt.date() - today.date()).days
-        is_today = (idx == 0 and delta_days == 0)
+        is_today = (delta_days == 0)
 
         if delta_days == 0:
             tag = "今天到期"
+        elif delta_days < 0:
+            tag = f"{abs(delta_days)}天前"
         else:
             tag = f"+{delta_days}天到期"
 
@@ -943,7 +948,7 @@ def pull_and_filter_10_expirations_locally(symbol: str, spot: float, real_exp_ti
     return cols_data, has_any_real_data
 
 def build_custom_option_matrix_html(symbol, spot, real_exp_timestamps=None):
-    cols_data, has_any_real_data = pull_and_filter_10_expirations_locally(
+    cols_data, has_any_real_data = pull_and_filter_real_expirations_locally(
         symbol, spot, real_exp_timestamps=real_exp_timestamps
     )
 
@@ -961,9 +966,9 @@ def build_custom_option_matrix_html(symbol, spot, real_exp_timestamps=None):
     y_low = v_min - v_span * 0.25
     y_high = v_max + v_span * 0.25
 
+    n_cols = max(len(cols_data), 1)
     col_w = 128
     left_axis_w = 96
-    n_cols = len(cols_data)
     total_chart_w = n_cols * col_w
     header_h = 54
     top3_h = 99
@@ -1031,7 +1036,7 @@ def build_custom_option_matrix_html(symbol, spot, real_exp_timestamps=None):
         svg_elements += f"<text x='{sx}' y='{sy + 17}' text-anchor='middle' font-size='13.5' font-weight='900' fill='#0f172a'>{sval:g}</text>"
 
     src_name = "Market Data 真实链" if get_marketdata_token() else "API Key 真实链"
-    status_badge = f"{src_name} | 今日+后9期自动补齐10天 | ±5%~30% 波段区间" if has_any_real_data else "接口暂未返回真实链"
+    status_badge = f"{src_name} | 按真实到期日逐日填入 ({len(cols_data)}期) | ±5%~30% 波段区间" if has_any_real_data else "接口暂未返回真实链"
 
     html = f"""
     <div style="background:#ffffff; border:2px solid #1e293b; border-radius:8px; padding:8px 10px; font-family:sans-serif; color:#0f172a; width:100%; box-sizing:border-box; overflow:hidden;">
