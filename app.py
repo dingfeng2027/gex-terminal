@@ -127,6 +127,16 @@ def safe_col_sum(df, col_name):
         return 0
     return int(pd.to_numeric(df[col_name], errors="coerce").fillna(0).sum())
 
+def _is_valid_chain_pair(cdf: pd.DataFrame, pdf: pd.DataFrame) -> bool:
+    """后台空值与有效性校验：确保 Call/Put 链非空且具备有效行权价"""
+    if cdf is None or pdf is None or cdf.empty or pdf.empty:
+        return False
+    if "strike" not in cdf.columns or "strike" not in pdf.columns:
+        return False
+    c_strikes = pd.to_numeric(cdf["strike"], errors="coerce").dropna()
+    p_strikes = pd.to_numeric(pdf["strike"], errors="coerce").dropna()
+    return (not c_strikes.empty) and (not p_strikes.empty) and ((c_strikes > 0).any()) and ((p_strikes > 0).any())
+
 def get_marketdata_token() -> str:
     token = os.getenv("MARKETDATA_API_TOKEN", "")
     try:
@@ -457,6 +467,7 @@ def _marketdata_get(path: str, params: dict[str, Any] | None = None, max_retries
 
 @st.cache_data(ttl=300, show_spinner=False)
 def _query_marketdata_expirations(symbol: str) -> list[int]:
+    """顺位 1：Market Data 到期日"""
     if not get_marketdata_token() or "." in symbol:
         return []
     clean_sym = symbol.upper().strip()
@@ -473,6 +484,7 @@ def _query_marketdata_expirations(symbol: str) -> list[int]:
 
 @st.cache_data(ttl=300, show_spinner=False)
 def _query_marketdata_single_chain(symbol: str, target_exp_str: str, spot: float | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """顺位 1：Market Data 单日真实期权链"""
     if not get_marketdata_token() or "." in symbol or not target_exp_str:
         return pd.DataFrame(), pd.DataFrame()
     clean_sym = symbol.upper().strip()
@@ -518,75 +530,6 @@ def _query_marketdata_single_chain(symbol: str, target_exp_str: str, spot: float
     if c_rows and p_rows:
         return pd.DataFrame(c_rows), pd.DataFrame(p_rows)
     return pd.DataFrame(), pd.DataFrame()
-
-@st.cache_data(ttl=300, show_spinner=False)
-def _query_yahoo_options_api(symbol, target_dt_timestamp=None):
-    headers_list = [
-        {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
-            'Accept': 'application/json,text/plain,*/*',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Referer': f'https://finance.yahoo.com/quote/{symbol}/options/'
-        },
-        {
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15',
-            'Accept': 'application/json,text/plain,*/*',
-            'Accept-Language': 'en-US,en;q=0.9'
-        }
-    ]
-    hosts = ["query1.finance.yahoo.com", "query2.finance.yahoo.com"]
-
-    for attempt in range(2):
-        host = hosts[attempt % len(hosts)]
-        headers = headers_list[attempt % len(headers_list)]
-        url = f"https://{host}/v7/finance/options/{symbol}"
-        if target_dt_timestamp:
-            url += f"?date={target_dt_timestamp}"
-        try:
-            res = requests.get(url, headers=headers, timeout=2.5)
-            if res.status_code == 200:
-                data = res.json()
-                result = data.get('optionChain', {}).get('result', [])
-                if result:
-                    r_opt = result[0]
-                    exp_dates = sorted([int(x) for x in r_opt.get('expirationDates', []) if x])
-                    options_data = r_opt.get('options', [])
-                    if options_data:
-                        opt_block = options_data[0]
-                        if target_dt_timestamp:
-                            req_day = datetime.fromtimestamp(int(target_dt_timestamp)).strftime("%Y-%m-%d")
-                            matched_block = None
-                            for blk in options_data:
-                                blk_exp = blk.get("expirationDate")
-                                if blk_exp and datetime.fromtimestamp(int(blk_exp)).strftime("%Y-%m-%d") == req_day:
-                                    matched_block = blk
-                                    break
-                            if matched_block is None:
-                                return exp_dates, pd.DataFrame(), pd.DataFrame()
-                            opt_block = matched_block
-
-                        calls = opt_block.get('calls', [])
-                        puts = opt_block.get('puts', [])
-
-                        cdf = pd.DataFrame([{
-                            "strike": float(c.get("strike")),
-                            "lastPrice": float(c.get("lastPrice") or 0.0),
-                            "openInterest": int(c.get("openInterest") or 0),
-                            "volume": int(c.get("volume") or 0)
-                        } for c in calls if c.get("strike") is not None])
-
-                        pdf = pd.DataFrame([{
-                            "strike": float(p.get("strike")),
-                            "lastPrice": float(p.get("lastPrice") or 0.0),
-                            "openInterest": int(p.get("openInterest") or 0),
-                            "volume": int(p.get("volume") or 0)
-                        } for p in puts if p.get("strike") is not None])
-
-                        if not cdf.empty and not pdf.empty:
-                            return exp_dates, cdf, pdf
-        except Exception:
-            continue
-    return [], pd.DataFrame(), pd.DataFrame()
 
 def _extract_nasdaq_expirations(data_obj):
     exp_set = set()
@@ -641,13 +584,14 @@ def _extract_nasdaq_expirations(data_obj):
 
 @st.cache_data(ttl=300, show_spinner=False)
 def _query_nasdaq_options_api(symbol, target_dt_timestamp=None):
+    """顺位 2：Nasdaq 接口"""
     clean_sym = symbol.split(".")[0].upper()
     api_key, _, headers = _build_nasdaq_headers()
 
     date_query = ""
     target_date_str = None
     if target_dt_timestamp:
-        dt_obj = datetime.fromtimestamp(target_dt_timestamp)
+        dt_obj = datetime.fromtimestamp(int(target_dt_timestamp))
         target_date_str = dt_obj.strftime("%Y-%m-%d")
         d_from = (dt_obj - timedelta(days=1)).strftime("%Y-%m-%d")
         d_to = (dt_obj + timedelta(days=1)).strftime("%Y-%m-%d")
@@ -681,6 +625,8 @@ def _query_nasdaq_options_api(symbol, target_dt_timestamp=None):
                     return v
         return None
 
+    collected_exps: set[int] = set()
+
     for url in endpoints:
         try:
             res = requests.get(url, headers=headers, timeout=3.0)
@@ -692,7 +638,7 @@ def _query_nasdaq_options_api(symbol, target_dt_timestamp=None):
             if isinstance(datatable, dict) and datatable.get("data") and datatable.get("columns"):
                 cols = [c.get("name") for c in datatable["columns"]]
                 rows_raw = [dict(zip(cols, r)) for r in datatable["data"]]
-                c_rows, p_rows, exp_set = [], [], set()
+                c_rows, p_rows = [], []
                 for item in rows_raw:
                     strike = item.get("strikePrice") or item.get("strike")
                     if strike is None:
@@ -701,7 +647,7 @@ def _query_nasdaq_options_api(symbol, target_dt_timestamp=None):
                     exp_str = str(item.get("expiration") or "")
                     if exp_str:
                         try:
-                            exp_set.add(int(datetime.strptime(exp_str[:10], "%Y-%m-%d").timestamp()))
+                            collected_exps.add(int(datetime.strptime(exp_str[:10], "%Y-%m-%d").timestamp()))
                         except Exception:
                             pass
                     if target_date_str and exp_str[:10] != target_date_str:
@@ -716,11 +662,14 @@ def _query_nasdaq_options_api(symbol, target_dt_timestamp=None):
                         c_rows.append(rec)
                     elif opt_type.startswith("P"):
                         p_rows.append(rec)
-                if c_rows and p_rows:
-                    return sorted(exp_set), pd.DataFrame(c_rows), pd.DataFrame(p_rows)
+                cdf_tmp, pdf_tmp = pd.DataFrame(c_rows), pd.DataFrame(p_rows)
+                if _is_valid_chain_pair(cdf_tmp, pdf_tmp):
+                    return sorted(collected_exps), cdf_tmp, pdf_tmp
 
             data_obj = payload.get("data", {})
             extracted_exps = _extract_nasdaq_expirations(data_obj)
+            collected_exps.update(extracted_exps)
+
             chain_rows = data_obj.get("table", {}).get("rows") if isinstance(data_obj, dict) else None
             if isinstance(chain_rows, list) and chain_rows:
                 matched_rows = []
@@ -763,43 +712,138 @@ def _query_nasdaq_options_api(symbol, target_dt_timestamp=None):
                         "openInterest": parse_num(p_oi_raw, True),
                         "volume": parse_num(p_vol_raw, True),
                     })
-                if c_rows and p_rows:
-                    return extracted_exps, pd.DataFrame(c_rows), pd.DataFrame(p_rows)
+                cdf_tmp, pdf_tmp = pd.DataFrame(c_rows), pd.DataFrame(p_rows)
+                if _is_valid_chain_pair(cdf_tmp, pdf_tmp):
+                    return sorted(collected_exps), cdf_tmp, pdf_tmp
         except Exception:
             continue
 
-    return [], pd.DataFrame(), pd.DataFrame()
+    return sorted(collected_exps), pd.DataFrame(), pd.DataFrame()
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _query_yahoo_options_api(symbol, target_dt_timestamp=None):
+    """顺位 3：Yahoo 接口"""
+    headers_list = [
+        {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+            'Accept': 'application/json,text/plain,*/*',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Referer': f'https://finance.yahoo.com/quote/{symbol}/options/'
+        },
+        {
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15',
+            'Accept': 'application/json,text/plain,*/*',
+            'Accept-Language': 'en-US,en;q=0.9'
+        }
+    ]
+    hosts = ["query1.finance.yahoo.com", "query2.finance.yahoo.com"]
+    exp_dates_found: list[int] = []
+
+    for attempt in range(2):
+        host = hosts[attempt % len(hosts)]
+        headers = headers_list[attempt % len(headers_list)]
+        url = f"https://{host}/v7/finance/options/{symbol}"
+        if target_dt_timestamp:
+            url += f"?date={int(target_dt_timestamp)}"
+        try:
+            res = requests.get(url, headers=headers, timeout=2.5)
+            if res.status_code == 200:
+                data = res.json()
+                result = data.get('optionChain', {}).get('result', [])
+                if result:
+                    r_opt = result[0]
+                    exp_dates_found = sorted([int(x) for x in r_opt.get('expirationDates', []) if x])
+                    options_data = r_opt.get('options', [])
+                    if options_data:
+                        opt_block = options_data[0]
+                        if target_dt_timestamp:
+                            req_day = datetime.fromtimestamp(int(target_dt_timestamp)).strftime("%Y-%m-%d")
+                            matched_block = None
+                            for blk in options_data:
+                                blk_exp = blk.get("expirationDate")
+                                if blk_exp and datetime.fromtimestamp(int(blk_exp)).strftime("%Y-%m-%d") == req_day:
+                                    matched_block = blk
+                                    break
+                            if matched_block is None:
+                                continue
+                            opt_block = matched_block
+
+                        calls = opt_block.get('calls', [])
+                        puts = opt_block.get('puts', [])
+
+                        cdf = pd.DataFrame([{
+                            "strike": float(c.get("strike")),
+                            "lastPrice": float(c.get("lastPrice") or 0.0),
+                            "openInterest": int(c.get("openInterest") or 0),
+                            "volume": int(c.get("volume") or 0)
+                        } for c in calls if c.get("strike") is not None])
+
+                        pdf = pd.DataFrame([{
+                            "strike": float(p.get("strike")),
+                            "lastPrice": float(p.get("lastPrice") or 0.0),
+                            "openInterest": int(p.get("openInterest") or 0),
+                            "volume": int(p.get("volume") or 0)
+                        } for p in puts if p.get("strike") is not None])
+
+                        if _is_valid_chain_pair(cdf, pdf):
+                            return exp_dates_found, cdf, pdf
+        except Exception:
+            continue
+    return exp_dates_found, pd.DataFrame(), pd.DataFrame()
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _collect_company_real_expirations(symbol: str) -> list[int]:
+    """收集该公司真实返回的期权到期日（优先 Market Data，不足时由 Nasdaq / Yahoo 补齐真实到期日列表）"""
+    merged: set[int] = set()
+    md_exps = _query_marketdata_expirations(symbol)
+    merged.update(md_exps)
+
+    if len(merged) < 10:
+        nq_exps, _, _ = _query_nasdaq_options_api(symbol, target_dt_timestamp=None)
+        merged.update(nq_exps)
+
+    if len(merged) < 10:
+        yh_exps, _, _ = _query_yahoo_options_api(symbol, target_dt_timestamp=None)
+        merged.update(yh_exps)
+
+    return sorted(merged)
 
 def fetch_real_option_chain_for_date(symbol, target_dt_timestamp=None, spot=None):
-    """严格按指定到期日拉取真实链，不做跨日或默认链顶替"""
-    md_exp = _query_marketdata_expirations(symbol)
+    """
+    三顺位级联拉取：
+    1) Market Data API Key（主源）
+    2) Nasdaq 接口（顺位 2）
+    3) Yahoo 接口（顺位 3）
+    仅在返回为空或无效时降级到下一顺位，且严格按指定到期日匹配。
+    """
+    exp_list = _collect_company_real_expirations(symbol)
+
+    # 顺位 1：Market Data
     if get_marketdata_token() and "." not in symbol:
         target_exp_str = (
             datetime.fromtimestamp(int(target_dt_timestamp)).strftime("%Y-%m-%d")
             if target_dt_timestamp
-            else (datetime.fromtimestamp(md_exp[0]).strftime("%Y-%m-%d") if md_exp else "")
+            else (datetime.fromtimestamp(exp_list[0]).strftime("%Y-%m-%d") if exp_list else "")
         )
-        md_cdf, md_pdf = _query_marketdata_single_chain(symbol, target_exp_str, spot=spot)
-        if not md_cdf.empty and not md_pdf.empty:
-            return md_exp, md_cdf, md_pdf
-        if target_dt_timestamp:
-            return md_exp, pd.DataFrame(), pd.DataFrame()
+        if target_exp_str:
+            md_cdf, md_pdf = _query_marketdata_single_chain(symbol, target_exp_str, spot=spot)
+            if _is_valid_chain_pair(md_cdf, md_pdf):
+                return exp_list, md_cdf, md_pdf
 
-    exp_dates, cdf, pdf = _query_nasdaq_options_api(symbol, target_dt_timestamp)
-    if not cdf.empty and not pdf.empty:
-        return exp_dates, cdf, pdf
-    if target_dt_timestamp:
-        return exp_dates, pd.DataFrame(), pd.DataFrame()
+    # 顺位 2：Nasdaq
+    _, nq_cdf, nq_pdf = _query_nasdaq_options_api(symbol, target_dt_timestamp)
+    if _is_valid_chain_pair(nq_cdf, nq_pdf):
+        return exp_list, nq_cdf, nq_pdf
 
-    y_exp, y_cdf, y_pdf = _query_yahoo_options_api(symbol, target_dt_timestamp)
-    if not y_cdf.empty and not y_pdf.empty:
-        return y_exp, y_cdf, y_pdf
+    # 顺位 3：Yahoo
+    _, yh_cdf, yh_pdf = _query_yahoo_options_api(symbol, target_dt_timestamp)
+    if _is_valid_chain_pair(yh_cdf, yh_pdf):
+        return exp_list, yh_cdf, yh_pdf
 
-    merged_exps = sorted(set(md_exp or []) | set(exp_dates or []) | set(y_exp or []))
-    return merged_exps, pd.DataFrame(), pd.DataFrame()
+    return exp_list, pd.DataFrame(), pd.DataFrame()
 
 def _build_company_real_exp_timestamps(real_exp_timestamps, base_dt, max_cols=10):
-    """按该公司真实返回的期权到期日时间排序并去重，优先保留今天及之后最多 max_cols 个真实到期日"""
+    """按该公司真实返回的期权到期日时间排序并去重，保留最多 max_cols 个真实到期日"""
     today_date = base_dt.date()
     unique_by_day: dict[str, int] = {}
 
@@ -822,7 +866,7 @@ def _build_company_real_exp_timestamps(real_exp_timestamps, base_dt, max_cols=10
 
 def extract_top3_walls(col_cdf, col_pdf, curr_p):
     """在现价上下 5%~30% 区间内筛选前 3 档最大未平仓压力位/支撑位"""
-    if col_cdf is None or col_pdf is None or col_cdf.empty or col_pdf.empty:
+    if not _is_valid_chain_pair(col_cdf, col_pdf):
         return [], None, [], None
 
     cdf_clean = col_cdf.sort_values("openInterest", ascending=False).drop_duplicates(subset=["strike"])
@@ -863,10 +907,10 @@ def extract_top3_walls(col_cdf, col_pdf, curr_p):
     return c_top_list, call_wall_val, p_bot_list, put_wall_val
 
 def pull_and_filter_real_expirations_locally(symbol: str, spot: float, real_exp_timestamps=None) -> tuple[list[dict[str, Any]], bool]:
-    """第一步：按该公司真实到期日逐一回调到本地容器；第二步：在本地按各到期日真实数据筛选"""
+    """第一步：按该公司真实到期日逐一拉取并仅缓存有效数据；第二步：在本地按各到期日真实数据筛选"""
     today = datetime.today()
     if real_exp_timestamps is None:
-        real_exp_timestamps, _, _ = fetch_real_option_chain_for_date(symbol, spot=spot)
+        real_exp_timestamps = _collect_company_real_expirations(symbol)
 
     exp_list = _build_company_real_exp_timestamps(real_exp_timestamps, today, max_cols=10)
     batch_key = f"{symbol}_{today.strftime('%Y-%m-%d')}"
@@ -874,24 +918,32 @@ def pull_and_filter_real_expirations_locally(symbol: str, spot: float, real_exp_
 
     for idx, ts_target in enumerate(exp_list):
         d_key = datetime.fromtimestamp(int(ts_target)).strftime("%Y-%m-%d")
-        if d_key not in local_batch:
-            if idx > 0 and get_marketdata_token():
-                time.sleep(0.15)
-            _, col_cdf, col_pdf = fetch_real_option_chain_for_date(symbol, ts_target, spot=spot)
+        cached_rec = local_batch.get(d_key)
+        # 仅复用之前已成功拿到有效链的缓存；空结果不锁死缓存，允许重新尝试
+        if cached_rec and cached_rec.get("has_chain") and _is_valid_chain_pair(cached_rec.get("cdf"), cached_rec.get("pdf")):
+            continue
+
+        if idx > 0 and get_marketdata_token():
+            time.sleep(0.15)
+        _, col_cdf, col_pdf = fetch_real_option_chain_for_date(symbol, ts_target, spot=spot)
+        is_valid = _is_valid_chain_pair(col_cdf, col_pdf)
+        if is_valid:
             local_batch[d_key] = {
                 "ts": int(ts_target),
-                "cdf": col_cdf.copy() if not col_cdf.empty else pd.DataFrame(),
-                "pdf": col_pdf.copy() if not col_pdf.empty else pd.DataFrame(),
-                "has_chain": (not col_cdf.empty and not col_pdf.empty),
+                "cdf": col_cdf.copy(),
+                "pdf": col_pdf.copy(),
+                "has_chain": True,
                 "pulled_at": datetime.now().strftime("%H:%M:%S"),
             }
+        else:
+            local_batch.pop(d_key, None)
 
     st.session_state["opt_local_store"][batch_key] = local_batch
 
     cols_data = []
     has_any_real_data = False
 
-    for idx, ts_target in enumerate(exp_list):
+    for ts_target in exp_list:
         dt = datetime.fromtimestamp(int(ts_target))
         d_key = dt.strftime("%Y-%m-%d")
         delta_days = (dt.date() - today.date()).days
@@ -907,7 +959,7 @@ def pull_and_filter_real_expirations_locally(symbol: str, spot: float, real_exp_
         rec = local_batch.get(d_key, {})
         col_cdf = rec.get("cdf", pd.DataFrame())
         col_pdf = rec.get("pdf", pd.DataFrame())
-        has_chain = bool(rec.get("has_chain"))
+        has_chain = _is_valid_chain_pair(col_cdf, col_pdf)
         if has_chain:
             has_any_real_data = True
 
@@ -966,10 +1018,11 @@ def build_custom_option_matrix_html(symbol, spot, real_exp_timestamps=None):
     y_low = v_min - v_span * 0.25
     y_high = v_max + v_span * 0.25
 
-    n_cols = max(len(cols_data), 1)
+    # 固定按 10 列标准比例计算 SVG 坐标，避免 1~2 列时横向拉扁变形
+    layout_cols = 10
     col_w = 128
     left_axis_w = 96
-    total_chart_w = n_cols * col_w
+    total_chart_w = layout_cols * col_w
     header_h = 54
     top3_h = 99
     svg_h = 246
@@ -989,9 +1042,9 @@ def build_custom_option_matrix_html(symbol, spot, real_exp_timestamps=None):
         svg_elements += f"<line x1='0' y1='{ty}' x2='{total_chart_w}' y2='{ty}' stroke='#e2e8f0' stroke-width='1' stroke-dasharray='4,4' />"
         y_ticks_html += f"<div style='position:absolute; top:{ty - 9}px; right:6px; font-size:13px; font-weight:800; color:#334155;'>{tick_val:.1f}</div>"
 
-    for idx, c in enumerate(cols_data):
+    for idx in range(layout_cols):
         x_left = idx * col_w
-        if c["is_today"]:
+        if idx < len(cols_data) and cols_data[idx]["is_today"]:
             svg_elements += f"<rect x='{x_left}' y='0' width='{col_w}' height='{svg_h}' fill='rgba(250, 204, 21, 0.16)' />"
         svg_elements += f"<line x1='{x_left + col_w}' y1='0' x2='{x_left + col_w}' y2='{svg_h}' stroke='#cbd5e1' stroke-width='1' />"
 
@@ -1035,8 +1088,8 @@ def build_custom_option_matrix_html(symbol, spot, real_exp_timestamps=None):
         svg_elements += f"<circle cx='{sx}' cy='{sy}' r='5' fill='#0f172a' stroke='#facc15' stroke-width='1.5' />"
         svg_elements += f"<text x='{sx}' y='{sy + 17}' text-anchor='middle' font-size='13.5' font-weight='900' fill='#0f172a'>{sval:g}</text>"
 
-    src_name = "Market Data 真实链" if get_marketdata_token() else "API Key 真实链"
-    status_badge = f"{src_name} | 按真实到期日逐日填入 ({len(cols_data)}期) | ±5%~30% 波段区间" if has_any_real_data else "接口暂未返回真实链"
+    chain_mode = "MarketData→Nasdaq→Yahoo 级联" if get_marketdata_token() else "Nasdaq→Yahoo 级联"
+    status_badge = f"{chain_mode} | 真实到期日 ({len(cols_data)}期) | ±5%~30% 波段区间" if has_any_real_data else "主备接口暂未返回真实链"
 
     html = f"""
     <div style="background:#ffffff; border:2px solid #1e293b; border-radius:8px; padding:8px 10px; font-family:sans-serif; color:#0f172a; width:100%; box-sizing:border-box; overflow:hidden;">
@@ -1140,13 +1193,25 @@ def build_custom_option_matrix_html(symbol, spot, real_exp_timestamps=None):
                 </div>
         """
 
+    # 不足 10 期的列补齐空白列结构，保持 10 列比例与排版一致
+    for _ in range(max(0, layout_cols - len(cols_data))):
+        html += f"""
+                <div style="flex:1; min-width:0; border-right:1px solid #e2e8f0; box-sizing:border-box; display:flex; flex-direction:column; background:#fafafa;">
+                    <div style="height:{header_h}px; border-bottom:1px solid #e2e8f0; display:flex; align-items:center; justify-content:center; font-size:11px; color:#94a3b8;">—</div>
+                    <div style="height:{top3_h}px; border-bottom:2px solid #1e293b;"></div>
+                    <div style="height:{svg_h}px; border-bottom:2px solid #1e293b;"></div>
+                    <div style="height:{bot3_h}px; border-bottom:1px solid #e2e8f0;"></div>
+                    <div style="height:{footer_h}px; display:flex; align-items:center; justify-content:center; font-size:11px; color:#94a3b8;">—</div>
+                </div>
+        """
+
     offset_up = svg_h + bot3_h + footer_h
     html += f"""
             </div>
         </div>
 
         <div style="position:relative; margin-top:-{offset_up}px; margin-left:{left_axis_w}px; width:calc(100% - {left_axis_w}px); height:{svg_h}px; pointer-events:none;">
-            <svg width="{total_chart_w}" height="{svg_h}" viewBox="0 0 {total_chart_w} {svg_h}" preserveAspectRatio="none" style="width:100%; height:100%;" xmlns="http://www.w3.org/2000/svg">
+            <svg width="{total_chart_w}" height="{svg_h}" viewBox="0 0 {total_chart_w} {svg_h}" style="width:100%; height:100%;" xmlns="http://www.w3.org/2000/svg">
                 {svg_elements}
             </svg>
         </div>
@@ -1433,7 +1498,8 @@ elif st.session_state.page == "Options Intelligence":
     m_opt = fetch_stock_metrics(sym, live=st.session_state.use_live_api)
     spot = float(m_opt["price"])
 
-    base_exp_dates, cdf, pdf = fetch_real_option_chain_for_date(sym, spot=spot)
+    base_exp_dates = _collect_company_real_expirations(sym)
+    _, cdf, pdf = fetch_real_option_chain_for_date(sym, spot=spot)
 
     matrix_html = build_custom_option_matrix_html(sym, spot, real_exp_timestamps=base_exp_dates)
     st.components.v1.html(matrix_html, height=665, scrolling=False)
@@ -1443,7 +1509,7 @@ elif st.session_state.page == "Options Intelligence":
     hdr_c1.markdown("<div class='card-header'>📊 期权库真实核心行权价明细 (Call vs Put 权利金与未平仓对比 | 现价 ±30% 波段全覆盖)</div>", unsafe_allow_html=True)
     st.session_state.show_all_strikes = hdr_c2.toggle("显示全链所有行权价", value=st.session_state.show_all_strikes)
 
-    has_real_chain = (not cdf.empty and not pdf.empty)
+    has_real_chain = _is_valid_chain_pair(cdf, pdf)
     if has_real_chain:
         cdf_unique = cdf.sort_values("openInterest", ascending=False).drop_duplicates(subset=["strike"]).copy()
         pdf_unique = pdf.sort_values("openInterest", ascending=False).drop_duplicates(subset=["strike"]).copy()
@@ -1509,5 +1575,5 @@ elif st.session_state.page == "Options Intelligence":
         else:
             st.info("期权库当前未返回匹配行权价明细，未使用预设模拟价格。")
     else:
-        st.info("Yahoo 与 Nasdaq 接口当前均未返回真实期权链数据（未启用任何预设模拟价格）。请确认 Streamlit Secrets 中已配置 `MARKETDATA_API_TOKEN`。")
+        st.info("Market Data、Nasdaq 与 Yahoo 接口当前均未返回真实期权链数据（未启用任何预设模拟价格）。")
     st.markdown("</div>", unsafe_allow_html=True)
