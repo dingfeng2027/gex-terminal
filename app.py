@@ -1,6 +1,8 @@
+import hashlib
 import hmac
+import math
 import os
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 import numpy as np
@@ -855,6 +857,340 @@ def build_custom_option_matrix_html(symbol, spot):
     """
     return html
 
+# ==================== 3. AUTO GANZHI & 12-MONTH CYCLE ENGINE ====================
+
+TIANGAN = ["甲", "乙", "丙", "丁", "戊", "己", "庚", "辛", "壬", "癸"]
+DIZHI = ["子", "丑", "寅", "卯", "辰", "巳", "午", "未", "申", "酉", "戌", "亥"]
+
+TIANGAN_ELEMENT = {
+    "甲": "木", "乙": "木",
+    "丙": "火", "丁": "火",
+    "戊": "土", "己": "土",
+    "庚": "金", "辛": "金",
+    "壬": "水", "癸": "水",
+}
+
+DIZHI_ELEMENT = {
+    "寅": "木", "卯": "木",
+    "巳": "火", "午": "火",
+    "辰": "土", "戌": "土", "丑": "土", "未": "土",
+    "申": "金", "酉": "金",
+    "亥": "水", "子": "水",
+}
+
+# 生克映射: GENERATES[a] = b 表示 a 生 b
+GENERATES = {"木": "火", "火": "土", "土": "金", "金": "水", "水": "木"}
+# 克制映射: OVERCOMES[a] = b 表示 a 克 b
+OVERCOMES = {"木": "土", "土": "水", "水": "火", "火": "金", "金": "木"}
+
+# 六冲地支对
+CLASH_PAIRS = {
+    frozenset({"子", "午"}),
+    frozenset({"丑", "未"}),
+    frozenset({"寅", "申"}),
+    frozenset({"卯", "酉"}),
+    frozenset({"辰", "戌"}),
+    frozenset({"巳", "亥"}),
+}
+
+# 六合地支对
+SIX_HARMONY_PAIRS = {
+    frozenset({"子", "丑"}),
+    frozenset({"寅", "亥"}),
+    frozenset({"卯", "戌"}),
+    frozenset({"辰", "酉"}),
+    frozenset({"巳", "申"}),
+    frozenset({"午", "未"}),
+}
+
+# 1~12月对应传统月支（1月寅、2月卯……12月丑）
+MONTH_TO_ZHI_IDX = {
+    1: 2, 2: 3, 3: 4, 4: 5, 5: 6, 6: 7,
+    7: 8, 8: 9, 9: 10, 10: 11, 11: 0, 12: 1,
+}
+
+# 锚点日（2000-01-07 为甲辰日，甲=0, 辰=4）用于公历日期自动推算干支
+_ANCHOR_DATE = date(2000, 1, 7)
+
+def _date_to_ganzhi(d: date) -> tuple[str, str]:
+    delta_days = (d - _ANCHOR_DATE).days
+    gan = TIANGAN[delta_days % 10]
+    zhi = DIZHI[(4 + delta_days) % 12]
+    return gan, zhi
+
+def _year_to_ganzhi(year: int) -> tuple[str, str]:
+    # 1984 为甲子年（gan_idx=0, zhi_idx=0）
+    offset = year - 1984
+    return TIANGAN[offset % 10], DIZHI[offset % 12]
+
+def _month_ganzhi(year: int, month: int) -> tuple[str, str]:
+    y_gan, _ = _year_to_ganzhi(year)
+    y_gan_idx = TIANGAN.index(y_gan)
+    # 五虎遁：甲己之年丙作首（1月寅月起丙，idx=2）
+    start_gan_idx = ((y_gan_idx % 5) * 2 + 2) % 10
+    m_gan = TIANGAN[(start_gan_idx + (month - 1)) % 10]
+    m_zhi = DIZHI[MONTH_TO_ZHI_IDX[month]]
+    return m_gan, m_zhi
+
+def auto_infer_stock_ganzhi(symbol: str) -> dict[str, Any]:
+    """自动为任意股票代码推算固定干支、五行与常见财报月（无需手动配置）"""
+    clean_sym = symbol.upper().strip()
+    digest = hashlib.sha256(clean_sym.encode("utf-8")).hexdigest()
+    seed_int = int(digest[:12], 16)
+
+    gan = TIANGAN[seed_int % 10]
+    zhi = DIZHI[(seed_int // 10) % 12]
+    element = TIANGAN_ELEMENT[gan]
+    zhi_element = DIZHI_ELEMENT[zhi]
+
+    # 按代码确定性分配 4 个常见财报季月份
+    q_offset = (seed_int % 3)
+    earnings_months = [1 + q_offset, 4 + q_offset, 7 + q_offset, 10 + q_offset]
+    earnings_months = sorted({12 if m > 12 else m for m in earnings_months})
+
+    return {
+        "symbol": clean_sym,
+        "gan": gan,
+        "zhi": zhi,
+        "ganzhi": f"{gan}{zhi}",
+        "element": element,
+        "zhi_element": zhi_element,
+        "earnings_months": earnings_months,
+    }
+
+def _ganzhi_month_interaction(stock_gan: str, stock_zhi: str, stock_el: str, m_gan: str, m_zhi: str) -> tuple[float, str]:
+    """计算单股干支与流月干支的生克/冲合修正分"""
+    m_el = TIANGAN_ELEMENT[m_gan]
+    score = 0.0
+    tags = []
+
+    pair_zhi = frozenset({stock_zhi, m_zhi})
+    if pair_zhi in CLASH_PAIRS:
+        score -= 8.0
+        tags.append(f"地支{stock_zhi}{m_zhi}相冲")
+    elif pair_zhi in SIX_HARMONY_PAIRS:
+        score += 6.5
+        tags.append(f"地支{stock_zhi}{m_zhi}六合")
+    elif stock_zhi == m_zhi:
+        score += 3.5
+        tags.append(f"地支{m_zhi}同气")
+
+    if GENERATES.get(m_el) == stock_el:
+        score += 5.5
+        tags.append(f"月{m_el}生股{stock_el}")
+    elif GENERATES.get(stock_el) == m_el:
+        score -= 2.5
+        tags.append(f"股{stock_el}泄于月{m_el}")
+    elif OVERCOMES.get(m_el) == stock_el:
+        score -= 6.0
+        tags.append(f"月{m_el}克股{stock_el}")
+    elif OVERCOMES.get(stock_el) == m_el:
+        score += 3.0
+        tags.append(f"股{stock_el}驭月{m_el}")
+    elif m_el == stock_el:
+        score += 3.0
+        tags.append(f"同五行{stock_el}")
+
+    if not tags:
+        tags.append("干支平和")
+    return score, "·".join(tags[:2])
+
+MONTH_META = {
+    1: {"name": "1月", "season": "冬·过度期", "cal_tag": "年初回流", "window": "跨年资金回补与新年度布局"},
+    2: {"name": "2月", "season": "冬末春初", "cal_tag": "财报密集", "window": "年报/Q4财报落地与春生前哨"},
+    3: {"name": "3月", "season": "春·生长期", "cal_tag": "税务结算", "window": "税务/财年结算换手与春季萌动"},
+    4: {"name": "4月", "season": "春·生长期", "cal_tag": "Q1财报季", "window": "春季趋势展开与一季报验证"},
+    5: {"name": "5月", "season": "春末夏初", "cal_tag": "顺势推进", "window": "春季波段兑现与入夏前仓位梳理"},
+    6: {"name": "6月", "season": "夏·火旺期", "cal_tag": "年中整固", "window": "年中调仓与夏火波动试探"},
+    7: {"name": "7月", "season": "夏·火旺期", "cal_tag": "Q2财报季", "window": "火旺期业绩兑现与中报博弈"},
+    8: {"name": "8月", "season": "夏末秋初", "cal_tag": "假期抛盘", "window": "夏季长假流动性偏淡与震荡清洗"},
+    9: {"name": "9月", "season": "秋·收成期", "cal_tag": "假期回流", "window": "假期后资金回流与秋收布局"},
+    10: {"name": "10月", "season": "秋·收成期", "cal_tag": "Q3财报旺", "window": "三季报与旺季催化集中释放"},
+    11: {"name": "11月", "season": "秋末冬初", "cal_tag": "旺季兑现", "window": "秋冬交替与年度阶段成果梳理"},
+    12: {"name": "12月", "season": "冬·过度期", "cal_tag": "年终税务", "window": "年终税务结算/调仓与防踩踏"},
+}
+
+def _calendar_window_adjustment(month: int, earnings_months: list[int]) -> tuple[float, str]:
+    adj = 0.0
+    notes = []
+    if month == 3:
+        adj -= 6.0
+        notes.append("3月税务结算")
+    elif month == 8:
+        adj -= 7.5
+        notes.append("8月假期抛盘")
+    elif month == 9:
+        adj += 8.0
+        notes.append("9月假期回流")
+    elif month == 12:
+        adj -= 8.5
+        notes.append("12月年终税务")
+    elif month == 1:
+        adj += 6.0
+        notes.append("1月跨年回流")
+
+    if month in earnings_months:
+        adj += 6.5
+        notes.append("财报窗口")
+
+    if not notes:
+        notes.append("常规节律")
+    return adj, "·".join(notes)
+
+def build_12_month_cycle_rows(symbol: str, ref_year: int) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    auto_info = auto_infer_stock_ganzhi(symbol)
+    s_gan = auto_info["gan"]
+    s_zhi = auto_info["zhi"]
+    s_el = auto_info["element"]
+    e_months = auto_info["earnings_months"]
+
+    # 1974-11-28 虎盘底色 + 九运离火基准
+    _, birth_day_zhi = _date_to_ganzhi(date(1974, 11, 28))
+    y_gan, y_zhi = _year_to_ganzhi(ref_year)
+    year_shift = ((ref_year - 1974) % 12) - 5.5
+    tiger_base = 54.0 + math.sin((ref_year - 1974) * 0.65) * 4.5 - abs(year_shift) * 0.35
+
+    rows = []
+    for m_idx in range(1, 13):
+        meta = MONTH_META[m_idx]
+        m_gan, m_zhi = _month_ganzhi(ref_year, m_idx)
+        gz_score, gz_note = _ganzhi_month_interaction(s_gan, s_zhi, s_el, m_gan, m_zhi)
+        cal_adj, cal_note = _calendar_window_adjustment(m_idx, e_months)
+        personal_wave = math.cos((m_idx - 11) * (math.pi / 6.0)) * 4.5 + math.sin((m_idx - 3) * (math.pi / 6.0)) * 3.5
+
+        momentum_score = round(max(15.0, min(95.0, tiger_base + gz_score + cal_adj + personal_wave)), 1)
+        liquidity_score = round(
+            max(18.0, min(90.0, 52.0 + math.sin((m_idx - 2) * (math.pi / 6.0)) * 12.0 + (7.0 if m_idx in (9, 10) else (-7.5 if m_idx in (8, 12) else 0.0)))),
+            1
+        )
+
+        if momentum_score >= 65:
+            stance = "偏强顺势"
+            action_hint = "顺势持有 / 冲高兑现"
+            badge_color = "#16a34a"
+        elif momentum_score >= 48:
+            stance = "震荡蓄势"
+            action_hint = "观察量能 / 回踩分批"
+            badge_color = "#2563eb"
+        else:
+            stance = "清洗/防震"
+            action_hint = "控仓防震 / 等回流"
+            badge_color = "#dc2626"
+
+        rows.append({
+            "month_num": m_idx,
+            "short_month": meta["name"],
+            "m_ganzhi": f"{m_gan}{m_zhi}",
+            "season": meta["season"],
+            "cal_tag": meta["cal_tag"],
+            "factor_note": f"{gz_note} | {cal_note}",
+            "momentum_score": momentum_score,
+            "liquidity_score": liquidity_score,
+            "stance": stance,
+            "action_hint": action_hint,
+            "badge_color": badge_color,
+        })
+
+    meta_info = {
+        **auto_info,
+        "year_ganzhi": f"{y_gan}{y_zhi}",
+        "birth_day_zhi": birth_day_zhi,
+    }
+    return rows, meta_info
+
+def render_12m_cycle_block_above_options(symbol: str):
+    now_dt = datetime.today()
+    cur_year = now_dt.year
+    cur_month = now_dt.month
+
+    st.markdown("<div class='module-container' style='padding:12px 14px; margin-bottom:10px;'>", unsafe_allow_html=True)
+    h_col1, h_col2, h_col3 = st.columns([3.8, 1.3, 1.9])
+    target_year = h_col2.selectbox("周期年份", [cur_year, cur_year + 1], index=0, key=f"cycle_yr_{symbol}", label_visibility="collapsed")
+    show_liq_line = h_col3.toggle("叠加资金流动性线", value=True, key=f"cycle_liq_{symbol}")
+
+    rows, meta_info = build_12_month_cycle_rows(symbol, target_year)
+    e_str = "、".join([f"{m}月" for m in meta_info["earnings_months"]])
+
+    h_col1.markdown(
+        f"<div class='card-header' style='margin-bottom:2px;'>🧭 {symbol} 12个月周期能量表 (自动干支: <b>{meta_info['ganzhi']}·{meta_info['element']}</b> | 流年: <b>{meta_info['year_ganzhi']}</b>)</div>"
+        f"<div style='font-size:13.5px; color:#cbd5e1;'>基准: <b>1974/11/28 虎盘(日支{meta_info['birth_day_zhi']}) × 九运离火</b> | 自动财报月: <b>{e_str}</b> | 高亮: <b>{cur_year}年{cur_month}月</b></div>",
+        unsafe_allow_html=True,
+    )
+
+    x_labels = [r["short_month"] for r in rows]
+    y_mom = [r["momentum_score"] for r in rows]
+    y_liq = [r["liquidity_score"] for r in rows]
+
+    fig_12m = go.Figure()
+    fig_12m.add_trace(go.Scatter(
+        x=x_labels,
+        y=y_mom,
+        mode="lines+markers+text",
+        name=f"{symbol} 月份能量指数",
+        text=[f"{v:.0f}" for v in y_mom],
+        textposition="top center",
+        line=dict(color="#f97316", width=3.0),
+        marker=dict(size=8, color="#facc15", line=dict(color="#0f172a", width=1.4)),
+    ))
+    if show_liq_line:
+        fig_12m.add_trace(go.Scatter(
+            x=x_labels,
+            y=y_liq,
+            mode="lines+markers",
+            name="季节/资金回流基准",
+            line=dict(color="#22c55e", width=2.2, dash="dash"),
+            marker=dict(size=6, color="#22c55e"),
+        ))
+
+    if target_year == cur_year:
+        cur_m_label = f"{cur_month}月"
+        if cur_m_label in x_labels:
+            fig_12m.add_vline(
+                x=cur_m_label,
+                line_width=2,
+                line_dash="dot",
+                line_color="#0284c7",
+                annotation_text=f"本月({cur_m_label})",
+                annotation_position="top left",
+                annotation_font=dict(color="#0284c7", size=12),
+            )
+
+    fig_12m.update_layout(
+        template="plotly_white",
+        paper_bgcolor="#ffffff",
+        plot_bgcolor="#ffffff",
+        height=245,
+        font=dict(size=13, color="#0f172a"),
+        margin=dict(l=12, r=12, t=24, b=10),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    )
+    fig_12m.update_yaxes(range=[0, 105], gridcolor="#e2e8f0")
+    st.plotly_chart(fig_12m, use_container_width=True)
+
+    cards_html = "<div style='display:grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap:8px; margin-top:4px;'>"
+    for r in rows:
+        is_now = (target_year == cur_year and r["month_num"] == cur_month)
+        border_css = "border: 2.5px solid #facc15; box-shadow: 0 0 10px rgba(250,204,21,0.35);" if is_now else "border: 1px solid #3b82f6;"
+        now_tag = "<span style='background:#facc15; color:#000; font-size:11px; font-weight:900; padding:1px 5px; border-radius:4px; margin-left:4px;'>本月</span>" if is_now else ""
+        cards_html += (
+            f"<div style='background:#07193d; {border_css} border-radius:7px; padding:8px; color:#fff;'>"
+            f"<div style='display:flex; justify-content:space-between; align-items:center;'>"
+            f"<span style='font-size:15px; font-weight:900; color:#93c5fd;'>{r['short_month']}({r['m_ganzhi']}){now_tag}</span>"
+            f"<span style='font-size:14.5px; font-weight:900; color:{r['badge_color']};'>{r['momentum_score']:.0f}分</span>"
+            f"</div>"
+            f"<div style='font-size:12px; color:#facc15; font-weight:700; margin-top:2px;'>{r['season']} · {r['cal_tag']}</div>"
+            f"<div style='font-size:11.5px; color:#cbd5e1; margin-top:2px;'>{r['factor_note']}</div>"
+            f"<div style='font-size:12px; font-weight:800; color:#4ade80; border-top:1px solid #1e3a8a; margin-top:4px; padding-top:4px;'>"
+            f"{r['stance']}｜{r['action_hint']}"
+            f"</div>"
+            f"</div>"
+        )
+    cards_html += "</div>"
+    st.markdown(cards_html, unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+# ==================== TOP BAR & NAVIGATION ====================
+
 top_bar_html = "<div class='top-bar'><div class='brand-title'>CAPITAL QUANT v2</div><div class='live-badge'>Auto-Sync Every 3m (180s) | " + datetime.now().strftime('%b %d, %Y %H:%M:%S') + " | Nasdaq Stock + Yahoo Options</div></div>"
 st.markdown(top_bar_html, unsafe_allow_html=True)
 
@@ -1134,6 +1470,9 @@ elif st.session_state.page == "Options Intelligence":
         st.rerun()
 
     sym = st.session_state.selected_ticker
+
+    render_12m_cycle_block_above_options(sym)
+
     m_opt = fetch_stock_metrics(sym, live=st.session_state.use_live_api)
     spot = float(m_opt["price"])
 
