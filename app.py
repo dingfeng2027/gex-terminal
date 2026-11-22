@@ -285,6 +285,9 @@ def _calc_indicators_from_closes(closes, last_price, prev_price, high52=None, lo
     ma20 = sum(closes[-20:]) / min(20, len(closes))
     ma50 = sum(closes[-50:]) / min(50, len(closes))
     ma200 = sum(closes[-200:]) / min(200, len(closes))
+    recent_slice = closes[-60:] if len(closes) >= 60 else closes
+    recent_high = max(recent_slice) if recent_slice else float(last_price)
+    recent_low = min(recent_slice) if recent_slice else float(last_price)
     h52 = high52 if high52 is not None else max(closes)
     l52 = low52 if low52 is not None else min(closes)
 
@@ -306,6 +309,8 @@ def _calc_indicators_from_closes(closes, last_price, prev_price, high52=None, lo
         "ma20": round(float(ma20), 2),
         "ma50": round(float(ma50), 2),
         "ma200": round(float(ma200), 2),
+        "recent_high": round(float(recent_high), 2),
+        "recent_low": round(float(recent_low), 2),
         "high52": round(float(h52), 2),
         "low52": round(float(l52), 2),
         "rsi": round(float(rsi), 1),
@@ -318,6 +323,7 @@ def fetch_stock_metrics(symbol, live=True):
         return {
             "name": fb["name"], "price": fb["price"], "prev": fb["prev"],
             "ma20": fb["price"] * 0.98, "ma50": fb["price"] * 0.95, "ma200": fb["price"] * 0.88,
+            "recent_high": fb["price"] * 1.08, "recent_low": fb["price"] * 0.90,
             "high52": fb["price"] * 1.15, "low52": fb["price"] * 0.80, "rsi": 55.0,
             "pe": fb.get("pe"), "eps": 5.0, "mcap": fb.get("mcap", "100B"), "src": "OFFLINE",
         }
@@ -369,6 +375,7 @@ def fetch_stock_metrics(symbol, live=True):
     return {
         "name": fb["name"], "price": p, "prev": prev,
         "ma20": p * 0.98, "ma50": p * 0.95, "ma200": p * 0.88,
+        "recent_high": p * 1.08, "recent_low": p * 0.90,
         "high52": p * 1.15, "low52": p * 0.80, "rsi": 55.0,
         "pe": fb.get("pe"), "eps": 5.0, "mcap": fb.get("mcap", "100B"), "src": "FB",
     }
@@ -903,6 +910,7 @@ SOLAR_MONTH_TO_ZHI_IDX = {
     8: 8, 9: 9, 10: 10, 11: 11, 12: 0, 1: 1,
 }
 
+# 常见标的财报季月份映射（其余代码按哈希推演）
 KNOWN_EARNINGS_MONTHS: dict[str, list[int]] = {
     "NVDA": [2, 5, 8, 11],
     "AMD": [2, 5, 8, 11],
@@ -919,6 +927,12 @@ KNOWN_EARNINGS_MONTHS: dict[str, list[int]] = {
     "MPWR": [2, 5, 8, 11],
     "SMCI": [2, 5, 8, 11],
     "CEG": [2, 5, 8, 11],
+    "CBRS": [3, 6, 9, 12],
+    "SPCX": [2, 5, 8, 11],
+    "NG.L": [5, 11],
+    "QQQ": [1, 4, 7, 10],
+    "VUAG.L": [1, 4, 7, 10],
+    "EQQQ.L": [1, 4, 7, 10],
 }
 
 SOLAR_MONTH_RHYTHM = {
@@ -1012,13 +1026,13 @@ def _ganzhi_month_interaction(stock_gan: str, stock_zhi: str, stock_el: str, m_g
         tags.append("干支平和")
     return score, "·".join(tags[:2])
 
-def _earnings_phase_for_month(
+def get_earnings_phase_status(
     y_num: int,
     m_num: int,
     e_months: list[int],
     ref_dt: datetime | None = None,
 ) -> dict[str, Any]:
-    """根据当前日期判断某月处于财报前、刚发完财报，还是常规月份"""
+    """全标的通用财报阶段判断：财报前窗 / 财报刚出·消化期 / 财报月 / 财报后消化"""
     now_dt = ref_dt or datetime.today()
     cur_ym = now_dt.year * 12 + now_dt.month
     cell_ym = y_num * 12 + m_num
@@ -1031,29 +1045,35 @@ def _earnings_phase_for_month(
 
     if is_post_earnings_now:
         delta = -2.0
-        label = "财报刚发·消化期"
-        note = "财报已发布·波动消化"
+        label = "财报刚出·消化期"
+        note = "财报刚发布·消化重定价"
+        flow_prefix = "财报后资金风向："
     elif is_pre_earnings:
         delta = 4.0
         label = "财报前窗"
         note = "财报前抢跑/预期窗"
+        flow_prefix = "财报前资金风向："
     elif is_earnings_month:
         delta = 2.5
         label = "财报月"
         note = "财报日波动窗"
+        flow_prefix = "财报期资金风向："
     elif prev_m in e_months:
         delta = -3.0
         label = "财报后消化"
         note = "财报后兑现消化"
+        flow_prefix = "财报后资金风向："
     else:
         delta = 0.0
         label = ""
         note = ""
+        flow_prefix = "近期资金风向："
 
     return {
         "delta": delta,
         "label": label,
         "note": note,
+        "flow_prefix": flow_prefix,
         "is_pre_earnings": is_pre_earnings,
         "is_earnings_month": is_earnings_month,
         "is_post_earnings_now": is_post_earnings_now,
@@ -1070,7 +1090,7 @@ def _strong_disturbance_factors(
     holiday_delta = 0.0
     notes: list[str] = []
 
-    e_info = _earnings_phase_for_month(y_num, m_num, e_months, ref_dt=ref_dt)
+    e_info = get_earnings_phase_status(y_num, m_num, e_months, ref_dt=ref_dt)
     earnings_delta = e_info["delta"]
 
     if m_num == 3:
@@ -1104,6 +1124,7 @@ def _strong_disturbance_factors(
         "is_earnings_month": e_info["is_earnings_month"],
         "is_post_earnings_now": e_info["is_post_earnings_now"],
         "phase_label": e_info["label"],
+        "flow_prefix": e_info["flow_prefix"],
         "note": " | ".join(notes) if notes else "常规节律",
     }
 
@@ -1112,6 +1133,7 @@ def evaluate_flow_radar(
     m_data: dict[str, Any],
     cdf: pd.DataFrame,
     pdf: pd.DataFrame,
+    phase_prefix: str = "近期资金风向：",
     post_earnings_mode: bool = False,
 ) -> dict[str, str]:
     price = float(m_data.get("price", 0.0))
@@ -1123,7 +1145,7 @@ def evaluate_flow_radar(
     reasons: list[str] = []
 
     if post_earnings_mode:
-        reasons.append("11月财报刚发布，市场处于财报后消化与重定价阶段")
+        reasons.append("近期财报刚落地，市场处于财报后消化与重定价阶段")
 
     if price > 0 and ma20 > 0:
         if price >= ma20 and ma20 >= ma50:
@@ -1160,51 +1182,66 @@ def evaluate_flow_radar(
             else:
                 reasons.append("期权上下防守相对均衡")
 
-    prefix_txt = "财报后资金风向：" if post_earnings_mode else "财报前资金风向："
-
     if flow_score >= 1.5:
         return {
-            "prefix": prefix_txt,
+            "prefix": phase_prefix,
             "state": "偏进场",
             "badge": "🟢 偏进场（财报后资金在回补/托底）" if post_earnings_mode else "🟢 偏进场（资金在提前布局/托底）",
             "color": "#4ade80",
             "short_tag": "偏进场",
             "explain": "；".join(reasons[:2]) if reasons else "价格与持仓结构偏稳，资金有回补迹象。",
-            "advice": "财报落地后若企稳可按节奏分批，急拉不追高。",
+            "advice": "若企稳可按节奏分批，急拉不追高。",
         }
     elif flow_score <= -1.5:
         return {
-            "prefix": prefix_txt,
+            "prefix": phase_prefix,
             "state": "偏撤退",
             "badge": "🔴 偏撤退（财报后资金偏防险/消化波动）" if post_earnings_mode else "🔴 偏撤退（资金在提前减仓/买保险）",
             "color": "#f87171",
             "short_tag": "偏撤退",
             "explain": "；".join(reasons[:2]) if reasons else "反弹承压或防守力量偏重，资金更偏防风险。",
-            "advice": "财报刚过波动较大，别急着接飞刀，等止跌企稳再分批限价单。",
+            "advice": "波动期不盲目接飞刀，等止跌企稳再按低位限价单节奏执行。",
         }
     else:
         return {
-            "prefix": prefix_txt,
+            "prefix": phase_prefix,
             "state": "在拉锯",
-            "badge": "🟡 在拉锯（财报刚出完，多空正在消化业绩与指引）" if post_earnings_mode else "🟡 在拉锯（多空都在等财报开牌）",
+            "badge": "🟡 在拉锯（财报刚出完，多空正在消化业绩与指引）" if post_earnings_mode else "🟡 在拉锯（多空都在等待明确方向）",
             "color": "#facc15",
             "short_tag": "在拉锯",
-            "explain": "；".join(reasons[:2]) if reasons else "财报刚落地，多空正在重新定价。",
+            "explain": "；".join(reasons[:2]) if reasons else "多空正在重新定价，方向尚未完全明朗。",
             "advice": "少折腾、先看消化节奏，等关键支撑/阻力位确认后再动手。",
         }
 
-def _estimate_approx_price(spot: float, tech_score: float, m_data: dict[str, Any] | None = None) -> float:
-    """根据现价与当月节律分估算大致参考价位（非精确预测）"""
+def _estimate_range_anchored_price(spot: float, tech_score: float, m_data: dict[str, Any] | None = None) -> float:
+    """
+    结合近期高低点区间与现价位置估算参考区间价（非精确目标价）：
+    - 以近期高低点 [low_ref, high_ref] 为主要锚点，兼顾当前 spot
+    - 低分月偏向区间偏下/回踩参考，高分月偏向区间偏上/反弹参考
+    """
     if spot <= 0:
         return 0.0
-    pct_shift = ((tech_score - 55.0) / 10.0) * 0.045
-    raw_est = spot * (1.0 + pct_shift)
-    if m_data:
-        h52 = float(m_data.get("high52") or 0.0)
-        l52 = float(m_data.get("low52") or 0.0)
-        if l52 > 0 and h52 > l52:
-            raw_est = max(l52 * 0.85, min(h52 * 1.15, raw_est))
-    return round(raw_est, 2)
+
+    m_info = m_data or {}
+    r_low = float(m_info.get("recent_low") or m_info.get("low52") or (spot * 0.90))
+    r_high = float(m_info.get("recent_high") or m_info.get("high52") or (spot * 1.12))
+    h52 = float(m_info.get("high52") or r_high)
+    l52 = float(m_info.get("low52") or r_low)
+
+    low_anchor = max(l52 * 0.95, min(r_low, spot * 0.98)) if r_low > 0 else spot * 0.90
+    high_anchor = min(h52 * 1.05, max(r_high, spot * 1.04)) if r_high > 0 else spot * 1.12
+    if high_anchor <= low_anchor:
+        low_anchor = spot * 0.92
+        high_anchor = spot * 1.08
+
+    # 将 10~95 的节律分映射到 [0.15, 0.85] 的区间参考分位
+    norm = max(0.0, min(1.0, (tech_score - 10.0) / 85.0))
+    pos_ratio = 0.15 + norm * 0.70
+    range_px = low_anchor + (high_anchor - low_anchor) * pos_ratio
+
+    # 与现价做温和融合，既贴近近期高低点区间，又不会脱离当前价位太远
+    blended = range_px * 0.65 + spot * (1.0 + (norm - 0.5) * 0.14) * 0.35
+    return round(max(low_anchor * 0.96, min(high_anchor * 1.04, blended)), 2)
 
 def _fmt_price_ref(val: float, spot: float) -> str:
     prefix = "£" if spot >= 500 and val >= 500 else "$"
@@ -1228,12 +1265,13 @@ def build_rolling_12m_cycle_rows(
     spot = float((m_data or {}).get("price") or 0.0)
     now_dt = datetime.today()
 
-    cur_phase = _earnings_phase_for_month(start_year, start_month, e_months, ref_dt=now_dt)
+    cur_phase = get_earnings_phase_status(start_year, start_month, e_months, ref_dt=now_dt)
     flow_info = evaluate_flow_radar(
         symbol,
         m_data or {},
         cdf if cdf is not None else pd.DataFrame(),
         pdf if pdf is not None else pd.DataFrame(),
+        phase_prefix=cur_phase["flow_prefix"],
         post_earnings_mode=cur_phase["is_post_earnings_now"],
     )
 
@@ -1263,7 +1301,7 @@ def build_rolling_12m_cycle_rows(
         total_adj = effective_gz + dist["tax_delta"] + dist["holiday_delta"] + effective_earn
         tech_score = round(max(8.0, min(98.0, rhythm["tech"] + total_adj)), 1)
         real_score = round(max(12.0, min(98.0, rhythm["real"] + gz_delta * 0.35 + dist["tax_delta"] * 0.3)), 1)
-        approx_px = _estimate_approx_price(spot, tech_score, m_data)
+        approx_px = _estimate_range_anchored_price(spot, tech_score, m_data)
         approx_str = _fmt_price_ref(approx_px, spot) if spot > 0 else ""
 
         if m_num == 3:
@@ -1293,7 +1331,7 @@ def build_rolling_12m_cycle_rows(
 
         short_yr = str(y_num)[2:]
         x_label = f"{short_yr}年{m_num}月({m_gan}{m_zhi})"
-        pt_text = f"{tech_score:.0f}分 {approx_str}" if approx_str else f"{tech_score:.0f}分"
+        pt_text = f"{tech_score:.0f}分 · {approx_str}" if approx_str else f"{tech_score:.0f}分"
         factor_line = f"{gz_note} | {dist['note']}"
 
         rows.append({
@@ -1329,7 +1367,7 @@ def build_rolling_12m_cycle_rows(
     if spot > 0:
         min_px = min(r["approx_price"] for r in rows)
         max_px = max(r["approx_price"] for r in rows)
-        price_range_str = f" | 参考价区: <b>{_fmt_price_ref(min_px, spot)} ~ {_fmt_price_ref(max_px, spot)}</b>"
+        price_range_str = f" | 区间参考价(非精确目标): <b>{_fmt_price_ref(min_px, spot)} ~ {_fmt_price_ref(max_px, spot)}</b>"
 
     meta_info = {
         **auto_info,
@@ -1338,6 +1376,7 @@ def build_rolling_12m_cycle_rows(
         "peak_label": f"{peak_row['short_title']}({peak_row['tech_score']:.0f}分 {peak_row['approx_str']})",
         "trough_label": f"{trough_row['short_title']}({trough_row['tech_score']:.0f}分 {trough_row['approx_str']})",
         "price_range_str": price_range_str,
+        "phase_label": cur_phase["label"],
         "flow_info": flow_info,
     }
     return rows, meta_info
@@ -1356,6 +1395,7 @@ def render_12m_cycle_block_above_options(
     e_str = "、".join([f"{m}月" for m in meta_info["earnings_months"]])
     end_row = rows[-1]
     flow = meta_info["flow_info"]
+    cur_phase_txt = f" | 当前阶段: <b>{meta_info['phase_label']}</b>" if meta_info.get("phase_label") else ""
 
     st.markdown("<div class='module-container' style='padding:12px 14px; margin-bottom:10px;'>", unsafe_allow_html=True)
     h_col1, h_col2 = st.columns([4.8, 1.8])
@@ -1363,7 +1403,7 @@ def render_12m_cycle_block_above_options(
 
     h_col1.markdown(
         f"<div class='card-header' style='margin-bottom:2px;'>🧭 {symbol} 未来12个月滚动能量表 (1974 虎盘 × 个股干支: <b>{meta_info['ganzhi']}·{meta_info['element']}</b>)</div>"
-        f"<div style='font-size:13.5px; color:#cbd5e1;'>滚动区间: <b>{cur_year}年{cur_month}月 (首月) → {end_row['year_num']}年{end_row['month_num']}月</b> | 流年: <b>{meta_info['year_ganzhi']}</b> | 财报季: <b>{e_str}</b> | 高:<b>{meta_info['peak_label']}</b> / 低:<b>{meta_info['trough_label']}</b>{meta_info['price_range_str']}</div>",
+        f"<div style='font-size:13.5px; color:#cbd5e1;'>滚动区间: <b>{cur_year}年{cur_month}月 (首月) → {end_row['year_num']}年{end_row['month_num']}月</b> | 流年: <b>{meta_info['year_ganzhi']}</b> | 财报季: <b>{e_str}</b>{cur_phase_txt} | 高:<b>{meta_info['peak_label']}</b> / 低:<b>{meta_info['trough_label']}</b>{meta_info['price_range_str']}</div>",
         unsafe_allow_html=True,
     )
 
@@ -1371,7 +1411,7 @@ def render_12m_cycle_block_above_options(
         f"<div style='background:#07193d; border:1.5px solid {flow['color']}; border-radius:8px; padding:8px 12px; margin:6px 0 8px 0;'>"
         f"<div style='font-size:14.5px; font-weight:900; color:{flow['color']};'>{flow['prefix']}{flow['badge']}</div>"
         f"<div style='font-size:12.5px; color:#e2e8f0; margin-top:2px;'>白话看点：{flow['explain']}</div>"
-        f"<div style='font-size:12.5px; color:#93c5fd; font-weight:800; margin-top:2px;'>操作提醒：{flow['advice']}</div>"
+        f"<div style='font-size:12.5px; color:#93c5fd; font-weight:800; margin-top:2px;'>操作提醒：{flow['advice']}（注：图中价格为结合近期高低点区间的参考估算，非精确预测）</div>"
         f"</div>",
         unsafe_allow_html=True,
     )
@@ -1386,7 +1426,7 @@ def render_12m_cycle_block_above_options(
         x=x_labels,
         y=y_tech,
         mode="lines+markers+text",
-        name=f"{symbol} 综合节律分 + 参考价",
+        name=f"{symbol} 综合节律分 · 区间参考价",
         text=pt_labels,
         textposition="top center",
         line=dict(color="#f97316", width=3.2),
@@ -1412,15 +1452,15 @@ def render_12m_cycle_block_above_options(
     )
     fig_12m.add_annotation(
         x=0,
-        y=104,
+        y=102,
         xref="x",
         yref="y",
         text=f"本月起点({cur_month}月)",
         showarrow=False,
         xanchor="center",
         yanchor="top",
-        font=dict(color="#b45309", size=12),
-        bgcolor="rgba(254, 240, 138, 0.9)",
+        font=dict(color="#b45309", size=11.5),
+        bgcolor="rgba(254, 240, 138, 0.92)",
     )
 
     for r in rows:
@@ -1434,40 +1474,40 @@ def render_12m_cycle_block_above_options(
             )
             fig_12m.add_annotation(
                 x=idx_step,
-                y=104,
+                y=102,
                 xref="x",
                 yref="y",
                 text="3月底税务低点",
                 showarrow=False,
                 xanchor="center",
                 yanchor="top",
-                font=dict(color="#b91c1c", size=11.5),
+                font=dict(color="#b91c1c", size=11),
                 bgcolor="rgba(254, 226, 226, 0.92)",
             )
         elif r["is_post_earnings_now"]:
             fig_12m.add_annotation(
                 x=idx_step,
-                y=95,
+                y=93,
                 xref="x",
                 yref="y",
                 text="财报刚出·消化中",
                 showarrow=False,
                 xanchor="center",
                 yanchor="top",
-                font=dict(color="#0369a1", size=11),
+                font=dict(color="#0369a1", size=10.5),
                 bgcolor="rgba(224, 242, 254, 0.94)",
             )
         elif r["is_pre_earnings"]:
             fig_12m.add_annotation(
                 x=idx_step,
-                y=95,
+                y=93,
                 xref="x",
                 yref="y",
                 text=f"财报前窗·{flow['short_tag']}",
                 showarrow=False,
                 xanchor="center",
                 yanchor="top",
-                font=dict(color="#b45309", size=11),
+                font=dict(color="#b45309", size=10.5),
                 bgcolor="rgba(254, 243, 199, 0.92)",
             )
 
@@ -1475,10 +1515,10 @@ def render_12m_cycle_block_above_options(
         template="plotly_white",
         paper_bgcolor="#ffffff",
         plot_bgcolor="#ffffff",
-        height=275,
+        height=285,
         font=dict(size=12, color="#0f172a"),
-        margin=dict(l=12, r=12, t=28, b=10),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        margin=dict(l=12, r=12, t=42, b=10),
+        legend=dict(orientation="h", yanchor="bottom", y=1.08, xanchor="left", x=0),
     )
     fig_12m.update_yaxes(range=[0, 110], gridcolor="#e2e8f0")
     st.plotly_chart(fig_12m, width="stretch")
