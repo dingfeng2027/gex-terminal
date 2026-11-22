@@ -77,15 +77,15 @@ DEFAULT_TICKERS = ["NVDA", "GOOGL", "TSM", "AMD", "MSFT", "META", "AMZN", "AAPL"
 FALLBACK_DATA = {
     "NG.L": {"name": "National Grid", "price": 1279.00, "prev": 1267.00, "pe": 16.1, "mcap": "85.3B"},
     "NVDA": {"name": "NVIDIA", "price": 125.53, "prev": 145.98, "pe": 13.5, "mcap": "3.03T"},
-    "GOOGL": {"name": "Alphabet", "price": 288.93, "prev": 284.78, "pe": 15.1, "mcap": "3.54T"},
-    "TSM": {"name": "TSMC", "price": 391.23, "prev": 375.44, "pe": 25.4, "mcap": "2.02T"},
+    "GOOGL": {"name": "Alphabet", "price": 265.29, "prev": 284.78, "pe": 15.1, "mcap": "3.54T"},
+    "TSM": {"name": "TSMC", "price": 318.71, "prev": 352.09, "pe": 25.4, "mcap": "2.02T"},
     "AMD": {"name": "AMD", "price": 509.52, "prev": 499.04, "pe": 108.8, "mcap": "825B"},
-    "MSFT": {"name": "Microsoft", "price": 546.89, "prev": 530.61, "pe": 28.5, "mcap": "4.06T"},
-    "META": {"name": "Meta", "price": 644.30, "prev": 610.15, "pe": 22.0, "mcap": "1.63T"},
-    "AMZN": {"name": "Amazon", "price": 268.44, "prev": 259.30, "pe": 21.7, "mcap": "2.81T"},
-    "AAPL": {"name": "Apple", "price": 351.39, "prev": 342.37, "pe": 39.1, "mcap": "5.31T"},
+    "MSFT": {"name": "Microsoft", "price": 484.52, "prev": 501.61, "pe": 28.5, "mcap": "4.06T"},
+    "META": {"name": "Meta", "price": 560.84, "prev": 589.15, "pe": 22.0, "mcap": "1.63T"},
+    "AMZN": {"name": "Amazon", "price": 246.82, "prev": 259.30, "pe": 21.7, "mcap": "2.81T"},
+    "AAPL": {"name": "Apple", "price": 342.56, "prev": 342.37, "pe": 39.1, "mcap": "5.31T"},
     "ASML": {"name": "ASML", "price": 1517.98, "prev": 1424.75, "pe": 37.3, "mcap": "605B"},
-    "TSLA": {"name": "Tesla", "price": 381.01, "prev": 358.22, "pe": 418.7, "mcap": "1.21T"},
+    "TSLA": {"name": "Tesla", "price": 304.41, "prev": 338.22, "pe": 418.7, "mcap": "1.21T"},
     "CBRS": {"name": "Cerebras Systems", "price": 102.36, "prev": 101.00, "pe": None, "mcap": "20.7B"},
     "SPCX": {"name": "SpaceX", "price": 139.11, "prev": 137.65, "pe": 233.0, "mcap": "1.87T"},
     "CEG": {"name": "Constellation", "price": 265.50, "prev": 258.00, "pe": 32.5, "mcap": "85B"},
@@ -301,7 +301,7 @@ def _calc_indicators_from_closes(closes, last_price, prev_price, high52=None, lo
     ma20 = sum(closes[-20:]) / min(20, len(closes))
     ma50 = sum(closes[-50:]) / min(50, len(closes))
     ma200 = sum(closes[-200:]) / min(200, len(closes))
-    recent_slice = closes[-60:] if len(closes) >= 60 else closes
+    recent_slice = closes[-20:] if len(closes) >= 20 else closes
     recent_high = max(recent_slice) if recent_slice else float(last_price)
     recent_low = min(recent_slice) if recent_slice else float(last_price)
     h52 = high52 if high52 is not None else max(closes)
@@ -339,7 +339,7 @@ def fetch_stock_metrics(symbol, live=True):
         return {
             "name": fb["name"], "price": fb["price"], "prev": fb["prev"],
             "ma20": fb["price"] * 0.98, "ma50": fb["price"] * 0.95, "ma200": fb["price"] * 0.88,
-            "recent_high": fb["price"] * 1.08, "recent_low": fb["price"] * 0.90,
+            "recent_high": fb["price"] * 1.08, "recent_low": fb["price"] * 0.92,
             "high52": fb["price"] * 1.15, "low52": fb["price"] * 0.80, "rsi": 55.0,
             "pe": fb.get("pe"), "eps": 5.0, "mcap": fb.get("mcap", "100B"), "src": "OFFLINE",
         }
@@ -391,7 +391,7 @@ def fetch_stock_metrics(symbol, live=True):
     return {
         "name": fb["name"], "price": p, "prev": prev,
         "ma20": p * 0.98, "ma50": p * 0.95, "ma200": p * 0.88,
-        "recent_high": p * 1.08, "recent_low": p * 0.90,
+        "recent_high": p * 1.08, "recent_low": p * 0.92,
         "high52": p * 1.15, "low52": p * 0.80, "rsi": 55.0,
         "pe": fb.get("pe"), "eps": 5.0, "mcap": fb.get("mcap", "100B"), "src": "FB",
     }
@@ -1328,31 +1328,54 @@ def evaluate_flow_radar(
         }
 
 def _estimate_range_anchored_price(spot: float, tech_score: float, m_data: dict[str, Any] | None = None) -> float:
-    """结合近期高低点区间与现价位置估算参考区间价（非精确目标价）"""
+    """
+    紧跟最新现价 spot 做锚定估算（非精确目标价）：
+    - 中性分 (~50分) 紧贴当前最新现价 spot
+    - 低分 (8~35分，冲月/刑月/税务低点) 锚定在现价下方回调带，避免急跌后低点反而高于现价
+    - 高分 (65~98分，旺月爆发) 向上延伸至现价上方波段区间（参考近期高点与52周高点上限）
+    """
     if spot <= 0:
         return 0.0
 
     m_info = m_data or {}
-    r_low = float(m_info.get("recent_low") or m_info.get("low52") or (spot * 0.90))
-    r_high = float(m_info.get("recent_high") or m_info.get("high52") or (spot * 1.12))
-    h52 = float(m_info.get("high52") or r_high)
-    l52 = float(m_info.get("low52") or r_low)
+    r_low = float(m_info.get("recent_low") or 0.0)
+    r_high = float(m_info.get("recent_high") or 0.0)
+    h52 = float(m_info.get("high52") or 0.0)
+    l52 = float(m_info.get("low52") or 0.0)
 
-    low_anchor = max(l52 * 0.95, min(r_low, spot * 0.98)) if r_low > 0 else spot * 0.90
-    high_anchor = min(h52 * 1.05, max(r_high, spot * 1.04)) if r_high > 0 else spot * 1.12
-    if high_anchor <= low_anchor:
-        low_anchor = spot * 0.92
-        high_anchor = spot * 1.08
+    # 下方锚点严格不高于最新现价的 93%，若近期低点更低则温和兼顾
+    default_floor = spot * 0.84
+    if l52 > 0 and l52 < spot:
+        floor_px = max(spot * 0.78, min(default_floor, (spot * 0.65 + l52 * 0.35)))
+    elif r_low > 0 and r_low < spot:
+        floor_px = max(spot * 0.80, min(default_floor, r_low * 0.97))
+    else:
+        floor_px = default_floor
+    floor_px = min(floor_px, spot * 0.93)
 
-    norm = max(0.0, min(1.0, (tech_score - 8.0) / 88.0))
-    pos_ratio = 0.12 + norm * 0.76
-    range_px = low_anchor + (high_anchor - low_anchor) * pos_ratio
+    # 上方锚点以最新现价为基准向上延展，兼顾前期高点空间但不过度脱离当前水位
+    default_ceil = spot * 1.24
+    ref_top = max(r_high, h52 * 0.95) if (r_high > 0 or h52 > 0) else default_ceil
+    if ref_top > spot * 1.05:
+        ceil_px = min(spot * 1.42, max(default_ceil, spot * 0.55 + ref_top * 0.45))
+    else:
+        ceil_px = default_ceil
 
-    blended = range_px * 0.65 + spot * (1.0 + (norm - 0.5) * 0.16) * 0.35
-    return round(max(low_anchor * 0.95, min(high_anchor * 1.05, blended)), 2)
+    neutral_score = 50.0
+    if tech_score <= neutral_score:
+        # 8分 -> floor_px，50分 -> spot
+        ratio = max(0.0, min(1.0, (tech_score - 8.0) / (neutral_score - 8.0)))
+        est = floor_px + (spot - floor_px) * ratio
+    else:
+        # 50分 -> spot，98分 -> ceil_px
+        ratio = max(0.0, min(1.0, (tech_score - neutral_score) / (98.0 - neutral_score)))
+        est = spot + (ceil_px - spot) * ratio
 
-def _fmt_price_ref(val: float, spot: float) -> str:
-    prefix = "£" if spot >= 500 and val >= 500 else "$"
+    return round(est, 2)
+
+def _fmt_price_ref(val: float, symbol: str = "") -> str:
+    clean_sym = symbol.upper().strip()
+    prefix = "£" if clean_sym.endswith(".L") else "$"
     if val >= 100:
         return f"≈{prefix}{val:.0f}"
     return f"≈{prefix}{val:.2f}"
@@ -1440,7 +1463,7 @@ def build_rolling_12m_cycle_rows(
         )
 
         approx_px = _estimate_range_anchored_price(spot, tech_score, m_data)
-        approx_str = _fmt_price_ref(approx_px, spot) if spot > 0 else ""
+        approx_str = _fmt_price_ref(approx_px, symbol) if spot > 0 else ""
 
         if m_num == 9:
             stance = "离火冲月·深度清洗"
@@ -1513,7 +1536,7 @@ def build_rolling_12m_cycle_rows(
     if spot > 0:
         min_px = min(r["approx_price"] for r in rows)
         max_px = max(r["approx_price"] for r in rows)
-        price_range_str = f" | 区间参考价(非精确目标): <b>{_fmt_price_ref(min_px, spot)} ~ {_fmt_price_ref(max_px, spot)}</b>"
+        price_range_str = f" | 区间参考价(非精确目标): <b>{_fmt_price_ref(min_px, symbol)} ~ {_fmt_price_ref(max_px, symbol)}</b>"
 
     meta_info = {
         **natal,
@@ -1558,7 +1581,7 @@ def render_12m_cycle_block_above_options(
         f"<div style='background:#07193d; border:1.5px solid {flow['color']}; border-radius:8px; padding:8px 12px; margin:6px 0 8px 0;'>"
         f"<div style='font-size:14.5px; font-weight:900; color:{flow['color']};'>{flow['prefix']}{flow['badge']}</div>"
         f"<div style='font-size:12.5px; color:#e2e8f0; margin-top:2px;'>白话看点：{flow['explain']}（大运背景：{meta_info['era_desc']}）</div>"
-        f"<div style='font-size:12.5px; color:#93c5fd; font-weight:800; margin-top:2px;'>操作提醒：{flow['advice']}（注：以九紫离火运为顶层大背景，叠加上个股命盘与年/月柱互动及近期高低点区间估算，非精确预测）</div>"
+        f"<div style='font-size:12.5px; color:#93c5fd; font-weight:800; margin-top:2px;'>操作提醒：{flow['advice']}（注：以九紫离火运为顶层大背景，叠加上个股命盘与年/月柱互动，并以最新现价为锚点估算参考区间，非精确预测）</div>"
         f"</div>",
         unsafe_allow_html=True,
     )
