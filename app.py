@@ -475,7 +475,6 @@ def fetch_cycle_anchor_prices(symbol: str, fallback_spot: float) -> dict[str, An
         df_hist = df_hist.sort_values("Date").reset_index(drop=True)
         df_hist["d_only"] = pd.to_datetime(df_hist["Date"]).dt.date
 
-        # 1. 提取当年11月中旬（11月10日 ~ 11月20日）真实收盘均值作为固定基准锚点
         nov_mid_df = df_hist[
             (pd.to_datetime(df_hist["Date"]).dt.year == now_dt.year)
             & (pd.to_datetime(df_hist["Date"]).dt.month == 11)
@@ -493,7 +492,6 @@ def fetch_cycle_anchor_prices(symbol: str, fallback_spot: float) -> dict[str, An
             d_max = nov_mid_df["d_only"].max().strftime("%m/%d")
             mid_nov_label = f"11月中实盘({d_min}-{d_max})"
 
-        # 2. 提取上周真实最低价
         lw_df = df_hist[(df_hist["d_only"] >= last_monday) & (df_hist["d_only"] <= last_sunday)]
         if lw_df.empty and len(df_hist) >= 6:
             lw_df = df_hist.iloc[-6:-1]
@@ -516,7 +514,6 @@ def fetch_cycle_anchor_prices(symbol: str, fallback_spot: float) -> dict[str, An
 # ==================== 2. OPTIONS ENGINE (CBOE + NASDAQ + YAHOO REAL AGGREGATOR) ====================
 
 def _parse_occ_option_symbol(occ_sym: str) -> tuple[str | None, str | None, float | None]:
-    """解析标准 OCC 期权代码，例如 NVDA261127C00170000 -> ('2026-11-27', 'C', 170.0)"""
     s = str(occ_sym or "").strip().upper()
     if len(s) < 15:
         return None, None, None
@@ -536,7 +533,6 @@ def _parse_occ_option_symbol(occ_sym: str) -> tuple[str | None, str | None, floa
 
 @st.cache_data(ttl=120, show_spinner=False)
 def _query_cboe_realtime_bundle(symbol: str) -> tuple[list[str], dict[str, tuple[pd.DataFrame, pd.DataFrame]], str]:
-    """直连 CBOE 公开延迟期权链 JSON 接口（含真实 OI + 盘中 Volume + Gamma）"""
     if "." in symbol:
         return [], {}, "非美股无 CBOE 链"
     clean_sym = symbol.upper().strip()
@@ -601,7 +597,6 @@ def _query_cboe_realtime_bundle(symbol: str) -> tuple[list[str], dict[str, tuple
 
 @st.cache_data(ttl=120, show_spinner=False)
 def _query_nasdaq_option_bundle(symbol: str) -> tuple[list[str], dict[str, tuple[pd.DataFrame, pd.DataFrame]], str]:
-    """Nasdaq 官方期权链接口备份与交叉补充"""
     if "." in symbol:
         return [], {}, "非美股无 Nasdaq 链"
     clean_sym = symbol.upper().strip()
@@ -715,7 +710,6 @@ def _query_yahoo_yfinance_bundle(symbol: str) -> tuple[list[str], dict[str, tupl
         return [], {}, f"Yahoo 异常: {str(e)[:35]}"
 
 def _collect_multi_source_options(symbol: str) -> tuple[list[str], dict[str, dict[str, Any]], int, str, str]:
-    """三路真实期权源聚合：CBOE 实时链 -> Nasdaq 链 -> Yahoo 链 + 本地缓存兜底"""
     cboe_days, cboe_map, cboe_msg = _query_cboe_realtime_bundle(symbol)
     nq_days, nq_map, nq_msg = ([], {}, "") if len(cboe_map) >= 6 else _query_nasdaq_option_bundle(symbol)
     yh_days, yh_map, yh_msg = ([], {}, "") if (len(cboe_map) + len(nq_map)) >= 6 else _query_yahoo_yfinance_bundle(symbol)
@@ -796,7 +790,6 @@ def _build_company_real_day_keys(real_day_keys: list[str], base_dt: datetime, ma
     return chosen[:max_cols]
 
 def _score_wall_strength(df: pd.DataFrame, delta_days: int = 3) -> pd.DataFrame:
-    """真实墙强度评分 = 隔夜未平仓 OI + 盘中实时成交量 Volume 权重"""
     out = df.copy()
     oi_s = pd.to_numeric(out.get("openInterest", 0), errors="coerce").fillna(0.0)
     vol_s = pd.to_numeric(out.get("volume", 0), errors="coerce").fillna(0.0)
@@ -814,7 +807,7 @@ def extract_top3_walls(col_cdf, col_pdf, curr_p, delta_days: int = 3):
     cdf_clean = cdf_scored.sort_values("wall_power", ascending=False).drop_duplicates(subset=["strike"])
     pdf_clean = pdf_scored.sort_values("wall_power", ascending=False).drop_duplicates(subset=["strike"])
 
-    # 上方 Call Wall：保持贴近现价的主力博弈区（近端 -4% ~ +12%，远端 -2% ~ +18%）
+    # 上方 Call Wall
     if delta_days <= 7:
         c_min_bound, c_max_bound = curr_p * 0.96, curr_p * 1.12
     else:
@@ -834,17 +827,17 @@ def extract_top3_walls(col_cdf, col_pdf, curr_p, delta_days: int = 3):
     c_top_list = [(float(r["strike"]), int(r["wall_power"])) for _, r in top3_calls.iterrows()]
     call_wall_val = max(c_top_list, key=lambda x: x[1])[0] if c_top_list else None
 
-    # 下方 Put Wall：严格在现价下方，恢复到机构真实防守区（近端 -22% ~ -3%，远端 -28% ~ -5%）
+    # 下方 Put Wall：近端（<=7天）纳入贴身支撑（0.85 ~ 1.005 * 现价），远端保持深层防守（0.72 ~ 0.95 * 现价）
     if delta_days <= 7:
-        p_min_bound, p_max_bound = curr_p * 0.78, curr_p * 0.97
+        p_min_bound, p_max_bound = curr_p * 0.85, curr_p * 1.005
     else:
         p_min_bound, p_max_bound = curr_p * 0.72, curr_p * 0.95
 
     below_df = pdf_clean[(pdf_clean["strike"] >= p_min_bound) & (pdf_clean["strike"] <= p_max_bound)].copy()
     if len(below_df) < 3:
-        below_df = pdf_clean[(pdf_clean["strike"] >= curr_p * 0.68) & (pdf_clean["strike"] < curr_p)].copy()
+        below_df = pdf_clean[(pdf_clean["strike"] >= curr_p * 0.70) & (pdf_clean["strike"] <= curr_p * 1.01)].copy()
     if below_df.empty:
-        below_df = pdf_clean[pdf_clean["strike"] < curr_p].copy()
+        below_df = pdf_clean[pdf_clean["strike"] <= curr_p * 1.01].copy()
     if below_df.empty:
         below_df = pdf_clean.copy()
 
@@ -859,7 +852,6 @@ def extract_top3_walls(col_cdf, col_pdf, curr_p, delta_days: int = 3):
     return c_top_list, call_wall_val, p_bot_list, put_wall_val
 
 def compute_aggregate_real_walls(combined_by_day: dict[str, dict[str, Any]], spot: float) -> dict[str, Any]:
-    """全期限合并计算真实累计 Call Wall 与 Put Wall"""
     c_frames, p_frames = [], []
     for _, rec in combined_by_day.items():
         cdf, pdf = rec.get("cdf"), rec.get("pdf")
@@ -875,7 +867,7 @@ def compute_aggregate_real_walls(combined_by_day: dict[str, dict[str, Any]], spo
     p_all["power"] = p_all["openInterest"] + p_all["volume"] * 1.3
 
     c_band = c_all[(c_all["strike"] >= spot * 0.94) & (c_all["strike"] <= spot * 1.15)].sort_values("power", ascending=False).head(3)
-    p_band = p_all[(p_all["strike"] >= spot * 0.75) & (p_all["strike"] <= spot * 0.97)].sort_values("power", ascending=False).head(3)
+    p_band = p_all[(p_all["strike"] >= spot * 0.75) & (p_all["strike"] <= spot * 0.99)].sort_values("power", ascending=False).head(3)
 
     c_list = [(float(r["strike"]), int(r["power"]), float(r["strike"]) < spot) for _, r in c_band.iterrows()]
     p_list = [(float(r["strike"]), int(r["power"]), float(r["strike"]) > spot) for _, r in p_band.iterrows()]
@@ -1169,7 +1161,7 @@ def build_custom_option_matrix_html(symbol, spot):
     """
     return html
 
-# ==================== 3. PERIOD 9 LI-FIRE MACRO (30%) + NATAL GANZHI DOMINANT (70%) ====================
+# ==================== 3. PERIOD 9 LI-FIRE MACRO (3分) + NATAL GANZHI DOMINANT (7分) ====================
 
 TIANGAN = ["甲", "乙", "丙", "丁", "戊", "己", "庚", "辛", "壬", "癸"]
 DIZHI = ["子", "丑", "寅", "卯", "辰", "巳", "午", "未", "申", "酉", "戌", "亥"]
@@ -1616,10 +1608,6 @@ def _estimate_range_anchored_price(
     last_week_low: float = 0.0,
     month_num: int = 0,
 ) -> float:
-    """
-    以 11月中旬实盘价格为固定基准锚点（50分位置），不再随当日盘中价格漂移；
-    计算 12月低位时，结合上周真实低位的回撤幅度进行双重校准。
-    """
     if anchor_px <= 0:
         return 0.0
 
@@ -1711,27 +1699,29 @@ def build_rolling_12m_cycle_rows(
         p9_m = PERIOD9_LI_FIRE_MONTHS[m_num]
         dist = _macro_calendar_factors(y_num, m_num, e_months, ref_dt=now_dt)
 
+        # 7分：该股自身天干地支与流月/流年干支的冲合生克
         yr_delta, yr_note = _ganzhi_pair_interaction(s_gan, s_zhi, s_el, y_gan, y_zhi, context_prefix="年")
         mo_delta, mo_note = _ganzhi_pair_interaction(s_gan, s_zhi, s_el, m_gan, m_zhi, context_prefix="月")
+        natal_raw_score = 50.0 + (mo_delta * 1.45 + yr_delta * 0.75) * vol_mult
 
-        natal_cycle_score = (mo_delta * 1.35 + yr_delta * 0.65) * vol_mult
-        macro_bg_score = era_bonus * 0.75
-
+        # 3分：九紫离火大运感应 + 税务/长假/财报宏观节律
         earn_adj = dist["earnings_delta"]
         if dist["is_pre_earnings"] and flow_info["state"] == "偏撤退":
             earn_adj -= 2.0
         elif dist["is_pre_earnings"] and flow_info["state"] == "偏进场":
             earn_adj += 1.5
 
-        raw_score = (
+        macro_3_score = (
             p9_m["base_tech"]
-            + macro_bg_score
-            + natal_cycle_score
+            + era_bonus * 0.85
             + dist["tax_delta"]
             + dist["holiday_delta"]
             + dist["quarter_delta"]
             + earn_adj
         )
+
+        # 严格按 3分九运离火 + 7分本身天干地支 加权合成
+        raw_score = 0.70 * natal_raw_score + 0.30 * macro_3_score
         tech_score = round(max(8.0, min(98.0, raw_score)), 1)
 
         real_score = round(
@@ -1739,10 +1729,8 @@ def build_rolling_12m_cycle_rows(
                 12.0,
                 min(
                     98.0,
-                    p9_m["real"]
-                    + mo_delta * 0.35
-                    + yr_delta * 0.20
-                    + (dist["tax_delta"] + dist["holiday_delta"] + dist["quarter_delta"]) * 0.35,
+                    0.70 * (p9_m["real"] + mo_delta * 0.45 + yr_delta * 0.25)
+                    + 0.30 * (p9_m["real"] + (dist["tax_delta"] + dist["holiday_delta"] + dist["quarter_delta"]) * 0.6),
                 ),
             ),
             1,
@@ -1871,7 +1859,7 @@ def render_12m_cycle_block_above_options(
     show_real_line = h_col2.toggle("显示虚实套利对比线", value=True, key=f"cycle_real_{symbol}")
 
     h_col1.markdown(
-        f"<div class='card-header' style='margin-bottom:2px;'>🧭 {symbol} 未来12个月滚动能量表 (3分大运税务假期 · 7分个股干支冲合 | 定盘: <b>{meta_info['ganzhi']}·{meta_info['element']}</b> · {meta_info['role']})</div>"
+        f"<div class='card-header' style='margin-bottom:2px;'>🧭 {symbol} 未来12个月滚动能量表 (3分九运离火 · 7分本身天干地支 | 定盘: <b>{meta_info['ganzhi']}·{meta_info['element']}</b> · {meta_info['role']})</div>"
         f"<div style='font-size:13.5px; color:#cbd5e1;'>大运背景: <b>{meta_info['era_name']}（{meta_info['era_tag']}）</b> | 现年柱: <b>{meta_info['year_ganzhi']}({meta_info['cur_year_note']})</b> | 区间: <b>{cur_year}年{cur_month}月 → {end_row['year_num']}年{end_row['month_num']}月</b> | 财报季: <b>{e_str}</b>{cur_phase_txt}<br>"
         f"📌 固定锚点({meta_info['mid_nov_label']}): <b style='color:#facc15;'>{meta_info['mid_nov_anchor_str']}</b> | 上周低位{lw_dt_txt}: <b style='color:#38bdf8;'>{meta_info['last_week_low_str']}</b> | 推算12月中低位: <b style='color:#f87171;'>{meta_info['dec_low_str']}</b> | 高:<b>{meta_info['peak_label']}</b> / 低:<b>{meta_info['trough_label']}</b>{meta_info['price_range_str']}</div>",
         unsafe_allow_html=True,
@@ -1881,7 +1869,7 @@ def render_12m_cycle_block_above_options(
         f"<div style='background:#07193d; border:1.5px solid {flow['color']}; border-radius:8px; padding:8px 12px; margin:6px 0 8px 0;'>"
         f"<div style='font-size:14.5px; font-weight:900; color:{flow['color']};'>{flow['prefix']}{flow['badge']}</div>"
         f"<div style='font-size:12.5px; color:#e2e8f0; margin-top:2px;'>白话看点：{flow['explain']}（大运背景：{meta_info['era_desc']}）</div>"
-        f"<div style='font-size:12.5px; color:#93c5fd; font-weight:800; margin-top:2px;'>操作提醒：{flow['advice']}（注：以11月中旬实盘价格为固定锚点，并结合上周真实低位校准12月中低位，非精确预测）</div>"
+        f"<div style='font-size:12.5px; color:#93c5fd; font-weight:800; margin-top:2px;'>操作提醒：{flow['advice']}（注：3分九运离火+7分本身天干地支独立计算，以11月中旬实盘价格为固定锚点并结合上周低位校准12月中低位，非精确预测）</div>"
         f"</div>",
         unsafe_allow_html=True,
     )
@@ -1896,7 +1884,7 @@ def render_12m_cycle_block_above_options(
         x=x_labels,
         y=y_tech,
         mode="lines+markers+text",
-        name=f"{symbol} (70%个股干支 + 30%离火/税假)",
+        name=f"{symbol} (7分自身干支 + 3分九运离火)",
         text=pt_labels,
         textposition="top center",
         line=dict(color="#f97316", width=3.2),
