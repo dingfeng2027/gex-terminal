@@ -1494,7 +1494,7 @@ def build_rolling_12m_cycle_rows(
             action_hint = "等财报波动消化/守纪律"
             badge_color = "#38bdf8"
         elif dist["is_pre_earnings"]:
-            stance = f"财报前窗·{flow['short_tag']}"
+            stance = f"财报前窗·{flow_info['short_tag']}"
             action_hint = "防冲高兑现 / 不盲目追高" if flow_info["state"] == "偏撤退" else "留意抢跑节奏 / 控仓"
             badge_color = "#f59e0b"
         elif tech_score >= 72:
