@@ -879,7 +879,7 @@ def build_custom_option_matrix_html(symbol, spot):
     """
     return html
 
-# ==================== 3. PERIOD 9 LI-FIRE MACRO + NATAL-FIRST CYCLE ENGINE ====================
+# ==================== 3. PERIOD 9 LI-FIRE MACRO (30%) + NATAL GANZHI DOMINANT (70%) ====================
 
 TIANGAN = ["甲", "乙", "丙", "丁", "戊", "己", "庚", "辛", "壬", "癸"]
 DIZHI = ["子", "丑", "寅", "卯", "辰", "巳", "午", "未", "申", "酉", "戌", "亥"]
@@ -961,20 +961,20 @@ STOCK_NATAL_SEEDS: dict[str, dict[str, Any]] = {
     "EQQQ.L": {"gan": "乙", "zhi": "巳", "role": "木火纳指宽基", "earnings": [1, 4, 7, 10]},
 }
 
-# 顶层大运：九紫离火运（2024–2043）下各月天然能量波段与虚实节律
+# 顶层大运：九紫离火运（2024–2043）背景底盘（30%辅助定位，让出70%空间给个股天干地支冲合生克）
 PERIOD9_LI_FIRE_MONTHS = {
-    1:  {"base_tech": 46.0, "real": 75.0, "amp": 1.00, "tag": "冬末重配", "desc": "底部整固·新年流动性回流"},
-    2:  {"base_tech": 60.0, "real": 68.0, "amp": 1.05, "tag": "春初脉冲", "desc": "离火启暖·财报季预期博弈"},
-    3:  {"base_tech": 24.0, "real": 52.0, "amp": 1.15, "tag": "税务低点", "desc": "3月底税务结算·深蹲低吸"},
-    4:  {"base_tech": 68.0, "real": 64.0, "amp": 1.05, "tag": "税后回流", "desc": "新财年资金回补·Q1财报"},
-    5:  {"base_tech": 64.0, "real": 66.0, "amp": 1.00, "tag": "夏前过渡", "desc": "离火渐旺·业绩消化切换"},
-    6:  {"base_tech": 60.0, "real": 58.0, "amp": 1.00, "tag": "年中整固", "desc": "年中再平衡·夏至观望"},
-    7:  {"base_tech": 78.0, "real": 62.0, "amp": 1.10, "tag": "中报冲刺", "desc": "盛夏中报窗·业绩与指引博弈"},
-    8:  {"base_tech": 74.0, "real": 36.0, "amp": 1.15, "tag": "虚火震荡", "desc": "离火偏躁·财报前震荡(不追高)"},
-    9:  {"base_tech": 22.0, "real": 45.0, "amp": 1.30, "tag": "冲月清洗", "desc": "九紫离火·冲月清洗(黄金坑布局)"},
-    10: {"base_tech": 86.0, "real": 78.0, "amp": 1.25, "tag": "旺月爆发", "desc": "旺月财报兑现·利润落袋"},
-    11: {"base_tech": 64.0, "real": 92.0, "amp": 1.05, "tag": "成果入库", "desc": "感恩节假期·实盘与税务筹划"},
-    12: {"base_tech": 14.0, "real": 60.0, "amp": 1.30, "tag": "刑月重塑", "desc": "年底税务+刑月破月·防洗盘重塑"},
+    1:  {"base_tech": 50.0, "real": 74.0, "tag": "冬末重配", "desc": "新年流动性回流·整固"},
+    2:  {"base_tech": 54.0, "real": 68.0, "tag": "春初脉冲", "desc": "离火启暖·财报预期窗"},
+    3:  {"base_tech": 50.0, "real": 54.0, "tag": "季末税窗", "desc": "3月底税季卖盘+季末调仓"},
+    4:  {"base_tech": 56.0, "real": 65.0, "tag": "税后回流", "desc": "新财年资金回补"},
+    5:  {"base_tech": 53.0, "real": 66.0, "tag": "夏前节律", "desc": "离火渐旺·春末休整"},
+    6:  {"base_tech": 52.0, "real": 60.0, "tag": "年中整固", "desc": "年中再平衡"},
+    7:  {"base_tech": 57.0, "real": 63.0, "tag": "中报节律", "desc": "盛夏中报窗·假期交织"},
+    8:  {"base_tech": 55.0, "real": 44.0, "tag": "离火震荡", "desc": "盛夏后离火偏躁·防追高"},
+    9:  {"base_tech": 51.0, "real": 52.0, "tag": "冲月清洗", "desc": "9月中旬冲月清洗+四巫换仓"},
+    10: {"base_tech": 58.0, "real": 76.0, "tag": "旺月兑现", "desc": "旺月财报与业绩兑现"},
+    11: {"base_tech": 54.0, "real": 86.0, "tag": "成果入库", "desc": "感恩节假期+实盘筹划"},
+    12: {"base_tech": 49.0, "real": 62.0, "tag": "刑月税假", "desc": "12月中旬年底税务+圣诞长假"},
 }
 
 def _year_to_ganzhi(year: int) -> tuple[str, str]:
@@ -993,34 +993,34 @@ def _solar_month_ganzhi(year: int, month: int) -> tuple[str, str]:
 
 def evaluate_period9_li_fire_affinity(stock_el: str, stock_zhi: str) -> dict[str, Any]:
     """
-    顶层大环境：九紫离火运（2024–2043，离卦属火，午火为极旺之位）
-    计算个股本命五行在九紫离火大运下的得运顺逆与振幅倍率。
+    顶层大环境：九紫离火运（2024–2043，离卦属火）
+    作为宏观背景层（约30%权重定位），提供离火大运顺逆与振幅弹性。
     """
     if stock_el == "火":
-        bonus = 7.0
-        vol_mult = 1.22
+        bonus = 8.0
+        vol_mult = 1.18
         tag = "离火当运·比和共振"
-        desc = "本命属火直入九紫离火大运，顺风爆发力强，冲刑月洗盘也更剧烈"
+        desc = "本命属火顺九紫离火大运，顺风弹性强，冲刑月波动更显著"
     elif stock_el == "木":
-        bonus = 5.5
-        vol_mult = 1.15
+        bonus = 6.5
+        vol_mult = 1.12
         tag = "木生离火·顺势泄秀"
-        desc = "木生离火得大运之气，成长弹性足，逢合生月易出主升段"
+        desc = "木生离火得大运之气，遇合生月易走强，逢冲克月亦会回踩"
     elif stock_el == "土":
-        bonus = 3.0
-        vol_mult = 0.90
+        bonus = 4.0
+        vol_mult = 0.92
         tag = "火生厚土·承接稳健"
-        desc = "离火生土得大运滋养，波动相对收敛，抗跌与承接力较稳"
+        desc = "离火生土得大运滋养，波动相对收敛，承接力较稳"
     elif stock_el == "金":
-        bonus = -4.5
-        vol_mult = 1.25
-        tag = "离火炼金·波段分化"
-        desc = "火克金受大运淬炼，需借水土通关，冲克月易深蹲、顺月易反弹"
-    else:  # 水
-        bonus = -3.0
+        bonus = -5.5
         vol_mult = 1.20
+        tag = "离火炼金·波段分化"
+        desc = "火克金受离火淬炼，遇冲克月易深蹲，得生扶/合月易反弹"
+    else:  # 水
+        bonus = -4.0
+        vol_mult = 1.16
         tag = "水火既济·冲克明显"
-        desc = "水火相激，得木火助则成既济大涨，逢冲刑则剧烈回撤"
+        desc = "水火相激，得合生则顺，逢冲刑克则回撤较明显"
 
     if stock_zhi == "午":
         bonus += 2.0
@@ -1045,39 +1045,42 @@ def _ganzhi_pair_interaction(
     other_zhi: str,
     context_prefix: str,
 ) -> tuple[float, str]:
-    """计算目标干支（年柱或月柱）与个股本命干支的生克冲合刑"""
+    """
+    计算目标干支（年柱或月柱）与个股本命干支的生克冲合刑（70%主导核心）
+    放大冲/刑/克/六合/生扶的区分度，让不同股票在不同月份走出各自强弱。
+    """
     other_el = TIANGAN_ELEMENT[other_gan]
     score = 0.0
     tags = []
 
     pair_zhi = frozenset({base_zhi, other_zhi})
     if pair_zhi in CLASH_PAIRS:
-        score -= 11.5
+        score -= 17.0
         tags.append(f"{context_prefix}{base_zhi}{other_zhi}相冲")
     elif pair_zhi in PUNISHMENT_PAIRS:
-        score -= 8.5
+        score -= 13.5
         tags.append(f"{context_prefix}{base_zhi}{other_zhi}相刑")
     elif pair_zhi in SIX_HARMONY_PAIRS:
-        score += 10.0
+        score += 15.5
         tags.append(f"{context_prefix}{base_zhi}{other_zhi}六合")
     elif base_zhi == other_zhi:
-        score += 5.5
+        score += 8.5
         tags.append(f"{context_prefix}同支{other_zhi}")
 
     if GENERATES.get(other_el) == base_el:
-        score += 8.0
+        score += 12.0
         tags.append(f"{context_prefix}{other_el}生本命{base_el}")
     elif GENERATES.get(base_el) == other_el:
-        score -= 3.5
+        score -= 5.0
         tags.append(f"{context_prefix}本命{base_el}泄{other_el}")
     elif OVERCOMES.get(other_el) == base_el:
-        score -= 9.5
+        score -= 14.0
         tags.append(f"{context_prefix}{other_el}克本命{base_el}")
     elif OVERCOMES.get(base_el) == other_el:
-        score += 5.0
+        score += 7.5
         tags.append(f"{context_prefix}本命{base_el}制{other_el}")
     elif other_el == base_el:
-        score += 4.5
+        score += 6.5
         tags.append(f"{context_prefix}比和{base_el}")
 
     if not tags:
@@ -1158,22 +1161,22 @@ def get_earnings_phase_status(
     is_pre_earnings = (next_m in e_months) and not is_post_earnings_now
 
     if is_post_earnings_now:
-        delta = -2.5
+        delta = -2.0
         label = "财报刚出·消化期"
         note = "财报刚发布·消化重定价"
         flow_prefix = "财报后资金风向："
     elif is_pre_earnings:
-        delta = 4.0
+        delta = 3.0
         label = "财报前窗"
         note = "财报前抢跑/预期窗"
         flow_prefix = "财报前资金风向："
     elif is_earnings_month:
-        delta = 2.5
+        delta = 2.0
         label = "财报月"
         note = "财报日波动窗"
         flow_prefix = "财报期资金风向："
     elif prev_m in e_months:
-        delta = -3.0
+        delta = -2.5
         label = "财报后消化"
         note = "财报后兑现消化"
         flow_prefix = "财报后资金风向："
@@ -1199,33 +1202,42 @@ def _macro_calendar_factors(
     e_months: list[int],
     ref_dt: datetime | None = None,
 ) -> dict[str, Any]:
-    """九紫离火运背景下的制度日历（税务结算、长假、财报窗口）"""
+    """
+    按历史回调幅度校准的税务结算、季末调仓与假期节律修正（30%辅助层）：
+    - 12月中旬：年底税务结算(-8.0) + 圣诞/跨年长假(-7.0) = -15.0
+    - 3月底：税季卖盘(-11.0) + 季末调仓(-4.0) = -15.0
+    - 9月中旬：冲月清洗(-8.0) + 季末四巫换仓(-4.0) = -12.0
+    - 11月感恩节：-6.0；1月新年初 / 5月春末 / 7月盛夏假期：-4.5 ~ -5.0
+    """
     tax_delta = 0.0
     holiday_delta = 0.0
+    quarter_delta = 0.0
     notes: list[str] = []
 
     e_info = get_earnings_phase_status(y_num, m_num, e_months, ref_dt=ref_dt)
     earnings_delta = e_info["delta"]
 
     if m_num == 3:
-        tax_delta = -6.0
-        notes.append("税务结算低点")
-    elif m_num in (11, 12):
-        tax_delta = -4.0
-        notes.append("年底税务筹划")
-
-    if m_num in (12, 1):
-        holiday_delta = -2.5
-        notes.append("圣诞/新年假期")
-    elif m_num == 5:
-        holiday_delta = -1.5
-        notes.append("5月底春末假期")
-    elif m_num == 7:
-        holiday_delta = -1.5
-        notes.append("7月初假日流动")
+        tax_delta = -11.0
+        quarter_delta = -4.0
+        notes.append("3月底税季卖盘(-11)+季末调仓(-4)")
+    elif m_num == 12:
+        tax_delta = -8.0
+        holiday_delta = -7.0
+        notes.append("12月中旬年底税务(-8)+圣诞长假(-7)")
+    elif m_num == 9:
+        tax_delta = -8.0
+        quarter_delta = -4.0
+        notes.append("9月中旬冲月清洗(-8)+四巫换仓(-4)")
     elif m_num == 11:
-        holiday_delta = -2.0
-        notes.append("感恩节假期")
+        holiday_delta = -6.0
+        notes.append("11月感恩节假期(-6)")
+    elif m_num == 1:
+        holiday_delta = -5.0
+        notes.append("1月初跨年长假余波(-5)")
+    elif m_num in (5, 7):
+        holiday_delta = -4.5
+        notes.append(f"{m_num}月长假流动性回落(-4.5)")
 
     if e_info["note"]:
         notes.append(e_info["note"])
@@ -1233,6 +1245,7 @@ def _macro_calendar_factors(
     return {
         "tax_delta": tax_delta,
         "holiday_delta": holiday_delta,
+        "quarter_delta": quarter_delta,
         "earnings_delta": earnings_delta,
         "is_pre_earnings": e_info["is_pre_earnings"],
         "is_earnings_month": e_info["is_earnings_month"],
@@ -1331,8 +1344,8 @@ def _estimate_range_anchored_price(spot: float, tech_score: float, m_data: dict[
     """
     紧跟最新现价 spot 做锚定估算（非精确目标价）：
     - 中性分 (~50分) 紧贴当前最新现价 spot
-    - 低分 (8~35分，冲月/刑月/税务低点) 锚定在现价下方回调带，避免急跌后低点反而高于现价
-    - 高分 (65~98分，旺月爆发) 向上延伸至现价上方波段区间（参考近期高点与52周高点上限）
+    - 低分 (8~35分) 锚定在现价下方回调带，避免急跌后低点反而高于现价
+    - 高分 (65~98分) 向上延伸至现价上方波段区间（参考近期高点与52周高点上限）
     """
     if spot <= 0:
         return 0.0
@@ -1343,7 +1356,6 @@ def _estimate_range_anchored_price(spot: float, tech_score: float, m_data: dict[
     h52 = float(m_info.get("high52") or 0.0)
     l52 = float(m_info.get("low52") or 0.0)
 
-    # 下方锚点严格不高于最新现价的 93%，若近期低点更低则温和兼顾
     default_floor = spot * 0.84
     if l52 > 0 and l52 < spot:
         floor_px = max(spot * 0.78, min(default_floor, (spot * 0.65 + l52 * 0.35)))
@@ -1353,7 +1365,6 @@ def _estimate_range_anchored_price(spot: float, tech_score: float, m_data: dict[
         floor_px = default_floor
     floor_px = min(floor_px, spot * 0.93)
 
-    # 上方锚点以最新现价为基准向上延展，兼顾前期高点空间但不过度脱离当前水位
     default_ceil = spot * 1.24
     ref_top = max(r_high, h52 * 0.95) if (r_high > 0 or h52 > 0) else default_ceil
     if ref_top > spot * 1.05:
@@ -1363,11 +1374,9 @@ def _estimate_range_anchored_price(spot: float, tech_score: float, m_data: dict[
 
     neutral_score = 50.0
     if tech_score <= neutral_score:
-        # 8分 -> floor_px，50分 -> spot
         ratio = max(0.0, min(1.0, (tech_score - 8.0) / (neutral_score - 8.0)))
         est = floor_px + (spot - floor_px) * ratio
     else:
-        # 50分 -> spot，98分 -> ceil_px
         ratio = max(0.0, min(1.0, (tech_score - neutral_score) / (98.0 - neutral_score)))
         est = spot + (ceil_px - spot) * ratio
 
@@ -1389,10 +1398,9 @@ def build_rolling_12m_cycle_rows(
     pdf: pd.DataFrame | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """
-    【第二步走势计算】
-    1) 先调 resolve_stock_natal_chart 定出个股命盘与九紫离火运契合度
-    2) 以【九紫离火运】为顶层大背景，叠加【个股命盘 × 年柱/月柱】的生克冲合刑
-    3) 突出冲月(9月)/旺月(10月)/刑月(12月)/税谷(3月)的鲜明转折，同时保留不同股票在离火运下的差异化分化
+    【第二步走势计算 · 3/7 开结构】
+    - 70% 主导：个股本命天干地支 × 流年柱/流月柱的生克冲合刑（不截断正向合生与逆向冲克）
+    - 30% 辅助：九紫离火大运背景 + 按历史回撤校准的税务结算/季末换仓/假期节律
     """
     now_dt = datetime.today()
     natal = resolve_stock_natal_chart(symbol, ref_dt=now_dt)
@@ -1424,22 +1432,16 @@ def build_rolling_12m_cycle_rows(
         y_gan, y_zhi = _year_to_ganzhi(y_num)
         m_gan, m_zhi = _solar_month_ganzhi(y_num, m_num)
 
-        # 九紫离火运月度大运基底 + 个股离火得运顺逆
         p9_m = PERIOD9_LI_FIRE_MONTHS[m_num]
         dist = _macro_calendar_factors(y_num, m_num, e_months, ref_dt=now_dt)
 
-        # 年柱 + 月柱与个股本命干支的生克冲合刑
+        # 个股本命干支与流年、流月干支的生克冲合刑（主导70%）
         yr_delta, yr_note = _ganzhi_pair_interaction(s_gan, s_zhi, s_el, y_gan, y_zhi, context_prefix="年")
         mo_delta, mo_note = _ganzhi_pair_interaction(s_gan, s_zhi, s_el, m_gan, m_zhi, context_prefix="月")
 
-        # 冲月(9月)、刑月(12月)、税务低点(3月)在九紫离火运下清洗力度放大，但仍保留个股命盘差异
-        if m_num in (3, 9, 12):
-            effective_era = era_bonus * 0.35
-            effective_gz = (mo_delta * 1.15 + yr_delta * 0.45) * p9_m["amp"]
-            effective_gz = min(effective_gz, 14.0)
-        else:
-            effective_era = era_bonus
-            effective_gz = (mo_delta * 1.25 + yr_delta * 0.50) * vol_mult
+        # 月柱生克冲合占更大权重，年柱定全年基调，并乘上个股离火运波动倍率
+        natal_cycle_score = (mo_delta * 1.35 + yr_delta * 0.65) * vol_mult
+        macro_bg_score = era_bonus * 0.75
 
         earn_adj = dist["earnings_delta"]
         if dist["is_pre_earnings"] and flow_info["state"] == "偏撤退":
@@ -1449,16 +1451,26 @@ def build_rolling_12m_cycle_rows(
 
         raw_score = (
             p9_m["base_tech"]
-            + effective_era
-            + effective_gz
+            + macro_bg_score
+            + natal_cycle_score
             + dist["tax_delta"]
             + dist["holiday_delta"]
+            + dist["quarter_delta"]
             + earn_adj
         )
         tech_score = round(max(8.0, min(98.0, raw_score)), 1)
 
         real_score = round(
-            max(12.0, min(98.0, p9_m["real"] + mo_delta * 0.30 + yr_delta * 0.20 + dist["tax_delta"] * 0.25)),
+            max(
+                12.0,
+                min(
+                    98.0,
+                    p9_m["real"]
+                    + mo_delta * 0.35
+                    + yr_delta * 0.20
+                    + (dist["tax_delta"] + dist["holiday_delta"] + dist["quarter_delta"]) * 0.35,
+                ),
+            ),
             1,
         )
 
@@ -1466,31 +1478,31 @@ def build_rolling_12m_cycle_rows(
         approx_str = _fmt_price_ref(approx_px, symbol) if spot > 0 else ""
 
         if m_num == 9:
-            stance = "离火冲月·深度清洗"
-            action_hint = "黄金坑分批低吸布局"
+            stance = "冲月清洗·四巫窗"
+            action_hint = "急洗坑分批低吸布局"
             badge_color = "#dc2626"
         elif m_num == 12:
-            stance = "离火刑月·破月重塑"
-            action_hint = "避险保本 / 防年底洗盘"
+            stance = "年底税务·圣诞长假"
+            action_hint = "防年末兑现/控仓避险"
             badge_color = "#dc2626"
         elif m_num == 3:
-            stance = "税务结算低点"
-            action_hint = "3月底深蹲分批低吸"
+            stance = "3月底税季+季末窗"
+            action_hint = "深蹲回踩留意分批低吸"
             badge_color = "#dc2626"
         elif dist["is_post_earnings_now"]:
             stance = "财报刚出·消化中"
             action_hint = "等财报波动消化/守纪律"
             badge_color = "#38bdf8"
         elif dist["is_pre_earnings"]:
-            stance = f"财报前窗·{flow_info['short_tag']}"
+            stance = f"财报前窗·{flow['short_tag']}"
             action_hint = "防冲高兑现 / 不盲目追高" if flow_info["state"] == "偏撤退" else "留意抢跑节奏 / 控仓"
             badge_color = "#f59e0b"
         elif tech_score >= 72:
-            stance = "离火旺月·顺势爆发"
-            action_hint = "利润兑现 / 防虚火冲高"
+            stance = "干支顺势·强旺窗"
+            action_hint = "顺势波段 / 分批兑现"
             badge_color = "#16a34a"
         elif tech_score >= 45:
-            stance = "蓄势整固·成果入库"
+            stance = "干支蓄势·平衡窗"
             action_hint = "回踩分批 / 守现金"
             badge_color = "#2563eb"
         else:
@@ -1571,8 +1583,8 @@ def render_12m_cycle_block_above_options(
     show_real_line = h_col2.toggle("显示虚实套利对比线", value=True, key=f"cycle_real_{symbol}")
 
     h_col1.markdown(
-        f"<div class='card-header' style='margin-bottom:2px;'>🧭 {symbol} 未来12个月滚动能量表 (大运: <b>{meta_info['era_name']}</b> | 定盘: <b>{meta_info['ganzhi']}·{meta_info['element']}</b> · {meta_info['role']})</div>"
-        f"<div style='font-size:13.5px; color:#cbd5e1;'>离火大运契合: <b>{meta_info['era_tag']}</b> | 现年柱: <b>{meta_info['year_ganzhi']}({meta_info['cur_year_note']})</b> | 区间: <b>{cur_year}年{cur_month}月 → {end_row['year_num']}年{end_row['month_num']}月</b> | 财报季: <b>{e_str}</b>{cur_phase_txt}<br>"
+        f"<div class='card-header' style='margin-bottom:2px;'>🧭 {symbol} 未来12个月滚动能量表 (3分大运税务假期 · 7分个股干支冲合 | 定盘: <b>{meta_info['ganzhi']}·{meta_info['element']}</b> · {meta_info['role']})</div>"
+        f"<div style='font-size:13.5px; color:#cbd5e1;'>大运背景: <b>{meta_info['era_name']}（{meta_info['era_tag']}）</b> | 现年柱: <b>{meta_info['year_ganzhi']}({meta_info['cur_year_note']})</b> | 区间: <b>{cur_year}年{cur_month}月 → {end_row['year_num']}年{end_row['month_num']}月</b> | 财报季: <b>{e_str}</b>{cur_phase_txt}<br>"
         f"高:<b>{meta_info['peak_label']}</b> / 低:<b>{meta_info['trough_label']}</b>{meta_info['price_range_str']}</div>",
         unsafe_allow_html=True,
     )
@@ -1581,7 +1593,7 @@ def render_12m_cycle_block_above_options(
         f"<div style='background:#07193d; border:1.5px solid {flow['color']}; border-radius:8px; padding:8px 12px; margin:6px 0 8px 0;'>"
         f"<div style='font-size:14.5px; font-weight:900; color:{flow['color']};'>{flow['prefix']}{flow['badge']}</div>"
         f"<div style='font-size:12.5px; color:#e2e8f0; margin-top:2px;'>白话看点：{flow['explain']}（大运背景：{meta_info['era_desc']}）</div>"
-        f"<div style='font-size:12.5px; color:#93c5fd; font-weight:800; margin-top:2px;'>操作提醒：{flow['advice']}（注：以九紫离火运为顶层大背景，叠加上个股命盘与年/月柱互动，并以最新现价为锚点估算参考区间，非精确预测）</div>"
+        f"<div style='font-size:12.5px; color:#93c5fd; font-weight:800; margin-top:2px;'>操作提醒：{flow['advice']}（注：70%由个股本命天干地支与流年/流月生克冲合驱动，30%叠加九紫离火大运及税务/假期/季末节律，并以最新现价为锚点估算参考区间，非精确预测）</div>"
         f"</div>",
         unsafe_allow_html=True,
     )
@@ -1596,7 +1608,7 @@ def render_12m_cycle_block_above_options(
         x=x_labels,
         y=y_tech,
         mode="lines+markers+text",
-        name=f"{symbol} 九紫离火运 + 命盘/年柱/月柱",
+        name=f"{symbol} (70%个股干支 + 30%离火/税假)",
         text=pt_labels,
         textposition="top center",
         line=dict(color="#f97316", width=3.2),
@@ -1666,7 +1678,7 @@ def render_12m_cycle_block_above_options(
                 y=102,
                 xref="x",
                 yref="y",
-                text="刑月重塑",
+                text="年底税务/长假",
                 showarrow=False,
                 xanchor="center",
                 yanchor="top",
@@ -1685,7 +1697,7 @@ def render_12m_cycle_block_above_options(
                 y=102,
                 xref="x",
                 yref="y",
-                text="税务低点",
+                text="3月底税季低点",
                 showarrow=False,
                 xanchor="center",
                 yanchor="top",
@@ -1755,7 +1767,7 @@ def render_12m_cycle_block_above_options(
         if r["month_num"] == 9:
             tag_badge += "<span style='background:#ef4444; color:#fff; font-size:11px; font-weight:900; padding:1px 5px; border-radius:4px; margin-left:4px;'>冲月</span>"
         elif r["month_num"] == 12:
-            tag_badge += "<span style='background:#2563eb; color:#fff; font-size:11px; font-weight:900; padding:1px 5px; border-radius:4px; margin-left:4px;'>刑月</span>"
+            tag_badge += "<span style='background:#2563eb; color:#fff; font-size:11px; font-weight:900; padding:1px 5px; border-radius:4px; margin-left:4px;'>税假</span>"
         elif r["month_num"] == 3:
             tag_badge += "<span style='background:#ef4444; color:#fff; font-size:11px; font-weight:900; padding:1px 5px; border-radius:4px; margin-left:4px;'>税谷</span>"
         elif is_post_now:
@@ -1773,7 +1785,7 @@ def render_12m_cycle_block_above_options(
             f"<span style='font-size:14px; font-weight:900; color:#93c5fd;'>{r['short_title']}({r['y_ganzhi']}·{r['m_ganzhi']}){tag_badge}</span>"
             f"<span style='font-size:14.5px; font-weight:900; color:{r['badge_color']};'>{r['tech_score']:.0f}分{px_badge}</span>"
             f"</div>"
-            f"<div style='font-size:12px; color:#facc15; font-weight:800; margin-top:2px;'>离火运:{r['rhythm_tag']} · {r['rhythm_desc']}</div>"
+            f"<div style='font-size:12px; color:#facc15; font-weight:800; margin-top:2px;'>{r['rhythm_tag']} · {r['rhythm_desc']}</div>"
             f"<div style='font-size:11.5px; color:#cbd5e1; margin-top:2px;'>{r['factor_line']} | 实盘:{r['real_score']:.0f}</div>"
             f"<div style='font-size:12px; font-weight:800; color:#4ade80; border-top:1px solid #1e3a8a; margin-top:4px; padding-top:4px;'>"
             f"{r['stance']}｜{r['action_hint']}"
@@ -1789,7 +1801,7 @@ def render_12m_cycle_block_above_options(
 # 每次页面渲染先确保当前选中标的已走完“第一步：定命盘”
 active_natal = resolve_stock_natal_chart(st.session_state.selected_ticker)
 
-top_bar_html = "<div class='top-bar'><div class='brand-title'>CAPITAL QUANT v2</div><div class='live-badge'>Auto-Sync Every 3m (180s) | " + datetime.now().strftime('%b %d, %Y %H:%M:%S') + " | Period 9 Li-Fire + Natal First</div></div>"
+top_bar_html = "<div class='top-bar'><div class='brand-title'>CAPITAL QUANT v2</div><div class='live-badge'>Auto-Sync Every 3m (180s) | " + datetime.now().strftime('%b %d, %Y %H:%M:%S') + " | 3/7 Macro-Natal Model</div></div>"
 st.markdown(top_bar_html, unsafe_allow_html=True)
 
 n1, n2, n3, n4 = st.columns([1.3, 1.3, 1.6, 2.2])
