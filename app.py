@@ -432,6 +432,87 @@ def fetch_history_df(symbol, period_str, current_price):
     prices = current_price * np.exp(np.cumsum(np.random.normal(0.0005, 0.015, size=len(dates))))
     return pd.DataFrame({"Date": dates, "Close": prices * (current_price / prices[-1])})
 
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_cycle_anchor_prices(symbol: str, fallback_spot: float) -> dict[str, Any]:
+    """
+    自动从历史日线提取两个实盘固定坐标：
+    1) 11月中旬（11月10日~20日）的收盘基准锚点价（不再随当日现价浮动）
+    2) 上周（周一~周五）的真实最低价与最高价，用于校准12月中旬低位
+    """
+    now_dt = datetime.today()
+    df_hist = pd.DataFrame()
+
+    if "." not in symbol:
+        df_hist = _query_nasdaq_stock_candles(symbol, days_back=60)
+
+    if (df_hist is None or df_hist.empty) and HAS_YF:
+        try:
+            tk = yf.Ticker(symbol)
+            yh = tk.history(period="3mo", interval="1d")
+            if yh is not None and not yh.empty and "Close" in yh.columns:
+                tmp = yh.reset_index()
+                dt_col = tmp.columns[0]
+                df_hist = pd.DataFrame({
+                    "Date": pd.to_datetime(tmp[dt_col]).dt.tz_localize(None),
+                    "Close": pd.to_numeric(tmp["Close"], errors="coerce"),
+                    "High": pd.to_numeric(tmp.get("High", tmp["Close"]), errors="coerce"),
+                    "Low": pd.to_numeric(tmp.get("Low", tmp["Close"]), errors="coerce"),
+                }).dropna(subset=["Date", "Close"])
+        except Exception:
+            pass
+
+    cur_monday = (now_dt - timedelta(days=now_dt.weekday())).date()
+    last_monday = cur_monday - timedelta(days=7)
+    last_sunday = cur_monday - timedelta(days=1)
+
+    mid_nov_anchor = float(fallback_spot)
+    mid_nov_label = "现价兜底"
+    last_week_low = round(float(fallback_spot) * 0.94, 2) if fallback_spot > 0 else 0.0
+    last_week_high = round(float(fallback_spot) * 1.03, 2) if fallback_spot > 0 else 0.0
+    last_week_date_str = ""
+
+    if df_hist is not None and not df_hist.empty:
+        df_hist = df_hist.sort_values("Date").reset_index(drop=True)
+        df_hist["d_only"] = pd.to_datetime(df_hist["Date"]).dt.date
+
+        # 1. 提取当年11月中旬（11月10日 ~ 11月20日）真实收盘均值作为固定基准锚点
+        nov_mid_df = df_hist[
+            (pd.to_datetime(df_hist["Date"]).dt.year == now_dt.year)
+            & (pd.to_datetime(df_hist["Date"]).dt.month == 11)
+            & (pd.to_datetime(df_hist["Date"]).dt.day >= 10)
+            & (pd.to_datetime(df_hist["Date"]).dt.day <= 20)
+        ]
+        if nov_mid_df.empty:
+            nov_mid_df = df_hist[
+                (pd.to_datetime(df_hist["Date"]).dt.year == now_dt.year)
+                & (pd.to_datetime(df_hist["Date"]).dt.month == 11)
+            ]
+        if not nov_mid_df.empty:
+            mid_nov_anchor = round(float(nov_mid_df["Close"].mean()), 2)
+            d_min = nov_mid_df["d_only"].min().strftime("%m/%d")
+            d_max = nov_mid_df["d_only"].max().strftime("%m/%d")
+            mid_nov_label = f"11月中实盘({d_min}-{d_max})"
+
+        # 2. 提取上周真实最低价
+        lw_df = df_hist[(df_hist["d_only"] >= last_monday) & (df_hist["d_only"] <= last_sunday)]
+        if lw_df.empty and len(df_hist) >= 6:
+            lw_df = df_hist.iloc[-6:-1]
+        if not lw_df.empty:
+            low_col = "Low" if "Low" in lw_df.columns and lw_df["Low"].notna().any() else "Close"
+            high_col = "High" if "High" in lw_df.columns and lw_df["High"].notna().any() else "Close"
+            min_idx = lw_df[low_col].idxmin()
+            last_week_low = round(float(lw_df.loc[min_idx, low_col]), 2)
+            last_week_high = round(float(lw_df[high_col].max()), 2)
+            last_week_date_str = lw_df.loc[min_idx, "d_only"].strftime("%m/%d")
+
+    return {
+        "mid_nov_anchor": mid_nov_anchor,
+        "mid_nov_label": mid_nov_label,
+        "last_week_low": last_week_low,
+        "last_week_high": last_week_high,
+        "last_week_date_str": last_week_date_str,
+    }
+
 # ==================== 2. OPTIONS ENGINE (CBOE + NASDAQ + YAHOO REAL AGGREGATOR) ====================
 
 def _parse_occ_option_symbol(occ_sym: str) -> tuple[str | None, str | None, float | None]:
@@ -733,12 +814,11 @@ def extract_top3_walls(col_cdf, col_pdf, curr_p, delta_days: int = 3):
     cdf_clean = cdf_scored.sort_values("wall_power", ascending=False).drop_duplicates(subset=["strike"])
     pdf_clean = pdf_scored.sort_values("wall_power", ascending=False).drop_duplicates(subset=["strike"])
 
+    # 上方 Call Wall：保持贴近现价的主力博弈区（近端 -4% ~ +12%，远端 -2% ~ +18%）
     if delta_days <= 7:
         c_min_bound, c_max_bound = curr_p * 0.96, curr_p * 1.12
-        p_min_bound, p_max_bound = curr_p * 0.88, curr_p * 1.04
     else:
         c_min_bound, c_max_bound = curr_p * 0.98, curr_p * 1.18
-        p_min_bound, p_max_bound = curr_p * 0.82, curr_p * 1.02
 
     above_df = cdf_clean[(cdf_clean["strike"] >= c_min_bound) & (cdf_clean["strike"] <= c_max_bound)].copy()
     if len(above_df) < 3:
@@ -754,9 +834,17 @@ def extract_top3_walls(col_cdf, col_pdf, curr_p, delta_days: int = 3):
     c_top_list = [(float(r["strike"]), int(r["wall_power"])) for _, r in top3_calls.iterrows()]
     call_wall_val = max(c_top_list, key=lambda x: x[1])[0] if c_top_list else None
 
+    # 下方 Put Wall：严格在现价下方，恢复到机构真实防守区（近端 -22% ~ -3%，远端 -28% ~ -5%）
+    if delta_days <= 7:
+        p_min_bound, p_max_bound = curr_p * 0.78, curr_p * 0.97
+    else:
+        p_min_bound, p_max_bound = curr_p * 0.72, curr_p * 0.95
+
     below_df = pdf_clean[(pdf_clean["strike"] >= p_min_bound) & (pdf_clean["strike"] <= p_max_bound)].copy()
     if len(below_df) < 3:
-        below_df = pdf_clean[(pdf_clean["strike"] >= curr_p * 0.75) & (pdf_clean["strike"] <= curr_p * 1.06)].copy()
+        below_df = pdf_clean[(pdf_clean["strike"] >= curr_p * 0.68) & (pdf_clean["strike"] < curr_p)].copy()
+    if below_df.empty:
+        below_df = pdf_clean[pdf_clean["strike"] < curr_p].copy()
     if below_df.empty:
         below_df = pdf_clean.copy()
 
@@ -787,7 +875,7 @@ def compute_aggregate_real_walls(combined_by_day: dict[str, dict[str, Any]], spo
     p_all["power"] = p_all["openInterest"] + p_all["volume"] * 1.3
 
     c_band = c_all[(c_all["strike"] >= spot * 0.94) & (c_all["strike"] <= spot * 1.15)].sort_values("power", ascending=False).head(3)
-    p_band = p_all[(p_all["strike"] >= spot * 0.85) & (p_all["strike"] <= spot * 1.04)].sort_values("power", ascending=False).head(3)
+    p_band = p_all[(p_all["strike"] >= spot * 0.75) & (p_all["strike"] <= spot * 0.97)].sort_values("power", ascending=False).head(3)
 
     c_list = [(float(r["strike"]), int(r["power"]), float(r["strike"]) < spot) for _, r in c_band.iterrows()]
     p_list = [(float(r["strike"]), int(r["power"]), float(r["strike"]) > spot) for _, r in p_band.iterrows()]
@@ -1521,39 +1609,53 @@ def evaluate_flow_radar(
             "advice": "少折腾、先看消化节奏，等关键支撑/阻力位确认后再动手。",
         }
 
-def _estimate_range_anchored_price(spot: float, tech_score: float, m_data: dict[str, Any] | None = None) -> float:
-    if spot <= 0:
+def _estimate_range_anchored_price(
+    anchor_px: float,
+    tech_score: float,
+    m_data: dict[str, Any] | None = None,
+    last_week_low: float = 0.0,
+    month_num: int = 0,
+) -> float:
+    """
+    以 11月中旬实盘价格为固定基准锚点（50分位置），不再随当日盘中价格漂移；
+    计算 12月低位时，结合上周真实低位的回撤幅度进行双重校准。
+    """
+    if anchor_px <= 0:
         return 0.0
 
     m_info = m_data or {}
-    r_low = float(m_info.get("recent_low") or 0.0)
     r_high = float(m_info.get("recent_high") or 0.0)
     h52 = float(m_info.get("high52") or 0.0)
     l52 = float(m_info.get("low52") or 0.0)
 
-    default_floor = spot * 0.84
-    if l52 > 0 and l52 < spot:
-        floor_px = max(spot * 0.78, min(default_floor, (spot * 0.65 + l52 * 0.35)))
-    elif r_low > 0 and r_low < spot:
-        floor_px = max(spot * 0.80, min(default_floor, r_low * 0.97))
+    default_floor = anchor_px * 0.84
+    if last_week_low > 0 and last_week_low < anchor_px:
+        lw_drop_pct = (anchor_px - last_week_low) / anchor_px
+        projected_deep_floor = last_week_low * (1.0 - max(0.03, min(0.08, lw_drop_pct * 0.65)))
+        floor_px = max(anchor_px * 0.76, min(default_floor, projected_deep_floor))
+    elif l52 > 0 and l52 < anchor_px:
+        floor_px = max(anchor_px * 0.78, min(default_floor, anchor_px * 0.65 + l52 * 0.35))
     else:
         floor_px = default_floor
-    floor_px = min(floor_px, spot * 0.93)
+    floor_px = min(floor_px, anchor_px * 0.93)
 
-    default_ceil = spot * 1.24
+    default_ceil = anchor_px * 1.24
     ref_top = max(r_high, h52 * 0.95) if (r_high > 0 or h52 > 0) else default_ceil
-    if ref_top > spot * 1.05:
-        ceil_px = min(spot * 1.42, max(default_ceil, spot * 0.55 + ref_top * 0.45))
+    if ref_top > anchor_px * 1.05:
+        ceil_px = min(anchor_px * 1.42, max(default_ceil, anchor_px * 0.55 + ref_top * 0.45))
     else:
         ceil_px = default_ceil
 
     neutral_score = 50.0
     if tech_score <= neutral_score:
         ratio = max(0.0, min(1.0, (tech_score - 8.0) / (neutral_score - 8.0)))
-        est = floor_px + (spot - floor_px) * ratio
+        est = floor_px + (anchor_px - floor_px) * ratio
+        if month_num == 12 and last_week_low > 0:
+            dec_mid_ref = last_week_low * (0.94 + 0.04 * ratio)
+            est = round(est * 0.45 + dec_mid_ref * 0.55, 2)
     else:
         ratio = max(0.0, min(1.0, (tech_score - neutral_score) / (98.0 - neutral_score)))
-        est = spot + (ceil_px - spot) * ratio
+        est = anchor_px + (ceil_px - anchor_px) * ratio
 
     return round(est, 2)
 
@@ -1582,6 +1684,10 @@ def build_rolling_12m_cycle_rows(
     era_bonus = float(natal["era_bonus"])
     vol_mult = float(natal["vol_mult"])
     spot = float((m_data or {}).get("price") or 0.0)
+
+    anchor_info = fetch_cycle_anchor_prices(symbol, spot)
+    base_anchor_px = float(anchor_info["mid_nov_anchor"]) if anchor_info["mid_nov_anchor"] > 0 else spot
+    last_week_low = float(anchor_info["last_week_low"])
 
     cur_phase = get_earnings_phase_status(start_year, start_month, e_months, ref_dt=now_dt)
     flow_info = evaluate_flow_radar(
@@ -1642,8 +1748,14 @@ def build_rolling_12m_cycle_rows(
             1,
         )
 
-        approx_px = _estimate_range_anchored_price(spot, tech_score, m_data)
-        approx_str = _fmt_price_ref(approx_px, symbol) if spot > 0 else ""
+        approx_px = _estimate_range_anchored_price(
+            base_anchor_px,
+            tech_score,
+            m_data,
+            last_week_low=last_week_low,
+            month_num=m_num,
+        )
+        approx_str = _fmt_price_ref(approx_px, symbol) if base_anchor_px > 0 else ""
 
         if m_num == 9:
             stance = "冲月清洗·四巫窗"
@@ -1711,12 +1823,14 @@ def build_rolling_12m_cycle_rows(
     avg_tech = round(sum(r["tech_score"] for r in rows) / len(rows), 1)
     peak_row = max(rows, key=lambda x: x["tech_score"])
     trough_row = min(rows, key=lambda x: x["tech_score"])
+    dec_row = next((r for r in rows if r["month_num"] == 12), None)
+    dec_low_str = dec_row["approx_str"] if dec_row else "—"
 
     price_range_str = ""
-    if spot > 0:
+    if base_anchor_px > 0:
         min_px = min(r["approx_price"] for r in rows)
         max_px = max(r["approx_price"] for r in rows)
-        price_range_str = f" | 区间参考价(非精确目标): <b>{_fmt_price_ref(min_px, symbol)} ~ {_fmt_price_ref(max_px, symbol)}</b>"
+        price_range_str = f" | 区间参考价: <b>{_fmt_price_ref(min_px, symbol)} ~ {_fmt_price_ref(max_px, symbol)}</b>"
 
     meta_info = {
         **natal,
@@ -1727,6 +1841,11 @@ def build_rolling_12m_cycle_rows(
         "price_range_str": price_range_str,
         "phase_label": cur_phase["label"],
         "flow_info": flow_info,
+        "mid_nov_anchor_str": _fmt_price_ref(base_anchor_px, symbol),
+        "mid_nov_label": anchor_info["mid_nov_label"],
+        "last_week_low_str": _fmt_price_ref(last_week_low, symbol),
+        "last_week_date_str": anchor_info["last_week_date_str"],
+        "dec_low_str": dec_low_str,
     }
     return rows, meta_info
 
@@ -1745,6 +1864,7 @@ def render_12m_cycle_block_above_options(
     end_row = rows[-1]
     flow = meta_info["flow_info"]
     cur_phase_txt = f" | 当前阶段: <b>{meta_info['phase_label']}</b>" if meta_info.get("phase_label") else ""
+    lw_dt_txt = f"({meta_info['last_week_date_str']})" if meta_info.get("last_week_date_str") else ""
 
     st.markdown("<div class='module-container' style='padding:12px 14px; margin-bottom:10px;'>", unsafe_allow_html=True)
     h_col1, h_col2 = st.columns([4.8, 1.8])
@@ -1753,7 +1873,7 @@ def render_12m_cycle_block_above_options(
     h_col1.markdown(
         f"<div class='card-header' style='margin-bottom:2px;'>🧭 {symbol} 未来12个月滚动能量表 (3分大运税务假期 · 7分个股干支冲合 | 定盘: <b>{meta_info['ganzhi']}·{meta_info['element']}</b> · {meta_info['role']})</div>"
         f"<div style='font-size:13.5px; color:#cbd5e1;'>大运背景: <b>{meta_info['era_name']}（{meta_info['era_tag']}）</b> | 现年柱: <b>{meta_info['year_ganzhi']}({meta_info['cur_year_note']})</b> | 区间: <b>{cur_year}年{cur_month}月 → {end_row['year_num']}年{end_row['month_num']}月</b> | 财报季: <b>{e_str}</b>{cur_phase_txt}<br>"
-        f"高:<b>{meta_info['peak_label']}</b> / 低:<b>{meta_info['trough_label']}</b>{meta_info['price_range_str']}</div>",
+        f"📌 固定锚点({meta_info['mid_nov_label']}): <b style='color:#facc15;'>{meta_info['mid_nov_anchor_str']}</b> | 上周低位{lw_dt_txt}: <b style='color:#38bdf8;'>{meta_info['last_week_low_str']}</b> | 推算12月中低位: <b style='color:#f87171;'>{meta_info['dec_low_str']}</b> | 高:<b>{meta_info['peak_label']}</b> / 低:<b>{meta_info['trough_label']}</b>{meta_info['price_range_str']}</div>",
         unsafe_allow_html=True,
     )
 
@@ -1761,7 +1881,7 @@ def render_12m_cycle_block_above_options(
         f"<div style='background:#07193d; border:1.5px solid {flow['color']}; border-radius:8px; padding:8px 12px; margin:6px 0 8px 0;'>"
         f"<div style='font-size:14.5px; font-weight:900; color:{flow['color']};'>{flow['prefix']}{flow['badge']}</div>"
         f"<div style='font-size:12.5px; color:#e2e8f0; margin-top:2px;'>白话看点：{flow['explain']}（大运背景：{meta_info['era_desc']}）</div>"
-        f"<div style='font-size:12.5px; color:#93c5fd; font-weight:800; margin-top:2px;'>操作提醒：{flow['advice']}（注：70%由个股本命天干地支与流年/流月生克冲合驱动，30%叠加九紫离火大运及税务/假期/季末节律，并以最新现价为锚点估算参考区间，非精确预测）</div>"
+        f"<div style='font-size:12.5px; color:#93c5fd; font-weight:800; margin-top:2px;'>操作提醒：{flow['advice']}（注：以11月中旬实盘价格为固定锚点，并结合上周真实低位校准12月中低位，非精确预测）</div>"
         f"</div>",
         unsafe_allow_html=True,
     )
