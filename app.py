@@ -126,7 +126,6 @@ if "show_all_strikes" not in st.session_state:
 if "opt_persistent_cache" not in st.session_state:
     st.session_state["opt_persistent_cache"] = {}
 
-# 个股命盘档案库：股票一被选中，第一步先定盘再算走势
 if "stock_natal_registry" not in st.session_state:
     st.session_state["stock_natal_registry"] = {}
 
@@ -433,7 +432,159 @@ def fetch_history_df(symbol, period_str, current_price):
     prices = current_price * np.exp(np.cumsum(np.random.normal(0.0005, 0.015, size=len(dates))))
     return pd.DataFrame({"Date": dates, "Close": prices * (current_price / prices[-1])})
 
-# ==================== 2. OPTIONS ENGINE (LOCKED TO YAHOO YFINANCE) ====================
+# ==================== 2. OPTIONS ENGINE (CBOE + NASDAQ + YAHOO REAL AGGREGATOR) ====================
+
+def _parse_occ_option_symbol(occ_sym: str) -> tuple[str | None, str | None, float | None]:
+    """解析标准 OCC 期权代码，例如 NVDA261127C00170000 -> ('2026-11-27', 'C', 170.0)"""
+    s = str(occ_sym or "").strip().upper()
+    if len(s) < 15:
+        return None, None, None
+    tail = s[-15:]
+    date_part = tail[:6]
+    cp_flag = tail[6]
+    strike_part = tail[7:]
+    if cp_flag not in ("C", "P") or not date_part.isdigit() or not strike_part.isdigit():
+        return None, None, None
+    try:
+        exp_str = f"20{date_part[:2]}-{date_part[2:4]}-{date_part[4:6]}"
+        datetime.strptime(exp_str, "%Y-%m-%d")
+        strike_val = int(strike_part) / 1000.0
+        return exp_str, cp_flag, strike_val
+    except Exception:
+        return None, None, None
+
+@st.cache_data(ttl=120, show_spinner=False)
+def _query_cboe_realtime_bundle(symbol: str) -> tuple[list[str], dict[str, tuple[pd.DataFrame, pd.DataFrame]], str]:
+    """直连 CBOE 公开延迟期权链 JSON 接口（含真实 OI + 盘中 Volume + Gamma）"""
+    if "." in symbol:
+        return [], {}, "非美股无 CBOE 链"
+    clean_sym = symbol.upper().strip()
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Referer": "https://www.cboe.com/",
+    }
+    urls = [
+        f"https://cdn.cboe.com/api/global/delayed_quotes/options/{clean_sym}.json",
+        f"https://cdn.cboe.com/api/global/delayed_quotes/options/_{clean_sym}.json",
+    ]
+    for u in urls:
+        try:
+            res = requests.get(u, headers=headers, timeout=4.5)
+            if res.status_code != 200:
+                continue
+            payload = res.json()
+            opts = payload.get("data", {}).get("options", [])
+            if not isinstance(opts, list) or not opts:
+                continue
+
+            grouped: dict[str, dict[str, list[dict[str, Any]]]] = {}
+            for item in opts:
+                occ = item.get("option", "")
+                exp_str, cp_flag, strike_val = _parse_occ_option_symbol(occ)
+                if not exp_str or not cp_flag or not strike_val or strike_val <= 0:
+                    continue
+                oi = int(_parse_float_clean(item.get("open_interest")) or 0)
+                vol = int(_parse_float_clean(item.get("volume")) or 0)
+                last_px = float(_parse_float_clean(item.get("last_trade_price")) or _parse_float_clean(item.get("ask")) or 0.0)
+                gamma = float(_parse_float_clean(item.get("gamma")) or 0.0)
+                delta = float(_parse_float_clean(item.get("delta")) or 0.0)
+                rec = {
+                    "strike": float(strike_val),
+                    "lastPrice": last_px,
+                    "openInterest": oi,
+                    "volume": vol,
+                    "gamma": gamma,
+                    "delta": delta,
+                }
+                grouped.setdefault(exp_str, {"C": [], "P": []})[cp_flag].append(rec)
+
+            today_date = datetime.today().date()
+            valid_exps = sorted([
+                d for d in grouped.keys()
+                if datetime.strptime(d, "%Y-%m-%d").date() >= today_date
+            ])[:12]
+
+            day_map: dict[str, tuple[pd.DataFrame, pd.DataFrame]] = {}
+            for d_str in valid_exps:
+                cdf = pd.DataFrame(grouped[d_str]["C"])
+                pdf = pd.DataFrame(grouped[d_str]["P"])
+                if _is_valid_chain_pair(cdf, pdf):
+                    day_map[d_str] = (cdf, pdf)
+
+            if day_map:
+                return sorted(day_map.keys()), day_map, f"CBOE 实时链 ({len(day_map)}期)"
+        except Exception:
+            continue
+    return [], {}, "CBOE 未返回"
+
+@st.cache_data(ttl=120, show_spinner=False)
+def _query_nasdaq_option_bundle(symbol: str) -> tuple[list[str], dict[str, tuple[pd.DataFrame, pd.DataFrame]], str]:
+    """Nasdaq 官方期权链接口备份与交叉补充"""
+    if "." in symbol:
+        return [], {}, "非美股无 Nasdaq 链"
+    clean_sym = symbol.upper().strip()
+    headers = _build_nasdaq_headers()
+    ac_list = ["etf", "stocks"] if clean_sym in ["QQQ", "SPY", "IWM", "DIA", "TLT"] else ["stocks", "etf"]
+
+    for ac in ac_list:
+        try:
+            url = f"https://api.nasdaq.com/api/quote/{clean_sym}/option-chain?assetclass={ac}&limit=1000&money=all"
+            res = requests.get(url, headers=headers, timeout=4.5)
+            if res.status_code != 200:
+                continue
+            rows = res.json().get("data", {}).get("table", {}).get("rows", [])
+            if not isinstance(rows, list) or not rows:
+                continue
+
+            grouped: dict[str, dict[str, list[dict[str, Any]]]] = {}
+            cur_exp = None
+            for r in rows:
+                if r.get("expirygroup"):
+                    try:
+                        dt_g = datetime.strptime(str(r["expirygroup"]).strip(), "%B %d, %Y")
+                        cur_exp = dt_g.strftime("%Y-%m-%d")
+                    except Exception:
+                        pass
+                drill = str(r.get("drillDownURL", ""))
+                exp_from_url = None
+                if "/" in drill:
+                    parts = [p for p in drill.split("/") if p]
+                    if parts:
+                        exp_c, _, _ = _parse_occ_option_symbol(parts[-1])
+                        exp_from_url = exp_c
+                exp_str = exp_from_url or cur_exp
+                strike_val = _parse_float_clean(r.get("strike"))
+                if not exp_str or not strike_val or strike_val <= 0:
+                    continue
+
+                c_oi = int(_parse_float_clean(r.get("c_Openinterest")) or 0)
+                c_vol = int(_parse_float_clean(r.get("c_Volume")) or 0)
+                c_last = float(_parse_float_clean(r.get("c_Last")) or 0.0)
+                p_oi = int(_parse_float_clean(r.get("p_Openinterest")) or 0)
+                p_vol = int(_parse_float_clean(r.get("p_Volume")) or 0)
+                p_last = float(_parse_float_clean(r.get("p_Last")) or 0.0)
+
+                grouped.setdefault(exp_str, {"C": [], "P": []})
+                grouped[exp_str]["C"].append({"strike": strike_val, "lastPrice": c_last, "openInterest": c_oi, "volume": c_vol, "gamma": 0.0})
+                grouped[exp_str]["P"].append({"strike": strike_val, "lastPrice": p_last, "openInterest": p_oi, "volume": p_vol, "gamma": 0.0})
+
+            today_date = datetime.today().date()
+            valid_exps = sorted([
+                d for d in grouped.keys()
+                if datetime.strptime(d, "%Y-%m-%d").date() >= today_date
+            ])[:12]
+            day_map: dict[str, tuple[pd.DataFrame, pd.DataFrame]] = {}
+            for d_str in valid_exps:
+                cdf = pd.DataFrame(grouped[d_str]["C"])
+                pdf = pd.DataFrame(grouped[d_str]["P"])
+                if _is_valid_chain_pair(cdf, pdf):
+                    day_map[d_str] = (cdf, pdf)
+            if day_map:
+                return sorted(day_map.keys()), day_map, f"Nasdaq 链 ({len(day_map)}期)"
+        except Exception:
+            continue
+    return [], {}, "Nasdaq 未返回"
 
 def _normalize_yf_option_side(df_raw: pd.DataFrame) -> pd.DataFrame:
     if df_raw is None or df_raw.empty or "strike" not in df_raw.columns:
@@ -443,29 +594,29 @@ def _normalize_yf_option_side(df_raw: pd.DataFrame) -> pd.DataFrame:
     out["lastPrice"] = pd.to_numeric(df_raw.get("lastPrice", 0.0), errors="coerce").fillna(0.0)
     out["openInterest"] = pd.to_numeric(df_raw.get("openInterest", 0), errors="coerce").fillna(0).astype(int)
     out["volume"] = pd.to_numeric(df_raw.get("volume", 0), errors="coerce").fillna(0).astype(int)
+    out["gamma"] = 0.0
     out = out.dropna(subset=["strike"])
     return out[out["strike"] > 0].reset_index(drop=True)
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=180, show_spinner=False)
 def _query_yahoo_yfinance_bundle(symbol: str) -> tuple[list[str], dict[str, tuple[pd.DataFrame, pd.DataFrame]], str]:
     if "." in symbol:
-        return [], {}, "非美股代码无 Yahoo 美式期权链"
+        return [], {}, "非美股代码无美式期权链"
     if not HAS_YF:
-        return [], {}, "未安装 yfinance 库"
+        return [], {}, "未安装 yfinance"
 
     clean_sym = symbol.upper().strip()
     try:
         tk = yf.Ticker(clean_sym)
         raw_exps = list(tk.options or [])
         if not raw_exps:
-            return [], {}, "Yahoo 未返回到期日列表"
+            return [], {}, "Yahoo 未返回到期日"
 
         today_date = datetime.today().date()
         future_exps = [d for d in sorted(set(raw_exps)) if datetime.strptime(d, "%Y-%m-%d").date() >= today_date]
         target_exps = (future_exps if future_exps else sorted(set(raw_exps)))[:10]
 
         day_map: dict[str, tuple[pd.DataFrame, pd.DataFrame]] = {}
-        last_err = ""
         for d_str in target_exps:
             try:
                 chain = tk.option_chain(d_str)
@@ -473,18 +624,20 @@ def _query_yahoo_yfinance_bundle(symbol: str) -> tuple[list[str], dict[str, tupl
                 pdf = _normalize_yf_option_side(chain.puts)
                 if _is_valid_chain_pair(cdf, pdf):
                     day_map[d_str] = (cdf, pdf)
-            except Exception as sub_e:
-                last_err = str(sub_e)[:45]
+            except Exception:
                 continue
 
         if day_map:
-            return sorted(set(target_exps) | set(day_map.keys())), day_map, f"Yahoo 成功 ({len(day_map)}期)"
-        return target_exps, {}, f"Yahoo 链解析为空 ({last_err or '空链'})"
+            return sorted(set(target_exps) | set(day_map.keys())), day_map, f"Yahoo 链 ({len(day_map)}期)"
+        return target_exps, {}, "Yahoo 链为空"
     except Exception as e:
-        return [], {}, f"Yahoo 异常: {str(e)[:45]}"
+        return [], {}, f"Yahoo 异常: {str(e)[:35]}"
 
-def _collect_yahoo_with_cache(symbol: str) -> tuple[list[str], dict[str, dict[str, Any]], int, str, str]:
-    yh_days, yh_map, status_msg = _query_yahoo_yfinance_bundle(symbol)
+def _collect_multi_source_options(symbol: str) -> tuple[list[str], dict[str, dict[str, Any]], int, str, str]:
+    """三路真实期权源聚合：CBOE 实时链 -> Nasdaq 链 -> Yahoo 链 + 本地缓存兜底"""
+    cboe_days, cboe_map, cboe_msg = _query_cboe_realtime_bundle(symbol)
+    nq_days, nq_map, nq_msg = ([], {}, "") if len(cboe_map) >= 6 else _query_nasdaq_option_bundle(symbol)
+    yh_days, yh_map, yh_msg = ([], {}, "") if (len(cboe_map) + len(nq_map)) >= 6 else _query_yahoo_yfinance_bundle(symbol)
 
     cache_store: dict[str, dict[str, Any]] = st.session_state["opt_persistent_cache"]
     prev_entry = cache_store.get(symbol, {})
@@ -494,23 +647,26 @@ def _collect_yahoo_with_cache(symbol: str) -> tuple[list[str], dict[str, dict[st
     merged_by_day: dict[str, dict[str, Any]] = {}
     for d_key, rec in prev_by_day.items():
         if _is_valid_chain_pair(rec.get("cdf"), rec.get("pdf")):
-            merged_by_day[d_key] = {
-                "cdf": rec["cdf"].copy(),
-                "pdf": rec["pdf"].copy(),
-                "source": "CACHE",
-            }
+            merged_by_day[d_key] = {"cdf": rec["cdf"].copy(), "pdf": rec["pdf"].copy(), "source": "CACHE"}
 
-    for d_key, (cdf, pdf) in yh_map.items():
-        if _is_valid_chain_pair(cdf, pdf):
-            merged_by_day[d_key] = {
-                "cdf": cdf.copy(),
-                "pdf": pdf.copy(),
-                "source": "YH",
-            }
+    for src_tag, src_map in [("YH", yh_map), ("NQ", nq_map), ("CBOE", cboe_map)]:
+        for d_key, (cdf, pdf) in src_map.items():
+            if _is_valid_chain_pair(cdf, pdf):
+                merged_by_day[d_key] = {"cdf": cdf.copy(), "pdf": pdf.copy(), "source": src_tag}
 
-    merged_days = sorted(set(yh_days) | set(prev_days) | set(merged_by_day.keys()))
+    merged_days = sorted(set(cboe_days) | set(nq_days) | set(yh_days) | set(prev_days) | set(merged_by_day.keys()))
     now_str = datetime.now().strftime("%H:%M:%S")
-    cache_time_label = now_str if yh_map else prev_entry.get("updated_at", "")
+    live_hits = len(cboe_map) + len(nq_map) + len(yh_map)
+    cache_time_label = now_str if live_hits > 0 else prev_entry.get("updated_at", "")
+
+    if cboe_map:
+        status_msg = cboe_msg
+    elif nq_map:
+        status_msg = nq_msg
+    elif yh_map:
+        status_msg = yh_msg
+    else:
+        status_msg = f"缓存兜底 ({cboe_msg}/{yh_msg})"
 
     if merged_days or merged_by_day:
         cache_store[symbol] = {
@@ -519,10 +675,10 @@ def _collect_yahoo_with_cache(symbol: str) -> tuple[list[str], dict[str, dict[st
             "updated_at": cache_time_label or now_str,
         }
 
-    return merged_days, merged_by_day, len(yh_map), status_msg, cache_time_label
+    return merged_days, merged_by_day, len(merged_by_day), status_msg, cache_time_label
 
 def fetch_real_option_chain_for_date(symbol, target_dt_timestamp=None, spot=None):
-    all_days, combined_by_day, _, _, _ = _collect_yahoo_with_cache(symbol)
+    all_days, combined_by_day, _, _, _ = _collect_multi_source_options(symbol)
     exp_ts_list: list[int] = []
     for d_str in all_days:
         try:
@@ -558,51 +714,90 @@ def _build_company_real_day_keys(real_day_keys: list[str], base_dt: datetime, ma
     chosen = active_or_future if active_or_future else unique_sorted
     return chosen[:max_cols]
 
-def extract_top3_walls(col_cdf, col_pdf, curr_p):
+def _score_wall_strength(df: pd.DataFrame, delta_days: int = 3) -> pd.DataFrame:
+    """真实墙强度评分 = 隔夜未平仓 OI + 盘中实时成交量 Volume 权重"""
+    out = df.copy()
+    oi_s = pd.to_numeric(out.get("openInterest", 0), errors="coerce").fillna(0.0)
+    vol_s = pd.to_numeric(out.get("volume", 0), errors="coerce").fillna(0.0)
+    vol_weight = 1.6 if delta_days <= 7 else 0.9
+    out["wall_power"] = oi_s + vol_s * vol_weight
+    return out
+
+def extract_top3_walls(col_cdf, col_pdf, curr_p, delta_days: int = 3):
     if not _is_valid_chain_pair(col_cdf, col_pdf):
         return [], None, [], None
 
-    cdf_clean = col_cdf.sort_values("openInterest", ascending=False).drop_duplicates(subset=["strike"])
-    pdf_clean = col_pdf.sort_values("openInterest", ascending=False).drop_duplicates(subset=["strike"])
+    cdf_scored = _score_wall_strength(col_cdf, delta_days=delta_days)
+    pdf_scored = _score_wall_strength(col_pdf, delta_days=delta_days)
 
-    c_min_bound = curr_p * 1.05
-    c_max_bound = curr_p * 1.30
+    cdf_clean = cdf_scored.sort_values("wall_power", ascending=False).drop_duplicates(subset=["strike"])
+    pdf_clean = pdf_scored.sort_values("wall_power", ascending=False).drop_duplicates(subset=["strike"])
+
+    if delta_days <= 7:
+        c_min_bound, c_max_bound = curr_p * 0.96, curr_p * 1.12
+        p_min_bound, p_max_bound = curr_p * 0.88, curr_p * 1.04
+    else:
+        c_min_bound, c_max_bound = curr_p * 0.98, curr_p * 1.18
+        p_min_bound, p_max_bound = curr_p * 0.82, curr_p * 1.02
+
     above_df = cdf_clean[(cdf_clean["strike"] >= c_min_bound) & (cdf_clean["strike"] <= c_max_bound)].copy()
-    if above_df.empty:
-        above_df = cdf_clean[cdf_clean["strike"] > curr_p].copy()
+    if len(above_df) < 3:
+        above_df = cdf_clean[(cdf_clean["strike"] >= curr_p * 0.94) & (cdf_clean["strike"] <= curr_p * 1.25)].copy()
     if above_df.empty:
         above_df = cdf_clean.copy()
 
     top3_calls = (
-        above_df.sort_values(by="openInterest", ascending=False)
+        above_df.sort_values(by="wall_power", ascending=False)
         .head(3)
         .sort_values(by="strike", ascending=False)
     )
-    c_top_list = [(float(r["strike"]), int(r["openInterest"])) for _, r in top3_calls.iterrows()]
+    c_top_list = [(float(r["strike"]), int(r["wall_power"])) for _, r in top3_calls.iterrows()]
     call_wall_val = max(c_top_list, key=lambda x: x[1])[0] if c_top_list else None
 
-    p_min_bound = curr_p * 0.70
-    p_max_bound = curr_p * 0.95
     below_df = pdf_clean[(pdf_clean["strike"] >= p_min_bound) & (pdf_clean["strike"] <= p_max_bound)].copy()
-    if below_df.empty:
-        below_df = pdf_clean[pdf_clean["strike"] < curr_p].copy()
+    if len(below_df) < 3:
+        below_df = pdf_clean[(pdf_clean["strike"] >= curr_p * 0.75) & (pdf_clean["strike"] <= curr_p * 1.06)].copy()
     if below_df.empty:
         below_df = pdf_clean.copy()
 
     top3_puts = (
-        below_df.sort_values(by="openInterest", ascending=False)
+        below_df.sort_values(by="wall_power", ascending=False)
         .head(3)
         .sort_values(by="strike", ascending=True)
     )
-    p_bot_list = [(float(r["strike"]), int(r["openInterest"])) for _, r in top3_puts.iterrows()]
+    p_bot_list = [(float(r["strike"]), int(r["wall_power"])) for _, r in top3_puts.iterrows()]
     put_wall_val = max(p_bot_list, key=lambda x: x[1])[0] if p_bot_list else None
 
     return c_top_list, call_wall_val, p_bot_list, put_wall_val
 
-def pull_and_filter_real_expirations_locally(symbol: str, spot: float) -> tuple[list[dict[str, Any]], bool, int, str, str]:
+def compute_aggregate_real_walls(combined_by_day: dict[str, dict[str, Any]], spot: float) -> dict[str, Any]:
+    """全期限合并计算真实累计 Call Wall 与 Put Wall"""
+    c_frames, p_frames = [], []
+    for _, rec in combined_by_day.items():
+        cdf, pdf = rec.get("cdf"), rec.get("pdf")
+        if _is_valid_chain_pair(cdf, pdf):
+            c_frames.append(cdf[["strike", "openInterest", "volume"]].copy())
+            p_frames.append(pdf[["strike", "openInterest", "volume"]].copy())
+    if not c_frames or not p_frames or spot <= 0:
+        return {"call_walls": [], "put_walls": []}
+
+    c_all = pd.concat(c_frames, ignore_index=True).groupby("strike", as_index=False).sum()
+    p_all = pd.concat(p_frames, ignore_index=True).groupby("strike", as_index=False).sum()
+    c_all["power"] = c_all["openInterest"] + c_all["volume"] * 1.3
+    p_all["power"] = p_all["openInterest"] + p_all["volume"] * 1.3
+
+    c_band = c_all[(c_all["strike"] >= spot * 0.94) & (c_all["strike"] <= spot * 1.15)].sort_values("power", ascending=False).head(3)
+    p_band = p_all[(p_all["strike"] >= spot * 0.85) & (p_all["strike"] <= spot * 1.04)].sort_values("power", ascending=False).head(3)
+
+    c_list = [(float(r["strike"]), int(r["power"]), float(r["strike"]) < spot) for _, r in c_band.iterrows()]
+    p_list = [(float(r["strike"]), int(r["power"]), float(r["strike"]) > spot) for _, r in p_band.iterrows()]
+    return {"call_walls": c_list, "put_walls": p_list}
+
+def pull_and_filter_real_expirations_locally(symbol: str, spot: float) -> tuple[list[dict[str, Any]], bool, int, str, str, dict[str, Any]]:
     today = datetime.today()
-    all_days, combined_by_day, yh_count, status_msg, cache_time = _collect_yahoo_with_cache(symbol)
+    all_days, combined_by_day, live_count, status_msg, cache_time = _collect_multi_source_options(symbol)
     chosen_days = _build_company_real_day_keys(all_days, today, max_cols=10)
+    agg_walls = compute_aggregate_real_walls(combined_by_day, spot)
 
     cols_data = []
     has_any_real_data = False
@@ -627,7 +822,7 @@ def pull_and_filter_real_expirations_locally(symbol: str, spot: float) -> tuple[
             has_any_real_data = True
 
         if has_chain:
-            c_top_list, call_wall_val, p_bot_list, put_wall_val = extract_top3_walls(col_cdf, col_pdf, spot)
+            c_top_list, call_wall_val, p_bot_list, put_wall_val = extract_top3_walls(col_cdf, col_pdf, spot, delta_days=max(0, delta_days))
             raw_mp = (
                 round((spot * 0.55 + call_wall_val * 0.25 + put_wall_val * 0.20), 2)
                 if (call_wall_val is not None and put_wall_val is not None)
@@ -660,10 +855,10 @@ def pull_and_filter_real_expirations_locally(symbol: str, spot: float) -> tuple[
             "put_wall": put_wall_val,
         })
 
-    return cols_data, has_any_real_data, yh_count, status_msg, cache_time
+    return cols_data, has_any_real_data, live_count, status_msg, cache_time, agg_walls
 
 def build_custom_option_matrix_html(symbol, spot):
-    cols_data, has_any_real_data, yh_count, status_msg, cache_time = pull_and_filter_real_expirations_locally(symbol, spot)
+    cols_data, has_any_real_data, live_count, status_msg, cache_time, agg_walls = pull_and_filter_real_expirations_locally(symbol, spot)
 
     all_vals = []
     for c in cols_data:
@@ -751,18 +946,25 @@ def build_custom_option_matrix_html(symbol, spot):
     cache_tag = f" | 缓存:{cache_time}" if cache_time else ""
     status_badge = f"{status_msg}{cache_tag}"
 
+    agg_c_str = " / ".join([f"${k:g}{'(已冲破转支撑)' if broken else ''}" for k, _, broken in agg_walls.get("call_walls", [])]) or "—"
+    agg_p_str = " / ".join([f"${k:g}" for k, _, _ in agg_walls.get("put_walls", [])]) or "—"
+
     html = f"""
     <div style="background:#ffffff; border:2px solid #1e293b; border-radius:8px; padding:8px 10px; font-family:sans-serif; color:#0f172a; width:100%; box-sizing:border-box; overflow:hidden;">
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; padding-bottom:4px; border-bottom:2px solid #cbd5e1; height:30px; box-sizing:border-box;">
-            <div style="font-size:15.5px; font-weight:900; color:#0f172a;">
-                📊 {symbol} 期权墙矩阵 ({status_badge} | Spot: <span style="background:#fef08a; padding:1px 6px; border-radius:4px;">${spot:.2f}</span>)
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px; padding-bottom:4px; border-bottom:1px solid #cbd5e1; height:28px; box-sizing:border-box;">
+            <div style="font-size:15px; font-weight:900; color:#0f172a;">
+                📊 {symbol} 真实期权墙矩阵 ({status_badge} | Spot: <span style="background:#fef08a; padding:1px 6px; border-radius:4px;">${spot:.2f}</span>)
             </div>
             <div style="display:flex; gap:16px; font-size:13px; font-weight:900;">
-                <span style="color:#16a34a;">━━ Call Wall</span>
+                <span style="color:#16a34a;">━━ Call Wall (OI+实时量)</span>
                 <span style="color:#2563eb;">╌╌ Max Pain</span>
                 <span style="color:#0f172a;">━━ Spot</span>
-                <span style="color:#dc2626;">━━ Put Wall</span>
+                <span style="color:#dc2626;">━━ Put Wall (OI+实时量)</span>
             </div>
+        </div>
+        <div style="background:#f8fafc; border:1px solid #cbd5e1; border-radius:5px; padding:3px 8px; margin-bottom:6px; font-size:12.5px; font-weight:800; display:flex; justify-content:space-between;">
+            <span style="color:#15803d;">🟢 全期限累计主力 Call 墙 Top3: {agg_c_str}</span>
+            <span style="color:#b91c1c;">🔴 全期限累计主力 Put 墙 Top3: {agg_p_str}</span>
         </div>
 
         <div style="display:flex; width:100%;">
@@ -773,14 +975,14 @@ def build_custom_option_matrix_html(symbol, spot):
                 </div>
                 <div style="height:{top3_h}px; border-bottom:2px solid #1e293b; display:flex; flex-direction:column; align-items:center; justify-content:center; font-weight:900; font-size:13px; color:#15803d; background:#f0fdf4; text-align:center; box-sizing:border-box;">
                     <span>上3档 Call</span>
-                    <span style="font-size:11px; font-weight:800;">+5% ~ +30%</span>
+                    <span style="font-size:10.5px; font-weight:800;">OI+实时量加权</span>
                 </div>
                 <div style="height:{svg_h}px; position:relative; border-bottom:2px solid #1e293b; background:#ffffff; box-sizing:border-box;">
                     {y_ticks_html}
                 </div>
                 <div style="height:{bot3_h}px; border-bottom:1px solid #cbd5e1; display:flex; flex-direction:column; align-items:center; justify-content:center; font-weight:900; font-size:13px; color:#b91c1c; background:#fef2f2; text-align:center; box-sizing:border-box;">
                     <span>下3档 Put</span>
-                    <span style="font-size:11px; font-weight:800;">-5% ~ -30%</span>
+                    <span style="font-size:10.5px; font-weight:800;">OI+实时量加权</span>
                 </div>
                 <div style="height:{footer_h}px; display:flex; flex-direction:column; align-items:center; justify-content:center; font-weight:900; font-size:13px; background:#f8fafc; box-sizing:border-box;">
                     <span>到期轴</span>
@@ -936,7 +1138,6 @@ SOLAR_MONTH_TO_ZHI_IDX = {
     8: 8, 9: 9, 10: 10, 11: 11, 12: 0, 1: 1,
 }
 
-# 常见标的命盘定位与财报季参考（未收录的新增代码也会先自动定盘再算走势）
 STOCK_NATAL_SEEDS: dict[str, dict[str, Any]] = {
     "NVDA": {"gan": "丙", "zhi": "午", "role": "离火算力引擎", "earnings": [2, 5, 8, 11]},
     "AMD": {"gan": "丁", "zhi": "巳", "role": "离火进攻芯片", "earnings": [2, 5, 8, 11]},
@@ -961,7 +1162,6 @@ STOCK_NATAL_SEEDS: dict[str, dict[str, Any]] = {
     "EQQQ.L": {"gan": "乙", "zhi": "巳", "role": "木火纳指宽基", "earnings": [1, 4, 7, 10]},
 }
 
-# 顶层大运：九紫离火运（2024–2043）背景底盘（30%辅助定位，让出70%空间给个股天干地支冲合生克）
 PERIOD9_LI_FIRE_MONTHS = {
     1:  {"base_tech": 50.0, "real": 74.0, "tag": "冬末重配", "desc": "新年流动性回流·整固"},
     2:  {"base_tech": 54.0, "real": 68.0, "tag": "春初脉冲", "desc": "离火启暖·财报预期窗"},
@@ -992,10 +1192,6 @@ def _solar_month_ganzhi(year: int, month: int) -> tuple[str, str]:
     return m_gan, m_zhi
 
 def evaluate_period9_li_fire_affinity(stock_el: str, stock_zhi: str) -> dict[str, Any]:
-    """
-    顶层大环境：九紫离火运（2024–2043，离卦属火）
-    作为宏观背景层（约30%权重定位），提供离火大运顺逆与振幅弹性。
-    """
     if stock_el == "火":
         bonus = 8.0
         vol_mult = 1.18
@@ -1016,7 +1212,7 @@ def evaluate_period9_li_fire_affinity(stock_el: str, stock_zhi: str) -> dict[str
         vol_mult = 1.20
         tag = "离火炼金·波段分化"
         desc = "火克金受离火淬炼，遇冲克月易深蹲，得生扶/合月易反弹"
-    else:  # 水
+    else:
         bonus = -4.0
         vol_mult = 1.16
         tag = "水火既济·冲克明显"
@@ -1045,10 +1241,6 @@ def _ganzhi_pair_interaction(
     other_zhi: str,
     context_prefix: str,
 ) -> tuple[float, str]:
-    """
-    计算目标干支（年柱或月柱）与个股本命干支的生克冲合刑（70%主导核心）
-    放大冲/刑/克/六合/生扶的区分度，让不同股票在不同月份走出各自强弱。
-    """
     other_el = TIANGAN_ELEMENT[other_gan]
     score = 0.0
     tags = []
@@ -1088,10 +1280,6 @@ def _ganzhi_pair_interaction(
     return score, "·".join(tags[:2])
 
 def resolve_stock_natal_chart(symbol: str, ref_dt: datetime | None = None) -> dict[str, Any]:
-    """
-    【第一步前置程序】每支个股被选进来的第一步：
-    先把它的命盘（本命干支、五行定位、九紫离火运契合度、财报季、当前年柱）找出来并写入档案库。
-    """
     clean_sym = symbol.upper().strip() or "NVDA"
     now_dt = ref_dt or datetime.today()
     cur_y_gan, cur_y_zhi = _year_to_ganzhi(now_dt.year)
@@ -1202,13 +1390,6 @@ def _macro_calendar_factors(
     e_months: list[int],
     ref_dt: datetime | None = None,
 ) -> dict[str, Any]:
-    """
-    按历史回调幅度校准的税务结算、季末调仓与假期节律修正（30%辅助层）：
-    - 12月中旬：年底税务结算(-8.0) + 圣诞/跨年长假(-7.0) = -15.0
-    - 3月底：税季卖盘(-11.0) + 季末调仓(-4.0) = -15.0
-    - 9月中旬：冲月清洗(-8.0) + 季末四巫换仓(-4.0) = -12.0
-    - 11月感恩节：-6.0；1月新年初 / 5月春末 / 7月盛夏假期：-4.5 ~ -5.0
-    """
     tax_delta = 0.0
     holiday_delta = 0.0
     quarter_delta = 0.0
@@ -1341,12 +1522,6 @@ def evaluate_flow_radar(
         }
 
 def _estimate_range_anchored_price(spot: float, tech_score: float, m_data: dict[str, Any] | None = None) -> float:
-    """
-    紧跟最新现价 spot 做锚定估算（非精确目标价）：
-    - 中性分 (~50分) 紧贴当前最新现价 spot
-    - 低分 (8~35分) 锚定在现价下方回调带，避免急跌后低点反而高于现价
-    - 高分 (65~98分) 向上延伸至现价上方波段区间（参考近期高点与52周高点上限）
-    """
     if spot <= 0:
         return 0.0
 
@@ -1397,11 +1572,6 @@ def build_rolling_12m_cycle_rows(
     cdf: pd.DataFrame | None = None,
     pdf: pd.DataFrame | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """
-    【第二步走势计算 · 3/7 开结构】
-    - 70% 主导：个股本命天干地支 × 流年柱/流月柱的生克冲合刑（不截断正向合生与逆向冲克）
-    - 30% 辅助：九紫离火大运背景 + 按历史回撤校准的税务结算/季末换仓/假期节律
-    """
     now_dt = datetime.today()
     natal = resolve_stock_natal_chart(symbol, ref_dt=now_dt)
 
@@ -1435,11 +1605,9 @@ def build_rolling_12m_cycle_rows(
         p9_m = PERIOD9_LI_FIRE_MONTHS[m_num]
         dist = _macro_calendar_factors(y_num, m_num, e_months, ref_dt=now_dt)
 
-        # 个股本命干支与流年、流月干支的生克冲合刑（主导70%）
         yr_delta, yr_note = _ganzhi_pair_interaction(s_gan, s_zhi, s_el, y_gan, y_zhi, context_prefix="年")
         mo_delta, mo_note = _ganzhi_pair_interaction(s_gan, s_zhi, s_el, m_gan, m_zhi, context_prefix="月")
 
-        # 月柱生克冲合占更大权重，年柱定全年基调，并乘上个股离火运波动倍率
         natal_cycle_score = (mo_delta * 1.35 + yr_delta * 0.65) * vol_mult
         macro_bg_score = era_bonus * 0.75
 
@@ -1648,88 +1816,18 @@ def render_12m_cycle_block_above_options(
     for r in rows:
         idx_step = r["step"]
         if r["month_num"] == 9:
-            fig_12m.add_vrect(
-                x0=idx_step - 0.45,
-                x1=idx_step + 0.45,
-                fillcolor="rgba(239, 68, 68, 0.14)",
-                line_width=0,
-            )
-            fig_12m.add_annotation(
-                x=idx_step,
-                y=102,
-                xref="x",
-                yref="y",
-                text="冲月清洗",
-                showarrow=False,
-                xanchor="center",
-                yanchor="top",
-                font=dict(color="#b91c1c", size=11),
-                bgcolor="rgba(254, 226, 226, 0.92)",
-            )
+            fig_12m.add_vrect(x0=idx_step - 0.45, x1=idx_step + 0.45, fillcolor="rgba(239, 68, 68, 0.14)", line_width=0)
+            fig_12m.add_annotation(x=idx_step, y=102, xref="x", yref="y", text="冲月清洗", showarrow=False, xanchor="center", yanchor="top", font=dict(color="#b91c1c", size=11), bgcolor="rgba(254, 226, 226, 0.92)")
         elif r["month_num"] == 12:
-            fig_12m.add_vrect(
-                x0=idx_step - 0.45,
-                x1=idx_step + 0.45,
-                fillcolor="rgba(59, 130, 246, 0.14)",
-                line_width=0,
-            )
-            fig_12m.add_annotation(
-                x=idx_step,
-                y=102,
-                xref="x",
-                yref="y",
-                text="年底税务/长假",
-                showarrow=False,
-                xanchor="center",
-                yanchor="top",
-                font=dict(color="#1d4ed8", size=11),
-                bgcolor="rgba(219, 234, 254, 0.92)",
-            )
+            fig_12m.add_vrect(x0=idx_step - 0.45, x1=idx_step + 0.45, fillcolor="rgba(59, 130, 246, 0.14)", line_width=0)
+            fig_12m.add_annotation(x=idx_step, y=102, xref="x", yref="y", text="年底税务/长假", showarrow=False, xanchor="center", yanchor="top", font=dict(color="#1d4ed8", size=11), bgcolor="rgba(219, 234, 254, 0.92)")
         elif r["month_num"] == 3:
-            fig_12m.add_vrect(
-                x0=idx_step - 0.45,
-                x1=idx_step + 0.45,
-                fillcolor="rgba(239, 68, 68, 0.12)",
-                line_width=0,
-            )
-            fig_12m.add_annotation(
-                x=idx_step,
-                y=102,
-                xref="x",
-                yref="y",
-                text="3月底税季低点",
-                showarrow=False,
-                xanchor="center",
-                yanchor="top",
-                font=dict(color="#b91c1c", size=11),
-                bgcolor="rgba(254, 226, 226, 0.92)",
-            )
+            fig_12m.add_vrect(x0=idx_step - 0.45, x1=idx_step + 0.45, fillcolor="rgba(239, 68, 68, 0.12)", line_width=0)
+            fig_12m.add_annotation(x=idx_step, y=102, xref="x", yref="y", text="3月底税季低点", showarrow=False, xanchor="center", yanchor="top", font=dict(color="#b91c1c", size=11), bgcolor="rgba(254, 226, 226, 0.92)")
         elif r["is_post_earnings_now"]:
-            fig_12m.add_annotation(
-                x=idx_step,
-                y=93,
-                xref="x",
-                yref="y",
-                text="财报刚出·消化中",
-                showarrow=False,
-                xanchor="center",
-                yanchor="top",
-                font=dict(color="#0369a1", size=10.5),
-                bgcolor="rgba(224, 242, 254, 0.94)",
-            )
+            fig_12m.add_annotation(x=idx_step, y=93, xref="x", yref="y", text="财报刚出·消化中", showarrow=False, xanchor="center", yanchor="top", font=dict(color="#0369a1", size=10.5), bgcolor="rgba(224, 242, 254, 0.94)")
         elif r["is_pre_earnings"]:
-            fig_12m.add_annotation(
-                x=idx_step,
-                y=93,
-                xref="x",
-                yref="y",
-                text=f"财报前窗·{flow['short_tag']}",
-                showarrow=False,
-                xanchor="center",
-                yanchor="top",
-                font=dict(color="#b45309", size=10.5),
-                bgcolor="rgba(254, 243, 199, 0.92)",
-            )
+            fig_12m.add_annotation(x=idx_step, y=93, xref="x", yref="y", text=f"财报前窗·{flow['short_tag']}", showarrow=False, xanchor="center", yanchor="top", font=dict(color="#b45309", size=10.5), bgcolor="rgba(254, 243, 199, 0.92)")
 
     fig_12m.update_layout(
         template="plotly_white",
@@ -1798,7 +1896,6 @@ def render_12m_cycle_block_above_options(
 
 # ==================== TOP BAR & NAVIGATION ====================
 
-# 每次页面渲染先确保当前选中标的已走完“第一步：定命盘”
 active_natal = resolve_stock_natal_chart(st.session_state.selected_ticker)
 
 top_bar_html = "<div class='top-bar'><div class='brand-title'>CAPITAL QUANT v2</div><div class='live-badge'>Auto-Sync Every 3m (180s) | " + datetime.now().strftime('%b %d, %Y %H:%M:%S') + " | 3/7 Macro-Natal Model</div></div>"
@@ -1826,7 +1923,6 @@ def render_native_market_watch():
     new_t = c2.text_input("Add", placeholder="输入任意代码 (美股如 PLTR, 英股如 BP.L)", label_visibility="collapsed").strip().upper()
     if c3.button("ADD TICKER", use_container_width=True) and new_t:
         if new_t not in st.session_state.tickers:
-            # 第一步：先定命盘，再加入自选并计算走势
             select_ticker_with_natal_first(new_t)
             st.success(f"已先定命盘并添加: {new_t}")
             st.rerun()
@@ -1894,7 +1990,6 @@ def render_native_market_watch():
         selected_idx = event.selection.rows[0]
         if selected_idx < len(df_watch):
             picked_sym = df_watch.iloc[selected_idx]["COMPANY CODE"]
-            # 第一步：先找它的命盘，再进入 Stock Analysis 算走势
             select_ticker_with_natal_first(picked_sym, target_page="Stock Analysis")
             st.rerun()
 
@@ -1920,7 +2015,6 @@ elif st.session_state.page == "Stock Analysis":
     idx = st.session_state.tickers.index(st.session_state.selected_ticker) if st.session_state.selected_ticker in st.session_state.tickers else 0
     chosen = t2.selectbox("标的", st.session_state.tickers, index=idx, label_visibility="collapsed")
     if chosen != st.session_state.selected_ticker:
-        # 切换标的时第一步先定盘
         select_ticker_with_natal_first(chosen)
         st.rerun()
     if t3.button("OPTIONS INTELLIGENCE V2.0 >", use_container_width=True):
@@ -1969,7 +2063,7 @@ elif st.session_state.page == "Stock Analysis":
             if real_call_wall is not None and real_put_wall is not None:
                 call_wall_series = pd.Series([float(real_call_wall)] * len(hdf), index=hdf.index)
                 put_wall_series = pd.Series([float(real_put_wall)] * len(hdf), index=hdf.index)
-                wall_source_tag = "Yahoo真实期权墙"
+                wall_source_tag = "多源真实期权墙"
             else:
                 rolling_mid = hdf['Close'].rolling(window=5, min_periods=1).mean()
                 call_wall_series = rolling_mid * 1.07
@@ -2073,7 +2167,6 @@ elif st.session_state.page == "Options Intelligence":
     idx = st.session_state.tickers.index(st.session_state.selected_ticker) if st.session_state.selected_ticker in st.session_state.tickers else 0
     chosen_o = o2.selectbox("期权标的", st.session_state.tickers, index=idx, label_visibility="collapsed")
     if chosen_o != st.session_state.selected_ticker:
-        # 切换期权标的时第一步先定盘
         select_ticker_with_natal_first(chosen_o)
         st.rerun()
     if o3.button("← Stock Analysis", use_container_width=True):
@@ -2095,7 +2188,7 @@ elif st.session_state.page == "Options Intelligence":
 
     st.markdown("<div class='module-container'>", unsafe_allow_html=True)
     hdr_c1, hdr_c2 = st.columns([4.5, 1.5])
-    hdr_c1.markdown("<div class='card-header'>📊 Yahoo 期权库真实核心行权价明细 (Call vs Put 权利金与未平仓对比 | 现价 ±30% 波段全覆盖)</div>", unsafe_allow_html=True)
+    hdr_c1.markdown("<div class='card-header'>📊 多源期权库真实核心行权价明细 (Call vs Put 权利金与未平仓对比 | 现价 ±30% 波段全覆盖)</div>", unsafe_allow_html=True)
     st.session_state.show_all_strikes = hdr_c2.toggle("显示全链所有行权价", value=st.session_state.show_all_strikes)
 
     has_real_chain = _is_valid_chain_pair(cdf, pdf)
@@ -2115,7 +2208,7 @@ elif st.session_state.page == "Options Intelligence":
     m1.markdown("<div class='metric-box'><div class='metric-label'>Call / Put Volume</div><div class='metric-val'>" + (f"{cvol:,} / {pvol:,}" if has_real_chain else "N/A") + "</div></div>", unsafe_allow_html=True)
     m2.markdown("<div class='metric-box'><div class='metric-label'>Put / Call OI Ratio</div><div class='metric-val' style='color:#facc15;'>" + (f"{pcr:.2f}" if (has_real_chain and coi > 0) else "N/A") + "</div></div>", unsafe_allow_html=True)
     m3.markdown("<div class='metric-box'><div class='metric-label'>Spot Price (现价)</div><div class='metric-val' style='color:#38bdf8;'>" + f"${spot:.2f}" + "</div></div>", unsafe_allow_html=True)
-    m4.markdown("<div class='metric-box'><div class='metric-label'>数据来源状态</div><div class='metric-val' style='color:#4ade80;'>" + ("Yahoo 链已接入" if has_real_chain else "待 Yahoo 返回期权链") + "</div></div>", unsafe_allow_html=True)
+    m4.markdown("<div class='metric-box'><div class='metric-label'>数据来源状态</div><div class='metric-val' style='color:#4ade80;'>" + ("多源链已接入" if has_real_chain else "待期权链返回") + "</div></div>", unsafe_allow_html=True)
 
     st.markdown("<br>", unsafe_allow_html=True)
     if has_real_chain:
@@ -2162,7 +2255,7 @@ elif st.session_state.page == "Options Intelligence":
             """, unsafe_allow_html=True)
             st.markdown(dfs.to_html(index=False, classes="table-white"), unsafe_allow_html=True)
         else:
-            st.info("Yahoo 期权库当前未返回匹配行权价明细，未使用预设模拟价格。")
+            st.info("期权库当前未返回匹配行权价明细，未使用预设模拟价格。")
     else:
-        st.info("Yahoo Finance 当前暂未返回真实期权链数据（未启用任何预设模拟价格）。")
+        st.info("当前暂未返回真实期权链数据（未启用任何预设模拟价格）。")
     st.markdown("</div>", unsafe_allow_html=True)
