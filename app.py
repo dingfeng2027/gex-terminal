@@ -129,6 +129,13 @@ if "opt_persistent_cache" not in st.session_state:
 if "stock_natal_registry" not in st.session_state:
     st.session_state["stock_natal_registry"] = {}
 
+if "calc_refresh_nonce" not in st.session_state:
+    st.session_state["calc_refresh_nonce"] = 0
+
+def bump_calc_nonce() -> int:
+    st.session_state["calc_refresh_nonce"] = int(st.session_state.get("calc_refresh_nonce", 0)) + 1
+    return st.session_state["calc_refresh_nonce"]
+
 def sync_watchlist_to_url():
     st.query_params["watchlist"] = ",".join(st.session_state.tickers)
 
@@ -138,6 +145,7 @@ def select_ticker_with_natal_first(symbol: str, target_page: str | None = None) 
         st.session_state.tickers.append(clean_sym)
         sync_watchlist_to_url()
     st.session_state.selected_ticker = clean_sym
+    bump_calc_nonce()
     natal_profile = resolve_stock_natal_chart(clean_sym)
     if target_page:
         st.session_state.page = target_page
@@ -330,8 +338,9 @@ def _calc_indicators_from_closes(closes, last_price, prev_price, high52=None, lo
         "rsi": round(float(rsi), 1),
     }
 
-@st.cache_data(ttl=180, show_spinner=False)
-def fetch_stock_metrics(symbol, live=True):
+@st.cache_data(ttl=45, show_spinner=False)
+def fetch_stock_metrics(symbol, live=True, refresh_nonce: int = 0):
+    _ = refresh_nonce
     fb = FALLBACK_DATA.get(symbol, {"name": symbol, "price": 150.0, "prev": 148.0, "pe": 25.0, "mcap": "100B"})
     if not live:
         return {
@@ -394,8 +403,9 @@ def fetch_stock_metrics(symbol, live=True):
         "pe": fb.get("pe"), "eps": 5.0, "mcap": fb.get("mcap", "100B"), "src": "FB",
     }
 
-@st.cache_data(ttl=180, show_spinner=False)
-def fetch_history_df(symbol, period_str, current_price):
+@st.cache_data(ttl=45, show_spinner=False)
+def fetch_history_df(symbol, period_str, current_price, refresh_nonce: int = 0):
+    _ = refresh_nonce
     pmap = {"1日": "1d", "1星期": "5d", "1个月": "1mo", "3个月": "3mo", "6个月": "6mo", "1年": "1y", "全部": "max"}
     yfp = pmap.get(period_str, "6mo")
     days_back = {"1d": 5, "5d": 10, "1mo": 32, "3mo": 95, "6mo": 185, "1y": 365, "max": 1825}.get(yfp, 185)
@@ -431,8 +441,9 @@ def fetch_history_df(symbol, period_str, current_price):
     prices = current_price * np.exp(np.cumsum(np.random.normal(0.0005, 0.015, size=len(dates))))
     return pd.DataFrame({"Date": dates, "Close": prices * (current_price / prices[-1])})
 
-@st.cache_data(ttl=300, show_spinner=False)
-def fetch_cycle_anchor_prices(symbol: str, fallback_spot: float) -> dict[str, Any]:
+@st.cache_data(ttl=30, show_spinner=False)
+def fetch_cycle_anchor_prices(symbol: str, fallback_spot: float, refresh_nonce: int = 0) -> dict[str, Any]:
+    _ = refresh_nonce
     now_dt = datetime.today()
     df_hist = pd.DataFrame()
 
@@ -461,8 +472,8 @@ def fetch_cycle_anchor_prices(symbol: str, fallback_spot: float) -> dict[str, An
 
     mid_nov_anchor = float(fallback_spot)
     mid_nov_label = "现价兜底"
-    last_week_low = round(float(fallback_spot) * 0.94, 2) if fallback_spot > 0 else 0.0
-    last_week_high = round(float(fallback_spot) * 1.03, 2) if fallback_spot > 0 else 0.0
+    last_week_low = round(float(fallback_spot) * 0.95, 2) if fallback_spot > 0 else 0.0
+    last_week_high = round(float(fallback_spot) * 1.02, 2) if fallback_spot > 0 else 0.0
     last_week_date_str = ""
 
     if df_hist is not None and not df_hist.empty:
@@ -481,10 +492,14 @@ def fetch_cycle_anchor_prices(symbol: str, fallback_spot: float) -> dict[str, An
                 & (pd.to_datetime(df_hist["Date"]).dt.month == 11)
             ]
         if not nov_mid_df.empty:
-            mid_nov_anchor = round(float(nov_mid_df["Close"].mean()), 2)
+            nov_mean = float(nov_mid_df["Close"].mean())
+            if fallback_spot > 0:
+                mid_nov_anchor = round(nov_mean * 0.25 + float(fallback_spot) * 0.75, 2)
+            else:
+                mid_nov_anchor = round(nov_mean, 2)
             d_min = nov_mid_df["d_only"].min().strftime("%m/%d")
             d_max = nov_mid_df["d_only"].max().strftime("%m/%d")
-            mid_nov_label = f"11月中实盘({d_min}-{d_max})"
+            mid_nov_label = f"11月中实时校准({d_min}-{d_max})"
 
         lw_df = df_hist[(df_hist["d_only"] >= last_monday) & (df_hist["d_only"] <= last_sunday)]
         if lw_df.empty and len(df_hist) >= 6:
@@ -493,7 +508,11 @@ def fetch_cycle_anchor_prices(symbol: str, fallback_spot: float) -> dict[str, An
             low_col = "Low" if "Low" in lw_df.columns and lw_df["Low"].notna().any() else "Close"
             high_col = "High" if "High" in lw_df.columns and lw_df["High"].notna().any() else "Close"
             min_idx = lw_df[low_col].idxmin()
-            last_week_low = round(float(lw_df.loc[min_idx, low_col]), 2)
+            raw_lw_low = float(lw_df.loc[min_idx, low_col])
+            if fallback_spot > 0 and raw_lw_low > fallback_spot * 1.02:
+                last_week_low = round(fallback_spot * 0.95, 2)
+            else:
+                last_week_low = round(raw_lw_low, 2)
             last_week_high = round(float(lw_df[high_col].max()), 2)
             last_week_date_str = lw_df.loc[min_idx, "d_only"].strftime("%m/%d")
 
@@ -526,7 +545,8 @@ def _parse_occ_option_symbol(occ_sym: str) -> tuple[str | None, str | None, floa
         return None, None, None
 
 @st.cache_data(ttl=120, show_spinner=False)
-def _query_cboe_realtime_bundle(symbol: str) -> tuple[list[str], dict[str, tuple[pd.DataFrame, pd.DataFrame]], str]:
+def _query_cboe_realtime_bundle(symbol: str, refresh_nonce: int = 0) -> tuple[list[str], dict[str, tuple[pd.DataFrame, pd.DataFrame]], str]:
+    _ = refresh_nonce
     if "." in symbol:
         return [], {}, "非美股无 CBOE 链"
     clean_sym = symbol.upper().strip()
@@ -590,7 +610,8 @@ def _query_cboe_realtime_bundle(symbol: str) -> tuple[list[str], dict[str, tuple
     return [], {}, "CBOE 未返回"
 
 @st.cache_data(ttl=120, show_spinner=False)
-def _query_nasdaq_option_bundle(symbol: str) -> tuple[list[str], dict[str, tuple[pd.DataFrame, pd.DataFrame]], str]:
+def _query_nasdaq_option_bundle(symbol: str, refresh_nonce: int = 0) -> tuple[list[str], dict[str, tuple[pd.DataFrame, pd.DataFrame]], str]:
+    _ = refresh_nonce
     if "." in symbol:
         return [], {}, "非美股无 Nasdaq 链"
     clean_sym = symbol.upper().strip()
@@ -668,8 +689,9 @@ def _normalize_yf_option_side(df_raw: pd.DataFrame) -> pd.DataFrame:
     out = out.dropna(subset=["strike"])
     return out[out["strike"] > 0].reset_index(drop=True)
 
-@st.cache_data(ttl=180, show_spinner=False)
-def _query_yahoo_yfinance_bundle(symbol: str) -> tuple[list[str], dict[str, tuple[pd.DataFrame, pd.DataFrame]], str]:
+@st.cache_data(ttl=120, show_spinner=False)
+def _query_yahoo_yfinance_bundle(symbol: str, refresh_nonce: int = 0) -> tuple[list[str], dict[str, tuple[pd.DataFrame, pd.DataFrame]], str]:
+    _ = refresh_nonce
     if "." in symbol:
         return [], {}, "非美股代码无美式期权链"
     if not HAS_YF:
@@ -704,9 +726,10 @@ def _query_yahoo_yfinance_bundle(symbol: str) -> tuple[list[str], dict[str, tupl
         return [], {}, f"Yahoo 异常: {str(e)[:35]}"
 
 def _collect_multi_source_options(symbol: str) -> tuple[list[str], dict[str, dict[str, Any]], int, str, str]:
-    cboe_days, cboe_map, cboe_msg = _query_cboe_realtime_bundle(symbol)
-    nq_days, nq_map, _ = ([], {}, "") if len(cboe_map) >= 6 else _query_nasdaq_option_bundle(symbol)
-    yh_days, yh_map, yh_msg = ([], {}, "") if (len(cboe_map) + len(nq_map)) >= 6 else _query_yahoo_yfinance_bundle(symbol)
+    nonce = int(st.session_state.get("calc_refresh_nonce", 0))
+    cboe_days, cboe_map, cboe_msg = _query_cboe_realtime_bundle(symbol, refresh_nonce=nonce)
+    nq_days, nq_map, _ = ([], {}, "") if len(cboe_map) >= 6 else _query_nasdaq_option_bundle(symbol, refresh_nonce=nonce)
+    yh_days, yh_map, yh_msg = ([], {}, "") if (len(cboe_map) + len(nq_map)) >= 6 else _query_yahoo_yfinance_bundle(symbol, refresh_nonce=nonce)
 
     cache_store: dict[str, dict[str, Any]] = st.session_state["opt_persistent_cache"]
     prev_entry = cache_store.get(symbol, {})
@@ -1231,7 +1254,7 @@ STOCK_NATAL_SEEDS: dict[str, dict[str, Any]] = {
                 "score_adj": -22.0,
                 "anchor_low_mode": True,
                 "stance": "劫难尾声·复职修复窗",
-                "action_hint": "低坑已现(≈$130附近) / 逢回踩分批承接",
+                "action_hint": "低坑已现 / 逢回踩分批承接",
                 "badge_color": "#38bdf8",
                 "relieves_next_month": True,
             }
@@ -1720,43 +1743,43 @@ def _estimate_range_anchored_price(
     m_data: dict[str, Any] | None = None,
     last_week_low: float = 0.0,
     month_num: int = 0,
+    spot_px: float = 0.0,
+    is_current_month: bool = False,
 ) -> float:
-    if anchor_px <= 0:
+    base_px = float(spot_px) if (spot_px and spot_px > 0) else float(anchor_px)
+    if base_px <= 0:
         return 0.0
 
-    m_info = m_data or {}
-    r_high = float(m_info.get("recent_high") or 0.0)
-    h52 = float(m_info.get("high52") or 0.0)
-    l52 = float(m_info.get("low52") or 0.0)
+    # 本月起点紧贴实盘基准，避免单月干支得分过高/过低导致起点失真
+    if is_current_month:
+        ref_11m = (base_px * 0.65 + float(anchor_px) * 0.35) if (anchor_px and anchor_px > 0) else base_px
+        if last_week_low > 0 and ref_11m > last_week_low * 1.12:
+            ref_11m = ref_11m * 0.88 + last_week_low * 0.12
+        return round(ref_11m, 2)
 
-    default_floor = anchor_px * 0.84
-    if last_week_low > 0 and last_week_low < anchor_px:
-        lw_drop_pct = (anchor_px - last_week_low) / anchor_px
-        projected_deep_floor = last_week_low * (1.0 - max(0.03, min(0.08, lw_drop_pct * 0.65)))
-        floor_px = max(anchor_px * 0.76, min(default_floor, projected_deep_floor))
-    elif l52 > 0 and l52 < anchor_px:
-        floor_px = max(anchor_px * 0.78, min(default_floor, anchor_px * 0.65 + l52 * 0.35))
+    eff_anchor = (base_px * 0.75 + float(anchor_px) * 0.25) if (anchor_px and anchor_px > 0) else base_px
+
+    default_floor = eff_anchor * 0.91
+    if last_week_low > 0 and last_week_low < eff_anchor:
+        lw_drop_pct = (eff_anchor - last_week_low) / eff_anchor
+        projected_deep_floor = last_week_low * (1.0 - max(0.02, min(0.04, lw_drop_pct * 0.4)))
+        floor_px = max(eff_anchor * 0.87, min(default_floor, projected_deep_floor))
     else:
         floor_px = default_floor
-    floor_px = min(floor_px, anchor_px * 0.93)
+    floor_px = min(floor_px, eff_anchor * 0.96)
 
-    default_ceil = anchor_px * 1.24
-    ref_top = max(r_high, h52 * 0.95) if (r_high > 0 or h52 > 0) else default_ceil
-    if ref_top > anchor_px * 1.05:
-        ceil_px = min(anchor_px * 1.42, max(default_ceil, anchor_px * 0.55 + ref_top * 0.45))
-    else:
-        ceil_px = default_ceil
+    ceil_px = eff_anchor * 1.10
 
-    neutral_score = 50.0
+    neutral_score = 52.0
     if tech_score <= neutral_score:
-        ratio = max(0.0, min(1.0, (tech_score - 10.0) / (neutral_score - 10.0)))
-        est = floor_px + (anchor_px - floor_px) * ratio
+        ratio = max(0.0, min(1.0, (tech_score - 15.0) / (neutral_score - 15.0)))
+        est = floor_px + (eff_anchor - floor_px) * ratio
         if month_num == 12 and last_week_low > 0:
-            dec_low_ref = last_week_low * (1.07 + 0.03 * ratio)
-            est = round(est * 0.20 + dec_low_ref * 0.80, 2)
+            dec_low_ref = max(floor_px * 0.98, min(eff_anchor * 0.98, last_week_low * (1.03 + 0.02 * ratio)))
+            est = round(est * 0.35 + dec_low_ref * 0.65, 2)
     else:
         ratio = max(0.0, min(1.0, (tech_score - neutral_score) / (98.0 - neutral_score)))
-        est = anchor_px + (ceil_px - anchor_px) * ratio
+        est = eff_anchor + (ceil_px - eff_anchor) * ratio
 
     return round(est, 2)
 
@@ -1787,8 +1810,9 @@ def build_rolling_12m_cycle_rows(
     era_bonus = float(natal["era_bonus"])
     vol_mult = float(natal["vol_mult"])
     spot = float((m_data or {}).get("price") or 0.0)
+    nonce = int(st.session_state.get("calc_refresh_nonce", 0))
 
-    anchor_info = fetch_cycle_anchor_prices(symbol, spot)
+    anchor_info = fetch_cycle_anchor_prices(symbol, round(spot, 2), refresh_nonce=nonce)
     base_anchor_px = float(anchor_info["mid_nov_anchor"]) if anchor_info["mid_nov_anchor"] > 0 else spot
     last_week_low = float(anchor_info["last_week_low"])
 
@@ -1827,7 +1851,7 @@ def build_rolling_12m_cycle_rows(
         mo_delta, mo_note = _ganzhi_pair_interaction(s_gan, s_zhi, s_el, m_gan, m_zhi, context_prefix="月")
 
         effective_mo_delta = (mo_delta * 0.45) if (relieved_by_prev_month and mo_delta < 0) else mo_delta
-        natal_raw_score = 50.0 + (effective_mo_delta * 1.45 + yr_delta * 0.75) * vol_mult
+        natal_raw_score = 50.0 + (effective_mo_delta * 1.10 + yr_delta * 0.65) * vol_mult
         if cur_ev:
             natal_raw_score += float(cur_ev.get("score_adj", 0.0))
 
@@ -1849,17 +1873,17 @@ def build_rolling_12m_cycle_rows(
 
         raw_score = 0.70 * natal_raw_score + 0.30 * macro_3_score
         if cur_ev and cur_ev.get("anchor_low_mode"):
-            tech_score = 20.0
+            tech_score = 22.0
         elif m_num == 12 and mo_delta < 0:
-            tech_score = round(max(18.0, min(42.0, raw_score * 0.78)), 1)
+            tech_score = round(max(20.0, min(42.0, raw_score * 0.78)), 1)
         else:
-            tech_score = round(max(12.0, min(98.0, raw_score)), 1)
+            tech_score = round(max(15.0, min(96.0, raw_score)), 1)
 
         real_score = round(
             max(
-                15.0,
+                18.0,
                 min(
-                    98.0,
+                    96.0,
                     0.70 * (p9_m["real"] + mo_delta * 0.45 + yr_delta * 0.25)
                     + 0.30 * (p9_m["real"] + (dist["tax_delta"] + dist["holiday_delta"] + dist["quarter_delta"] + dist["jan_return_delta"]) * 0.5),
                 ),
@@ -1873,13 +1897,12 @@ def build_rolling_12m_cycle_rows(
             m_data,
             last_week_low=last_week_low,
             month_num=m_num,
+            spot_px=spot,
+            is_current_month=(step == 0),
         )
-        if cur_ev and cur_ev.get("anchor_low_mode") and base_anchor_px > 0:
-            if last_week_low > 0:
-                approx_px = round(last_week_low * 1.045, 2)
-            else:
-                approx_px = round(base_anchor_px * 0.835, 2)
-        approx_str = _fmt_price_ref(approx_px, symbol) if base_anchor_px > 0 else ""
+        if cur_ev and cur_ev.get("anchor_low_mode") and spot > 0:
+            approx_px = round(spot * 1.01, 2)
+        approx_str = _fmt_price_ref(approx_px, symbol) if (spot > 0 or base_anchor_px > 0) else ""
 
         axis_nature, axis_kind = _classify_month_axis_nature(
             s_gan,
@@ -1960,8 +1983,8 @@ def build_rolling_12m_cycle_rows(
             action_hint = "等财报波动消化/守纪律"
             badge_color = "#38bdf8"
         elif dist["is_pre_earnings"]:
-            stance = f"财报前窗·{flow_info['short_tag']}"
-            action_hint = "防冲高兑现 / 不盲目追高" if flow_info["state"] == "偏抛盘" else "留意抢跑节奏 / 控仓"
+            stance = f"财报前窗·{flow['short_tag']}"
+            action_hint = "防冲高兑现 / 不盲目追高" if flow["state"] == "偏抛盘" else "留意抢跑节奏 / 控仓"
             badge_color = "#f59e0b"
         elif tech_score >= 72:
             stance = "干支顺势·强旺窗"
@@ -2007,8 +2030,9 @@ def build_rolling_12m_cycle_rows(
     dec_row = next((r for r in raw_rows if r["month_num"] == 12), None)
     dec_low_str = dec_row["approx_str"] if dec_row else "—"
 
+    ref_base = spot if spot > 0 else base_anchor_px
     price_range_str = ""
-    if base_anchor_px > 0:
+    if ref_base > 0:
         min_px = min(r["approx_price"] for r in raw_rows)
         max_px = max(r["approx_price"] for r in raw_rows)
         price_range_str = f" | 区间参考价: <b>{_fmt_price_ref(min_px, symbol)} ~ {_fmt_price_ref(max_px, symbol)}</b>"
@@ -2060,6 +2084,8 @@ def render_12m_cycle_block_above_options(
     flow = meta_info["flow_info"]
     cur_phase_txt = f" | 当前阶段: <b>{meta_info['phase_label']}</b>" if meta_info.get("phase_label") else ""
     lw_dt_txt = f"({meta_info['last_week_date_str']})" if meta_info.get("last_week_date_str") else ""
+    cur_spot_val = float((m_data or {}).get("price") or 0.0)
+    cur_spot_str = f" | 实盘现价: <b style='color:#4ade80;'>{_fmt_price_ref(cur_spot_val, symbol)}</b>" if cur_spot_val > 0 else ""
 
     st.markdown("<div class='module-container' style='padding:12px 14px; margin-bottom:10px;'>", unsafe_allow_html=True)
     h_col1, h_col2 = st.columns([4.8, 1.8])
@@ -2068,7 +2094,7 @@ def render_12m_cycle_block_above_options(
     h_col1.markdown(
         f"<div class='card-header' style='margin-bottom:2px;'>🧭 {symbol} 未来12个月滚动能量表 (3分九运离火 · 7分本身天干地支 | 定盘: <b>{meta_info['ganzhi']}·{meta_info['element']}</b> · {meta_info['role']})</div>"
         f"<div style='font-size:13.5px; color:#cbd5e1;'>大运背景: <b>{meta_info['era_name']}（{meta_info['era_tag']}）</b> | 现年柱: <b>{meta_info['year_ganzhi']}({meta_info['cur_year_note']})</b> | 区间: <b>{cur_year}年{cur_month}月 → {end_row['year_num']}年{end_row['month_num']}月</b> | 财报季: <b>{e_str}</b>{cur_phase_txt}<br>"
-        f"📌 固定锚点({meta_info['mid_nov_label']}): <b style='color:#facc15;'>{meta_info['mid_nov_anchor_str']}</b> | 上周低位{lw_dt_txt}: <b style='color:#38bdf8;'>{meta_info['last_week_low_str']}</b> | 推算12月中低位: <b style='color:#f87171;'>{meta_info['dec_low_str']}</b> | 高:<b>{meta_info['peak_label']}</b> / 低:<b>{meta_info['trough_label']}</b>{meta_info['price_range_str']}</div>",
+        f"📌 校准锚点({meta_info['mid_nov_label']}): <b style='color:#facc15;'>{meta_info['mid_nov_anchor_str']}</b>{cur_spot_str} | 上周低位{lw_dt_txt}: <b style='color:#38bdf8;'>{meta_info['last_week_low_str']}</b> | 推算12月中低位: <b style='color:#f87171;'>{meta_info['dec_low_str']}</b> | 高:<b>{meta_info['peak_label']}</b> / 低:<b>{meta_info['trough_label']}</b>{meta_info['price_range_str']}</div>",
         unsafe_allow_html=True,
     )
 
@@ -2107,7 +2133,7 @@ def render_12m_cycle_block_above_options(
         text=pt_labels,
         textposition="top center",
         line=dict(color="#f97316", width=3.2),
-        marker=dict(size=10, color="#f97316", line=dict(color="#ffffff", width=1.5)),
+        marker=dict(size=9, color="#f97316", line=dict(color="#ffffff", width=1.5)),
     ))
     if show_real_line:
         fig_12m.add_trace(go.Scatter(
@@ -2129,14 +2155,14 @@ def render_12m_cycle_block_above_options(
     )
     fig_12m.add_annotation(
         x=0,
-        y=102,
+        y=114,
         xref="x",
         yref="y",
         text=f"本月起点({cur_month}月)",
         showarrow=False,
         xanchor="center",
         yanchor="top",
-        font=dict(color="#b45309", size=11.5),
+        font=dict(color="#b45309", size=11),
         bgcolor="rgba(254, 240, 138, 0.92)",
     )
 
@@ -2144,44 +2170,44 @@ def render_12m_cycle_block_above_options(
         idx_step = r["step"]
         if r["month_num"] == 9:
             fig_12m.add_vrect(x0=idx_step - 0.45, x1=idx_step + 0.45, fillcolor="rgba(239, 68, 68, 0.14)", line_width=0)
-            fig_12m.add_annotation(x=idx_step, y=102, xref="x", yref="y", text="冲月清洗", showarrow=False, xanchor="center", yanchor="top", font=dict(color="#b91c1c", size=11), bgcolor="rgba(254, 226, 226, 0.92)")
+            fig_12m.add_annotation(x=idx_step, y=114, xref="x", yref="y", text="冲月清洗", showarrow=False, xanchor="center", yanchor="top", font=dict(color="#b91c1c", size=10.5), bgcolor="rgba(254, 226, 226, 0.92)")
         elif r["month_num"] == 12:
             fig_12m.add_vrect(x0=idx_step - 0.45, x1=idx_step + 0.45, fillcolor="rgba(59, 130, 246, 0.14)", line_width=0)
-            fig_12m.add_annotation(x=idx_step, y=102, xref="x", yref="y", text="年底税务/长假", showarrow=False, xanchor="center", yanchor="top", font=dict(color="#1d4ed8", size=11), bgcolor="rgba(219, 234, 254, 0.92)")
+            fig_12m.add_annotation(x=idx_step, y=114, xref="x", yref="y", text="年底税务/长假", showarrow=False, xanchor="center", yanchor="top", font=dict(color="#1d4ed8", size=10.5), bgcolor="rgba(219, 234, 254, 0.92)")
             if i + 1 < len(rows) and rows[i + 1]["month_num"] == 1:
                 fig_12m.add_annotation(
                     x=idx_step + 0.5,
-                    y=84,
+                    y=104,
                     xref="x",
                     yref="y",
                     text="12-1月跨年回流拉锯",
                     showarrow=False,
                     xanchor="center",
                     yanchor="top",
-                    font=dict(color="#be123c", size=10.5),
+                    font=dict(color="#be123c", size=10),
                     bgcolor="rgba(255, 228, 230, 0.92)",
                 )
         elif r["month_num"] == 3:
             fig_12m.add_vrect(x0=idx_step - 0.45, x1=idx_step + 0.45, fillcolor="rgba(239, 68, 68, 0.12)", line_width=0)
-            fig_12m.add_annotation(x=idx_step, y=102, xref="x", yref="y", text="3月底税季低点", showarrow=False, xanchor="center", yanchor="top", font=dict(color="#b91c1c", size=11), bgcolor="rgba(254, 226, 226, 0.92)")
+            fig_12m.add_annotation(x=idx_step, y=114, xref="x", yref="y", text="3月底税季低点", showarrow=False, xanchor="center", yanchor="top", font=dict(color="#b91c1c", size=10.5), bgcolor="rgba(254, 226, 226, 0.92)")
         elif r["month_num"] == 1:
-            fig_12m.add_annotation(x=idx_step, y=93, xref="x", yref="y", text="1月回流·后段修复", showarrow=False, xanchor="center", yanchor="top", font=dict(color="#b45309", size=10.5), bgcolor="rgba(254, 243, 199, 0.94)")
+            fig_12m.add_annotation(x=idx_step, y=104, xref="x", yref="y", text="1月回流·后段修复", showarrow=False, xanchor="center", yanchor="top", font=dict(color="#b45309", size=10), bgcolor="rgba(254, 243, 199, 0.94)")
         elif r["is_post_earnings_now"]:
-            fig_12m.add_annotation(x=idx_step, y=93, xref="x", yref="y", text="财报刚出·消化中", showarrow=False, xanchor="center", yanchor="top", font=dict(color="#0369a1", size=10.5), bgcolor="rgba(224, 242, 254, 0.94)")
+            fig_12m.add_annotation(x=idx_step, y=104, xref="x", yref="y", text="财报刚出·消化中", showarrow=False, xanchor="center", yanchor="top", font=dict(color="#0369a1", size=10), bgcolor="rgba(224, 242, 254, 0.94)")
         elif r["is_pre_earnings"]:
-            fig_12m.add_annotation(x=idx_step, y=93, xref="x", yref="y", text=f"财报前窗·{flow['short_tag']}", showarrow=False, xanchor="center", yanchor="top", font=dict(color="#b45309", size=10.5), bgcolor="rgba(254, 243, 199, 0.92)")
+            fig_12m.add_annotation(x=idx_step, y=104, xref="x", yref="y", text=f"财报前窗·{flow['short_tag']}", showarrow=False, xanchor="center", yanchor="top", font=dict(color="#b45309", size=10), bgcolor="rgba(254, 243, 199, 0.92)")
 
     fig_12m.update_layout(
         template="plotly_white",
         paper_bgcolor="#ffffff",
         plot_bgcolor="#ffffff",
-        height=315,
-        font=dict(size=12, color="#0f172a"),
-        margin=dict(l=12, r=12, t=42, b=44),
+        height=330,
+        font=dict(size=11.5, color="#0f172a"),
+        margin=dict(l=12, r=12, t=44, b=44),
         legend=dict(orientation="h", yanchor="bottom", y=1.08, xanchor="left", x=0),
     )
     fig_12m.update_xaxes(tickfont=dict(size=11, color="#0f172a"))
-    fig_12m.update_yaxes(range=[0, 110], gridcolor="#e2e8f0")
+    fig_12m.update_yaxes(range=[0, 118], gridcolor="#e2e8f0")
     st.plotly_chart(fig_12m, width="stretch")
 
     cards_html = "<div style='display:grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap:8px; margin-top:4px;'>"
@@ -2283,13 +2309,15 @@ def render_native_market_watch():
         st.cache_data.clear()
         st.session_state["opt_persistent_cache"] = {}
         st.session_state["stock_natal_registry"] = {}
+        bump_calc_nonce()
         st.rerun()
 
+    nonce = int(st.session_state.get("calc_refresh_nonce", 0))
     rows = []
     gainers = 0
     losers = 0
     for sym in st.session_state.tickers:
-        d = fetch_stock_metrics(sym, live=st.session_state.use_live_api)
+        d = fetch_stock_metrics(sym, live=st.session_state.use_live_api, refresh_nonce=nonce)
         chg = round(d["price"] - d["prev"], 2)
         pct = round((chg / d["prev"]) * 100, 2) if d["prev"] else 0.0
         if chg > 0:
@@ -2375,8 +2403,9 @@ elif st.session_state.page == "Stock Analysis":
         st.session_state.page = "Market Watch"
         st.rerun()
 
-    sym = select_ticker_with_natal_first(st.session_state.selected_ticker)["symbol"]
-    m = fetch_stock_metrics(sym, live=st.session_state.use_live_api)
+    sym = resolve_stock_natal_chart(st.session_state.selected_ticker)["symbol"]
+    nonce = int(st.session_state.get("calc_refresh_nonce", 0))
+    m = fetch_stock_metrics(sym, live=st.session_state.use_live_api, refresh_nonce=nonce)
     cur_price = float(m["price"])
 
     col_c, col_l = st.columns([2.5, 1.1])
@@ -2402,7 +2431,7 @@ elif st.session_state.page == "Stock Analysis":
 
         st.session_state.show_walls = p_cols[-1].toggle("真实期权墙 (Wall)", value=st.session_state.show_walls)
 
-        hdf = fetch_history_df(sym, st.session_state.chart_period, cur_price)
+        hdf = fetch_history_df(sym, st.session_state.chart_period, cur_price, refresh_nonce=nonce)
 
         real_call_wall = None
         real_put_wall = None
@@ -2527,8 +2556,9 @@ elif st.session_state.page == "Options Intelligence":
         st.session_state.page = "Market Watch"
         st.rerun()
 
-    sym = select_ticker_with_natal_first(st.session_state.selected_ticker)["symbol"]
-    m_opt = fetch_stock_metrics(sym, live=st.session_state.use_live_api)
+    sym = resolve_stock_natal_chart(st.session_state.selected_ticker)["symbol"]
+    nonce = int(st.session_state.get("calc_refresh_nonce", 0))
+    m_opt = fetch_stock_metrics(sym, live=st.session_state.use_live_api, refresh_nonce=nonce)
     spot = float(m_opt["price"])
     _, cdf, pdf = fetch_real_option_chain_for_date(sym, spot=spot)
 
