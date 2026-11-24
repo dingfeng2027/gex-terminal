@@ -133,7 +133,6 @@ def sync_watchlist_to_url():
     st.query_params["watchlist"] = ",".join(st.session_state.tickers)
 
 def select_ticker_with_natal_first(symbol: str, target_page: str | None = None) -> dict[str, Any]:
-    """每支个股被选进来的第一步：先找/定它的命盘，再进入后续行情与走势计算"""
     clean_sym = symbol.upper().strip() or "NVDA"
     if clean_sym not in st.session_state.tickers:
         st.session_state.tickers.append(clean_sym)
@@ -1211,13 +1210,6 @@ SOLAR_MONTH_TO_ZHI_IDX = {
     8: 8, 9: 9, 10: 10, 11: 11, 12: 0, 1: 1,
 }
 
-# 轻量化闰月缓冲参考映射（仅作气场延续/缓冲提示，不改变公历交易日历或核心权重）
-LEAP_MONTH_BUFFER_HINTS: dict[str, str] = {
-    "2025-06": "闰六月节律缓冲(气场微延展)",
-    "2028-05": "闰五月节律缓冲(气场微延展)",
-}
-
-# 财报状态覆写字典（可选：按 "YYYY-MM": {"tone": "green"|"red"|"yellow", "label": "...", "delta": float}）
 STOCK_NATAL_SEEDS: dict[str, dict[str, Any]] = {
     "NVDA": {
         "gan": "丙",
@@ -1236,7 +1228,6 @@ STOCK_NATAL_SEEDS: dict[str, dict[str, Any]] = {
                 "tag": "劫难低点·复职尾声",
                 "desc": "11/12冲击砸出低坑，11/23复职进入尾声修复",
                 "axis_nature": "相刑之月-刑月",
-                "severity": "major",
                 "score_adj": -22.0,
                 "anchor_low_mode": True,
                 "stance": "劫难尾声·复职修复窗",
@@ -1269,18 +1260,18 @@ STOCK_NATAL_SEEDS: dict[str, dict[str, Any]] = {
 }
 
 PERIOD9_LI_FIRE_MONTHS = {
-    1:  {"base_tech": 46.0, "real": 64.0, "tag": "回流洗盘", "desc": "跨年假期回流砸盘/兑现洗盘"},
-    2:  {"base_tech": 54.0, "real": 68.0, "tag": "春初脉冲", "desc": "离火启暖·财报预期窗"},
-    3:  {"base_tech": 48.0, "real": 54.0, "tag": "季末税窗", "desc": "3月底税季卖盘+季末调仓"},
-    4:  {"base_tech": 56.0, "real": 65.0, "tag": "税后回流", "desc": "新财年资金回补"},
-    5:  {"base_tech": 53.0, "real": 66.0, "tag": "夏前节律", "desc": "离火渐旺·春末休整"},
-    6:  {"base_tech": 52.0, "real": 60.0, "tag": "年中整固", "desc": "年中再平衡"},
-    7:  {"base_tech": 57.0, "real": 63.0, "tag": "中报节律", "desc": "盛夏中报窗·假期交织"},
-    8:  {"base_tech": 54.0, "real": 48.0, "tag": "离火震荡", "desc": "盛夏后离火偏躁·防追高"},
-    9:  {"base_tech": 46.0, "real": 52.0, "tag": "冲月清洗", "desc": "9月中旬冲月清洗+四巫换仓"},
-    10: {"base_tech": 58.0, "real": 76.0, "tag": "旺月兑现", "desc": "旺月财报与业绩兑现"},
-    11: {"base_tech": 52.0, "real": 84.0, "tag": "节律回流", "desc": "感恩节假期+资金节奏转换"},
-    12: {"base_tech": 47.0, "real": 62.0, "tag": "税务长假", "desc": "12月中旬年底税务+圣诞长假"},
+    1:  {"base_tech": 58.0, "real": 74.0, "tag": "回流洗盘·修复", "desc": "跨年假期回流小幅洗盘(-4分左右)后资金回补修复"},
+    2:  {"base_tech": 64.0, "real": 76.0, "tag": "春初脉冲", "desc": "离火启暖·冬末重配启动"},
+    3:  {"base_tech": 51.0, "real": 58.0, "tag": "季末税窗", "desc": "3月底税季卖盘+季末调仓"},
+    4:  {"base_tech": 63.0, "real": 72.0, "tag": "税后回流", "desc": "新财年资金回补"},
+    5:  {"base_tech": 61.0, "real": 71.0, "tag": "夏前节律", "desc": "离火渐旺·春末休整"},
+    6:  {"base_tech": 60.0, "real": 67.0, "tag": "年中整固", "desc": "年中再平衡"},
+    7:  {"base_tech": 65.0, "real": 70.0, "tag": "中报节律", "desc": "盛夏中报窗·假期交织"},
+    8:  {"base_tech": 57.0, "real": 52.0, "tag": "离火震荡", "desc": "盛夏后离火偏躁·防追高"},
+    9:  {"base_tech": 47.0, "real": 54.0, "tag": "冲月清洗", "desc": "9月中旬冲月清洗+四巫换仓"},
+    10: {"base_tech": 66.0, "real": 82.0, "tag": "旺月兑现", "desc": "旺月财报与业绩兑现"},
+    11: {"base_tech": 56.0, "real": 86.0, "tag": "节律回流", "desc": "感恩节假期+资金节奏转换"},
+    12: {"base_tech": 49.0, "real": 64.0, "tag": "税务长假", "desc": "12月中旬年底税务+圣诞长假"},
 }
 
 def _year_to_ganzhi(year: int) -> tuple[str, str]:
@@ -1305,10 +1296,12 @@ def _classify_month_axis_nature(
     other_zhi: str,
     relieved_by_prev_month: bool = False,
     cur_ev: dict[str, Any] | None = None,
-) -> str:
-    """生成横轴月份下方的干支定性标签：六合之月-合月 / 相刑之月-刑月 / 天冲地克-破月"""
+) -> tuple[str, str]:
+    """返回 (横轴双行标签定性, 冲刑类型: 'clash'|'punish'|'none')"""
     if cur_ev and cur_ev.get("axis_nature"):
-        return str(cur_ev["axis_nature"])
+        nature_str = str(cur_ev["axis_nature"])
+        kind = "punish" if "刑" in nature_str else ("clash" if ("冲" in nature_str or "破" in nature_str) else "none")
+        return nature_str, kind
 
     pair_zhi = frozenset({base_zhi, other_zhi})
     other_el = TIANGAN_ELEMENT[other_gan]
@@ -1316,17 +1309,17 @@ def _classify_month_axis_nature(
 
     if pair_zhi in CLASH_PAIRS:
         if relieved_by_prev_month:
-            return "冲月余波-税假窗"
-        return "天冲地克-破月" if overcomes_base else "地支相冲-冲月"
+            return "冲月余波-税假窗", "clash"
+        return ("天冲地克-破月" if overcomes_base else "地支相冲-冲月"), "clash"
     if pair_zhi in PUNISHMENT_PAIRS:
-        return "相刑之月-刑月"
+        return "相刑之月-刑月", "punish"
     if pair_zhi in SIX_HARMONY_PAIRS or base_zhi == other_zhi:
-        return "六合之月-合月"
+        return "六合之月-合月", "none"
     if GENERATES.get(other_el) == base_el or other_el == base_el:
-        return "生助顺势-合月"
+        return "生助顺势-合月", "none"
     if overcomes_base:
-        return "五行克制-防回踩"
-    return "干支蓄势-平衡月"
+        return "五行克制-防回踩", "none"
+    return "干支蓄势-平衡月", "none"
 
 def evaluate_period9_li_fire_affinity(stock_el: str, stock_zhi: str) -> dict[str, Any]:
     if stock_el == "火":
@@ -1483,10 +1476,10 @@ def get_earnings_phase_status(
     tone_overrides: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """
-    财报日/窗口红绿黄状态：
-    - green: 财报利好/超预期催化
-    - red: 财报利空/承压砸盘
-    - yellow: 财报刚出消化/前窗观望拉锯
+    财报窗口红绿黄状态：
+    - green: 财报利好/催化
+    - red: 财报利空/承压
+    - yellow: 财报消化/前窗拉锯
     """
     now_dt = ref_dt or datetime.today()
     cur_ym = now_dt.year * 12 + now_dt.month
@@ -1522,8 +1515,8 @@ def get_earnings_phase_status(
     if is_post_earnings_now:
         return {
             "delta": -2.0,
-            "label": "财报刚出·消化期",
-            "note": "财报刚发布·消化重定价",
+            "label": "财报刚出·消化中",
+            "note": "财报刚发布·消化波动",
             "tone": "yellow",
             "badge": "🟡 财报消化/拉锯",
             "color": "#facc15",
@@ -1536,7 +1529,7 @@ def get_earnings_phase_status(
         return {
             "delta": 2.5,
             "label": "财报前窗",
-            "note": "财报前预期博弈窗",
+            "note": "财报前抢跑/预期窗",
             "tone": "yellow",
             "badge": "🟡 财报前预期拉锯",
             "color": "#facc15",
@@ -1549,9 +1542,9 @@ def get_earnings_phase_status(
         return {
             "delta": 1.5,
             "label": "财报月",
-            "note": "财报日波动窗",
+            "note": "财报日催化/波动窗",
             "tone": "green",
-            "badge": "🟢 财报催化窗",
+            "badge": "🟢 财报利好/催化窗",
             "color": "#4ade80",
             "flow_prefix": "财报期资金风向：",
             "is_pre_earnings": False,
@@ -1564,7 +1557,7 @@ def get_earnings_phase_status(
             "label": "财报后消化",
             "note": "财报后兑现消化",
             "tone": "red",
-            "badge": "🔴 财报后兑现承压",
+            "badge": "🔴 财报利空/兑现承压",
             "color": "#f87171",
             "flow_prefix": "财报后资金风向：",
             "is_pre_earnings": False,
@@ -1595,7 +1588,7 @@ def _macro_calendar_factors(
     tax_delta = 0.0
     holiday_delta = 0.0
     quarter_delta = 0.0
-    jan_washout_delta = 0.0
+    jan_return_delta = 0.0
     notes: list[str] = []
 
     e_info = get_earnings_phase_status(y_num, m_num, e_months, ref_dt=ref_dt, tone_overrides=tone_overrides)
@@ -1604,22 +1597,22 @@ def _macro_calendar_factors(
     if m_num == 3:
         tax_delta = -8.0
         quarter_delta = -3.0
-        notes.append("3月税季+季末调仓(-11)")
+        notes.append("3月税季卖盘+季末调仓(-11)")
     elif m_num == 12:
         tax_delta = -6.0
         holiday_delta = -4.0
-        notes.append("12月年底税务+圣诞长假(-10)")
+        notes.append("12月中旬年底税务+圣诞长假(-10)")
     elif m_num == 9:
         tax_delta = -7.5
         quarter_delta = -3.5
         notes.append("9月冲月清洗+四巫换仓(-11)")
     elif m_num == 1:
-        jan_washout_delta = -8.5
-        holiday_delta = -3.0
-        notes.append("1月假期回流砸盘/兑现洗盘(-11.5)")
+        # 1月假期回流按温和扣4分左右 + 保留回补修复
+        jan_return_delta = -4.0
+        notes.append("1月假期回流洗盘(-4.0·后半段回补修复)")
     elif m_num == 11:
         holiday_delta = -4.0
-        notes.append("11月感恩节假期节律(-4)")
+        notes.append("11月感恩节假期+资金节奏转换(-4)")
     elif m_num in (5, 7):
         holiday_delta = -3.5
         notes.append(f"{m_num}月长假流动性回落(-3.5)")
@@ -1627,16 +1620,11 @@ def _macro_calendar_factors(
     if e_info["note"]:
         notes.append(f"{e_info['badge']}({earnings_delta:+.1f})")
 
-    ym_key = f"{y_num}-{m_num:02d}"
-    leap_hint = LEAP_MONTH_BUFFER_HINTS.get(ym_key)
-    if leap_hint:
-        notes.append(leap_hint)
-
     return {
         "tax_delta": tax_delta,
         "holiday_delta": holiday_delta,
         "quarter_delta": quarter_delta,
-        "jan_washout_delta": jan_washout_delta,
+        "jan_return_delta": jan_return_delta,
         "earnings_delta": earnings_delta,
         "earnings_tone": e_info["tone"],
         "earnings_badge": e_info["badge"],
@@ -1646,7 +1634,6 @@ def _macro_calendar_factors(
         "is_post_earnings_now": e_info["is_post_earnings_now"],
         "phase_label": e_info["label"],
         "flow_prefix": e_info["flow_prefix"],
-        "leap_hint": leap_hint or "",
         "note": " | ".join(notes) if notes else "离火运常规节律",
     }
 
@@ -1748,6 +1735,7 @@ def _estimate_range_anchored_price(
     last_week_low: float = 0.0,
     month_num: int = 0,
 ) -> float:
+    """锚点价格计算（保留 12 月与期权 Put Wall $135 级别对齐的校准精度）"""
     if anchor_px <= 0:
         return 0.0
 
@@ -1776,11 +1764,12 @@ def _estimate_range_anchored_price(
 
     neutral_score = 50.0
     if tech_score <= neutral_score:
-        ratio = max(0.0, min(1.0, (tech_score - 8.0) / (neutral_score - 8.0)))
+        ratio = max(0.0, min(1.0, (tech_score - 10.0) / (neutral_score - 10.0)))
         est = floor_px + (anchor_px - floor_px) * ratio
         if month_num == 12 and last_week_low > 0:
-            dec_mid_ref = last_week_low * (1.06 + 0.05 * ratio)
-            est = round(est * 0.40 + dec_mid_ref * 0.60, 2)
+            # 12月税务低点融合校准：约 $135 附近对齐期权 Put Wall
+            dec_low_ref = last_week_low * (1.065 + 0.04 * ratio)
+            est = round(est * 0.35 + dec_low_ref * 0.65, 2)
     else:
         ratio = max(0.0, min(1.0, (tech_score - neutral_score) / (98.0 - neutral_score)))
         est = anchor_px + (ceil_px - anchor_px) * ratio
@@ -1793,44 +1782,6 @@ def _fmt_price_ref(val: float, symbol: str = "") -> str:
     if val >= 100:
         return f"≈{prefix}{val:.0f}"
     return f"≈{prefix}{val:.2f}"
-
-def _compute_tiered_score(
-    raw_score: float,
-    mo_delta: float,
-    m_num: int,
-    cur_ev: dict[str, Any] | None,
-    relieved_by_prev_month: bool,
-    earnings_tone: str,
-) -> float:
-    """
-    统一分级打分规则（适用于所有已有及新加股票）：
-    - 极重/超NVDA级冲击: ~12-15分
-    - NVDA级大事件/强破月低点: ~18-22分（约20分）
-    - 中度冲月/1月假期回流洗盘: ~30-35分
-    - 常规税务/假期/季末节律: ~38-50分
-    """
-    severity = (cur_ev or {}).get("severity", "")
-    is_clash = mo_delta <= -15.0 and not relieved_by_prev_month
-    is_punish_or_pullback = (-15.0 < mo_delta <= -8.0) and not relieved_by_prev_month
-
-    if severity == "extreme" or (is_clash and earnings_tone == "red" and raw_score < 22):
-        return round(max(12.0, min(15.5, 13.5 + (raw_score - 15.0) * 0.15)), 1)
-
-    if (cur_ev and cur_ev.get("anchor_low_mode")) or severity == "major" or (is_clash and raw_score < 32):
-        adj = -1.2 if earnings_tone == "red" else (1.2 if earnings_tone == "green" else 0.0)
-        return round(max(18.0, min(22.5, 20.0 + adj)), 1)
-
-    if m_num == 1 or is_punish_or_pullback or (m_num == 9 and not relieved_by_prev_month):
-        base_mid = 32.5 if m_num == 1 else 32.0
-        tone_shift = -2.5 if earnings_tone == "red" else (2.5 if earnings_tone == "green" else 0.0)
-        return round(max(28.0, min(36.5, base_mid + tone_shift + (raw_score - 35.0) * 0.12)), 1)
-
-    if m_num in (3, 12, 11):
-        base_seas = 42.0 if m_num == 12 else (40.0 if m_num == 3 else 45.0)
-        tone_shift = -3.0 if earnings_tone == "red" else (3.0 if earnings_tone == "green" else 0.0)
-        return round(max(37.0, min(52.0, base_seas + tone_shift)), 1)
-
-    return round(max(12.0, min(98.0, raw_score)), 1)
 
 def build_rolling_12m_cycle_rows(
     symbol: str,
@@ -1867,7 +1818,7 @@ def build_rolling_12m_cycle_rows(
         post_earnings_mode=cur_phase["is_post_earnings_now"],
     )
 
-    rows = []
+    raw_rows: list[dict[str, Any]] = []
     for step in range(12):
         total_m = (start_year * 12 + (start_month - 1)) + step
         y_num = total_m // 12
@@ -1892,13 +1843,12 @@ def build_rolling_12m_cycle_rows(
         yr_delta, yr_note = _ganzhi_pair_interaction(s_gan, s_zhi, s_el, y_gan, y_zhi, context_prefix="年")
         mo_delta, mo_note = _ganzhi_pair_interaction(s_gan, s_zhi, s_el, m_gan, m_zhi, context_prefix="月")
 
-        # 上月已提前释放个股自身事件/冲克并进入尾声时，本月不再把同类冲克与税务结算双重叠加
         effective_mo_delta = (mo_delta * 0.45) if (relieved_by_prev_month and mo_delta < 0) else mo_delta
         natal_raw_score = 50.0 + (effective_mo_delta * 1.45 + yr_delta * 0.75) * vol_mult
         if cur_ev:
             natal_raw_score += float(cur_ev.get("score_adj", 0.0))
 
-        # 3分：九紫离火大运感应 + 1月回流洗盘/税务/长假/财报红绿黄节律
+        # 3分：九紫离火大运感应 + 1月回流(-4分+修复)/税务/长假/财报红绿黄节律
         earn_adj = dist["earnings_delta"]
         if dist["is_pre_earnings"] and flow_info["state"] == "偏抛盘":
             earn_adj -= 2.0
@@ -1911,27 +1861,23 @@ def build_rolling_12m_cycle_rows(
             + dist["tax_delta"]
             + dist["holiday_delta"]
             + dist["quarter_delta"]
-            + dist["jan_washout_delta"]
+            + dist["jan_return_delta"]
             + earn_adj
         )
 
         raw_score = 0.70 * natal_raw_score + 0.30 * macro_3_score
-        tech_score = _compute_tiered_score(
-            raw_score=raw_score,
-            mo_delta=mo_delta,
-            m_num=m_num,
-            cur_ev=cur_ev,
-            relieved_by_prev_month=relieved_by_prev_month,
-            earnings_tone=dist["earnings_tone"],
-        )
+        if cur_ev and cur_ev.get("anchor_low_mode"):
+            tech_score = 20.0
+        else:
+            tech_score = round(max(12.0, min(98.0, raw_score)), 1)
 
         real_score = round(
             max(
-                12.0,
+                15.0,
                 min(
                     98.0,
                     0.70 * (p9_m["real"] + mo_delta * 0.45 + yr_delta * 0.25)
-                    + 0.30 * (p9_m["real"] + (dist["tax_delta"] + dist["holiday_delta"] + dist["quarter_delta"] + dist["jan_washout_delta"]) * 0.55),
+                    + 0.30 * (p9_m["real"] + (dist["tax_delta"] + dist["holiday_delta"] + dist["quarter_delta"] + dist["jan_return_delta"]) * 0.5),
                 ),
             ),
             1,
@@ -1951,7 +1897,7 @@ def build_rolling_12m_cycle_rows(
                 approx_px = round(base_anchor_px * 0.835, 2)
         approx_str = _fmt_price_ref(approx_px, symbol) if base_anchor_px > 0 else ""
 
-        axis_nature = _classify_month_axis_nature(
+        axis_nature, axis_kind = _classify_month_axis_nature(
             s_gan,
             s_zhi,
             s_el,
@@ -1960,6 +1906,44 @@ def build_rolling_12m_cycle_rows(
             relieved_by_prev_month=relieved_by_prev_month,
             cur_ev=cur_ev,
         )
+
+        raw_rows.append({
+            "step": step,
+            "year_num": y_num,
+            "month_num": m_num,
+            "y_ganzhi": f"{y_gan}{y_zhi}",
+            "m_ganzhi": f"{m_gan}{m_zhi}",
+            "axis_nature": axis_nature,
+            "axis_kind": axis_kind,
+            "cur_ev": cur_ev,
+            "relieved_by_prev_month": relieved_by_prev_month,
+            "p9_m": p9_m,
+            "dist": dist,
+            "mo_note": mo_note,
+            "yr_note": yr_note,
+            "tech_score": tech_score,
+            "real_score": real_score,
+            "approx_price": approx_px,
+            "approx_str": approx_str,
+        })
+
+    # 第二遍：计算“冲月/刑月气场提前半个月爆发”提醒
+    for i, r in enumerate(raw_rows):
+        m_num = r["month_num"]
+        cur_ev = r["cur_ev"]
+        dist = r["dist"]
+        tech_score = r["tech_score"]
+        relieved_by_prev_month = r["relieved_by_prev_month"]
+        p9_m = r["p9_m"]
+
+        next_r = raw_rows[i + 1] if i + 1 < len(raw_rows) else None
+        advance_alert = ""
+        if next_r and next_r["axis_kind"] in ("clash", "punish") and not next_r["relieved_by_prev_month"]:
+            kind_cn = "冲月" if next_r["axis_kind"] == "clash" else "刑月"
+            advance_alert = f"⚡ 下月({next_r['month_num']}月)为{kind_cn}，气场提前半个月(约15天)爆发，挂单/控仓前移至本月下半月"
+        elif r["axis_kind"] in ("clash", "punish") and not relieved_by_prev_month:
+            kind_cn = "冲月" if r["axis_kind"] == "clash" else "刑月"
+            advance_alert = f"⚡ 本月处于{kind_cn}窗口（气场已提前半个月酝酿），注意上下影线与低吸节奏"
 
         rhythm_tag_display = cur_ev["tag"] if cur_ev else p9_m["tag"]
         rhythm_desc_display = cur_ev["desc"] if cur_ev else p9_m["desc"]
@@ -1973,8 +1957,8 @@ def build_rolling_12m_cycle_rows(
             action_hint = "事件已于上月归位·仅防年底税假回踩"
             badge_color = "#2563eb"
         elif m_num == 1:
-            stance = "1月假期回流洗盘"
-            action_hint = "防跨年回流兑现砸盘 / 回踩分批承接"
+            stance = "1月回流洗盘·后半段修复"
+            action_hint = "初段回流轻洗(-4分) / 后段回补修复"
             badge_color = "#f59e0b"
         elif m_num == 9:
             stance = "冲月清洗·四巫窗"
@@ -1982,7 +1966,7 @@ def build_rolling_12m_cycle_rows(
             badge_color = "#dc2626"
         elif m_num == 12:
             stance = "年底税务·圣诞长假"
-            action_hint = "防年末兑现/控仓避险"
+            action_hint = "防年末兑现/留意Put墙承接"
             badge_color = "#dc2626"
         elif m_num == 3:
             stance = "3月底税季+季末窗"
@@ -2009,32 +1993,23 @@ def build_rolling_12m_cycle_rows(
             action_hint = "控仓防冲 / 留意低吸"
             badge_color = "#dc2626"
 
-        short_yr = str(y_num)[2:]
-        x_label = f"{short_yr}年{m_num}月({m_gan}{m_zhi})<br>{axis_nature}"
-        pt_text = f"{tech_score:.0f}分 · {approx_str}" if approx_str else f"{tech_score:.0f}分"
+        short_yr = str(r["year_num"])[2:]
+        x_label = f"{short_yr}年{m_num}月({r['m_ganzhi']})<br>{r['axis_nature']}"
+        pt_text = f"{tech_score:.0f}分 · {r['approx_str']}" if r["approx_str"] else f"{tech_score:.0f}分"
         sep_note = " | 11月事件已归位·本月仅算税务/长假" if relieved_by_prev_month else ""
-        factor_line = f"{mo_note} | {yr_note} | {dist['note']}{sep_note}"
+        factor_line = f"{r['mo_note']} | {r['yr_note']} | {dist['note']}{sep_note}"
 
-        rows.append({
-            "step": step,
-            "year_num": y_num,
-            "month_num": m_num,
+        r.update({
             "x_label": x_label,
-            "axis_nature": axis_nature,
             "pt_text": pt_text,
-            "short_title": f"{y_num}年{m_num}月",
-            "y_ganzhi": f"{y_gan}{y_zhi}",
-            "m_ganzhi": f"{m_gan}{m_zhi}",
+            "short_title": f"{r['year_num']}年{m_num}月",
             "rhythm_tag": rhythm_tag_display,
             "rhythm_desc": rhythm_desc_display,
             "factor_line": factor_line,
-            "tech_score": tech_score,
-            "real_score": real_score,
-            "approx_price": approx_px,
-            "approx_str": approx_str,
             "stance": stance,
             "action_hint": action_hint,
             "badge_color": badge_color,
+            "advance_alert": advance_alert,
             "earnings_badge": dist["earnings_badge"],
             "earnings_color": dist["earnings_color"],
             "is_pre_earnings": dist["is_pre_earnings"],
@@ -2043,17 +2018,52 @@ def build_rolling_12m_cycle_rows(
             "phase_label": dist["phase_label"],
         })
 
-    avg_tech = round(sum(r["tech_score"] for r in rows) / len(rows), 1)
-    peak_row = max(rows, key=lambda x: x["tech_score"])
-    trough_row = min(rows, key=lambda x: x["tech_score"])
-    dec_row = next((r for r in rows if r["month_num"] == 12), None)
+    # 识别连接在橙红色主线跨度中间的“W”型拉锯区间（含 26年12月-27年1月 及其他同类拉锯跨度）
+    w_spans: list[dict[str, Any]] = []
+    for i in range(len(raw_rows) - 1):
+        r_a = raw_rows[i]
+        r_b = raw_rows[i + 1]
+        is_dec_jan = (r_a["month_num"] == 12 and r_b["month_num"] == 1)
+        both_pullback_or_chop = (r_a["tech_score"] <= 54.0 and r_b["tech_score"] <= 62.0)
+        has_reversal_or_chop = (
+            abs(r_b["tech_score"] - r_a["tech_score"]) <= 14.0
+            or r_a["dist"]["earnings_tone"] == "yellow"
+            or r_b["dist"]["earnings_tone"] == "yellow"
+            or r_a["axis_kind"] in ("clash", "punish")
+            or r_b["axis_kind"] in ("clash", "punish")
+        )
+        if is_dec_jan or (both_pullback_or_chop and has_reversal_or_chop):
+            w_spans.append({
+                "idx_a": i,
+                "idx_b": i + 1,
+                "y_a": r_a["tech_score"],
+                "y_b": r_b["tech_score"],
+                "label": "W跨年双底/回流拉锯" if is_dec_jan else "W拉锯试探",
+            })
+
+    avg_tech = round(sum(r["tech_score"] for r in raw_rows) / len(raw_rows), 1)
+    peak_row = max(raw_rows, key=lambda x: x["tech_score"])
+    trough_row = min(raw_rows, key=lambda x: x["tech_score"])
+    dec_row = next((r for r in raw_rows if r["month_num"] == 12), None)
     dec_low_str = dec_row["approx_str"] if dec_row else "—"
 
     price_range_str = ""
     if base_anchor_px > 0:
-        min_px = min(r["approx_price"] for r in rows)
-        max_px = max(r["approx_price"] for r in rows)
+        min_px = min(r["approx_price"] for r in raw_rows)
+        max_px = max(r["approx_price"] for r in raw_rows)
         price_range_str = f" | 区间参考价: <b>{_fmt_price_ref(min_px, symbol)} ~ {_fmt_price_ref(max_px, symbol)}</b>"
+
+    # 当前是否处于某冲/刑月前15天提前预警窗口
+    cur_advance_banner = ""
+    if raw_rows:
+        first_alert = raw_rows[0].get("advance_alert", "")
+        if now_dt.day >= 15 and first_alert:
+            cur_advance_banner = first_alert
+        else:
+            for r in raw_rows[:2]:
+                if r.get("advance_alert"):
+                    cur_advance_banner = r["advance_alert"]
+                    break
 
     meta_info = {
         **natal,
@@ -2071,8 +2081,10 @@ def build_rolling_12m_cycle_rows(
         "last_week_low_str": _fmt_price_ref(last_week_low, symbol),
         "last_week_date_str": anchor_info["last_week_date_str"],
         "dec_low_str": dec_low_str,
+        "w_spans": w_spans,
+        "cur_advance_banner": cur_advance_banner,
     }
-    return rows, meta_info
+    return raw_rows, meta_info
 
 def render_12m_cycle_block_above_options(
     symbol: str,
@@ -2102,6 +2114,14 @@ def render_12m_cycle_block_above_options(
         unsafe_allow_html=True,
     )
 
+    adv_html = ""
+    if meta_info.get("cur_advance_banner"):
+        adv_html = (
+            f"<div style='font-size:12.5px; color:#fde047; font-weight:900; margin-top:3px;'>"
+            f"{meta_info['cur_advance_banner']}"
+            f"</div>"
+        )
+
     st.markdown(
         f"<div style='background:#07193d; border:1.5px solid {flow['color']}; border-radius:8px; padding:8px 12px; margin:6px 0 8px 0;'>"
         f"<div style='display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;'>"
@@ -2109,7 +2129,8 @@ def render_12m_cycle_block_above_options(
         f"<span style='font-size:13.5px; font-weight:900; color:{meta_info['earnings_color']};'>财报日/窗口状态：{meta_info['earnings_badge']}</span>"
         f"</div>"
         f"<div style='font-size:12.5px; color:#e2e8f0; margin-top:2px;'>白话看点：{flow['explain']}（大运背景：{meta_info['era_desc']}）</div>"
-        f"<div style='font-size:12.5px; color:#93c5fd; font-weight:800; margin-top:2px;'>操作提醒：{flow['advice']}（注：分级刻度 12~15 / ~20 / 30~35 / 38~50，1月假期回流洗盘独立计算，事件按实际月份归位不重复扣分）</div>"
+        f"<div style='font-size:12.5px; color:#93c5fd; font-weight:800; margin-top:2px;'>操作提醒：{flow['advice']}（1月回流约-4分+回补修复；冲/刑月气场提前半个月爆发；橙红线中段W为双底/拉锯跨度）</div>"
+        f"{adv_html}"
         f"</div>",
         unsafe_allow_html=True,
     )
@@ -2130,6 +2151,46 @@ def render_12m_cycle_block_above_options(
         line=dict(color="#f97316", width=3.2),
         marker=dict(size=10, color="#f97316", line=dict(color="#ffffff", width=1.5)),
     ))
+
+    # 在橙红色主线跨度中段连接“W”型折线
+    w_legend_added = False
+    for sp in meta_info.get("w_spans", []):
+        ia = sp["idx_a"]
+        ib = sp["idx_b"]
+        ya = sp["y_a"]
+        yb = sp["y_b"]
+        mid_x = ia + 0.5
+        valley1_y = max(6.0, min(ya, yb) - 6.5)
+        peak_mid_y = min(94.0, (ya + yb) * 0.5 + 3.5)
+        valley2_y = max(6.0, min(ya, yb) - 4.5)
+
+        wx_coords = [ia, ia + 0.25, mid_x, ia + 0.75, ib]
+        wy_coords = [ya, valley1_y, peak_mid_y, valley2_y, yb]
+
+        fig_12m.add_trace(go.Scatter(
+            x=wx_coords,
+            y=wy_coords,
+            mode="lines",
+            name="W型双底/拉锯跨度",
+            showlegend=(not w_legend_added),
+            line=dict(color="#e11d48", width=2.4, dash="dot"),
+            hoverinfo="skip",
+        ))
+        w_legend_added = True
+
+        fig_12m.add_annotation(
+            x=mid_x,
+            y=peak_mid_y + 4.0,
+            xref="x",
+            yref="y",
+            text=f"W {sp['label']}",
+            showarrow=False,
+            xanchor="center",
+            yanchor="bottom",
+            font=dict(color="#be123c", size=10.5),
+            bgcolor="rgba(255, 228, 230, 0.92)",
+        )
+
     if show_real_line:
         fig_12m.add_trace(go.Scatter(
             x=x_labels,
@@ -2173,7 +2234,7 @@ def render_12m_cycle_block_above_options(
             fig_12m.add_vrect(x0=idx_step - 0.45, x1=idx_step + 0.45, fillcolor="rgba(239, 68, 68, 0.12)", line_width=0)
             fig_12m.add_annotation(x=idx_step, y=102, xref="x", yref="y", text="3月底税季低点", showarrow=False, xanchor="center", yanchor="top", font=dict(color="#b91c1c", size=11), bgcolor="rgba(254, 226, 226, 0.92)")
         elif r["month_num"] == 1:
-            fig_12m.add_annotation(x=idx_step, y=93, xref="x", yref="y", text="1月回流洗盘", showarrow=False, xanchor="center", yanchor="top", font=dict(color="#b45309", size=10.5), bgcolor="rgba(254, 243, 199, 0.94)")
+            fig_12m.add_annotation(x=idx_step, y=93, xref="x", yref="y", text="1月回流·后段修复", showarrow=False, xanchor="center", yanchor="top", font=dict(color="#b45309", size=10.5), bgcolor="rgba(254, 243, 199, 0.94)")
         elif r["is_post_earnings_now"]:
             fig_12m.add_annotation(x=idx_step, y=93, xref="x", yref="y", text="财报刚出·消化中", showarrow=False, xanchor="center", yanchor="top", font=dict(color="#0369a1", size=10.5), bgcolor="rgba(224, 242, 254, 0.94)")
         elif r["is_pre_earnings"]:
@@ -2183,9 +2244,9 @@ def render_12m_cycle_block_above_options(
         template="plotly_white",
         paper_bgcolor="#ffffff",
         plot_bgcolor="#ffffff",
-        height=315,
+        height=320,
         font=dict(size=12, color="#0f172a"),
-        margin=dict(l=12, r=12, t=42, b=44),
+        margin=dict(l=12, r=12, t=44, b=46),
         legend=dict(orientation="h", yanchor="bottom", y=1.08, xanchor="left", x=0),
     )
     fig_12m.update_xaxes(tickfont=dict(size=11, color="#0f172a"))
@@ -2229,6 +2290,10 @@ def render_12m_cycle_block_above_options(
             tag_badge += "<span style='background:#38bdf8; color:#000; font-size:11px; font-weight:900; padding:1px 5px; border-radius:4px; margin-left:4px;'>财报月</span>"
 
         px_badge = f" <span style='color:#e2e8f0; font-size:12px;'>({r['approx_str']})</span>" if r["approx_str"] else ""
+        adv_card_line = (
+            f"<div style='font-size:11px; color:#fde047; font-weight:800; margin-top:2px;'>{r['advance_alert']}</div>"
+            if r.get("advance_alert") else ""
+        )
 
         cards_html += (
             f"<div style='background:#07193d; {border_css} border-radius:7px; padding:8px; color:#fff;'>"
@@ -2237,7 +2302,8 @@ def render_12m_cycle_block_above_options(
             f"<span style='font-size:14.5px; font-weight:900; color:{r['badge_color']};'>{r['tech_score']:.0f}分{px_badge}</span>"
             f"</div>"
             f"<div style='font-size:12px; color:#38bdf8; font-weight:800; margin-top:2px;'>{r['axis_nature']} · {r['rhythm_tag']}</div>"
-            f"<div style='font-size:11.5px; color:{r['earnings_color']}; font-weight:800; margin-top:1px;'>{r['earnings_badge']} | <span style='color:#facc15; font-weight:500;'>{r['rhythm_desc']}</span></div>"
+            f"<div style='font-size:11.5px; color:{r['earnings_color']}; font-weight:800; margin-top:1px;'>{r['earnings_badge']} | <span style='color:{flow['color']};'>{flow['short_tag']}</span> | <span style='color:#facc15; font-weight:500;'>{r['rhythm_desc']}</span></div>"
+            f"{adv_card_line}"
             f"<div style='font-size:11.5px; color:#cbd5e1; margin-top:2px;'>{r['factor_line']} | 实盘:{r['real_score']:.0f}</div>"
             f"<div style='font-size:12px; font-weight:800; color:#4ade80; border-top:1px solid #1e3a8a; margin-top:4px; padding-top:4px;'>"
             f"{r['stance']}｜{r['action_hint']}"
