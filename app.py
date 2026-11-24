@@ -1750,7 +1750,6 @@ def _estimate_range_anchored_price(
     if base_px <= 0:
         return 0.0
 
-    # 本月起点紧贴实盘基准，避免单月干支得分过高/过低导致起点失真
     if is_current_month:
         ref_11m = (base_px * 0.65 + float(anchor_px) * 0.35) if (anchor_px and anchor_px > 0) else base_px
         if last_week_low > 0 and ref_11m > last_week_low * 1.12:
@@ -1983,8 +1982,8 @@ def build_rolling_12m_cycle_rows(
             action_hint = "等财报波动消化/守纪律"
             badge_color = "#38bdf8"
         elif dist["is_pre_earnings"]:
-            stance = f"财报前窗·{flow['short_tag']}"
-            action_hint = "防冲高兑现 / 不盲目追高" if flow["state"] == "偏抛盘" else "留意抢跑节奏 / 控仓"
+            stance = f"财报前窗·{flow_info['short_tag']}"
+            action_hint = "防冲高兑现 / 不盲目追高" if flow_info["state"] == "偏抛盘" else "留意抢跑节奏 / 控仓"
             badge_color = "#f59e0b"
         elif tech_score >= 72:
             stance = "干支顺势·强旺窗"
