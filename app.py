@@ -471,7 +471,7 @@ def fetch_cycle_anchor_prices(symbol: str, fallback_spot: float, refresh_nonce: 
     last_sunday = cur_monday - timedelta(days=1)
 
     mid_nov_anchor = float(fallback_spot)
-    mid_nov_label = "现价兜底"
+    mid_nov_label = "实盘现价锚定"
     last_week_low = round(float(fallback_spot) * 0.95, 2) if fallback_spot > 0 else 0.0
     last_week_high = round(float(fallback_spot) * 1.02, 2) if fallback_spot > 0 else 0.0
     last_week_date_str = ""
@@ -492,14 +492,9 @@ def fetch_cycle_anchor_prices(symbol: str, fallback_spot: float, refresh_nonce: 
                 & (pd.to_datetime(df_hist["Date"]).dt.month == 11)
             ]
         if not nov_mid_df.empty:
-            nov_mean = float(nov_mid_df["Close"].mean())
-            if fallback_spot > 0:
-                mid_nov_anchor = round(nov_mean * 0.25 + float(fallback_spot) * 0.75, 2)
-            else:
-                mid_nov_anchor = round(nov_mean, 2)
             d_min = nov_mid_df["d_only"].min().strftime("%m/%d")
             d_max = nov_mid_df["d_only"].max().strftime("%m/%d")
-            mid_nov_label = f"11月中实时校准({d_min}-{d_max})"
+            mid_nov_label = f"实盘现价·11月窗({d_min}-{d_max})"
 
         lw_df = df_hist[(df_hist["d_only"] >= last_monday) & (df_hist["d_only"] <= last_sunday)]
         if lw_df.empty and len(df_hist) >= 6:
@@ -1746,39 +1741,44 @@ def _estimate_range_anchored_price(
     spot_px: float = 0.0,
     is_current_month: bool = False,
 ) -> float:
-    base_px = float(spot_px) if (spot_px and spot_px > 0) else float(anchor_px)
+    # 严格以个股自身的真实价格定位：有实盘现价则以 spot_px 为基准
+    real_spot = float(spot_px) if (spot_px and spot_px > 0) else 0.0
+    fallback_px = float(anchor_px) if (anchor_px and anchor_px > 0) else 0.0
+    base_px = real_spot if real_spot > 0 else fallback_px
     if base_px <= 0:
         return 0.0
 
+    # 11月（当前月）直接按个股真实价格定位，不拿11月中均值或历史高价往上抬
     if is_current_month:
-        ref_11m = (base_px * 0.65 + float(anchor_px) * 0.35) if (anchor_px and anchor_px > 0) else base_px
-        if last_week_low > 0 and ref_11m > last_week_low * 1.12:
-            ref_11m = ref_11m * 0.88 + last_week_low * 0.12
-        return round(ref_11m, 2)
+        if real_spot > 0:
+            # 得分极低时最多向下微调至 0.99 * real_spot，绝不高于 real_spot
+            if tech_score < 35.0:
+                return round(real_spot * 0.99, 2)
+            return round(real_spot, 2)
+        return round(base_px, 2)
 
-    eff_anchor = (base_px * 0.75 + float(anchor_px) * 0.25) if (anchor_px and anchor_px > 0) else base_px
-
-    default_floor = eff_anchor * 0.91
-    if last_week_low > 0 and last_week_low < eff_anchor:
-        lw_drop_pct = (eff_anchor - last_week_low) / eff_anchor
+    # 非当前月围绕该股自身真实价格（base_px）按得分与高低位区间浮动
+    default_floor = base_px * 0.91
+    if last_week_low > 0 and last_week_low < base_px:
+        lw_drop_pct = (base_px - last_week_low) / base_px
         projected_deep_floor = last_week_low * (1.0 - max(0.02, min(0.04, lw_drop_pct * 0.4)))
-        floor_px = max(eff_anchor * 0.87, min(default_floor, projected_deep_floor))
+        floor_px = max(base_px * 0.87, min(default_floor, projected_deep_floor))
     else:
         floor_px = default_floor
-    floor_px = min(floor_px, eff_anchor * 0.96)
+    floor_px = min(floor_px, base_px * 0.96)
 
-    ceil_px = eff_anchor * 1.10
+    ceil_px = base_px * 1.10
 
     neutral_score = 52.0
     if tech_score <= neutral_score:
         ratio = max(0.0, min(1.0, (tech_score - 15.0) / (neutral_score - 15.0)))
-        est = floor_px + (eff_anchor - floor_px) * ratio
+        est = floor_px + (base_px - floor_px) * ratio
         if month_num == 12 and last_week_low > 0:
-            dec_low_ref = max(floor_px * 0.98, min(eff_anchor * 0.98, last_week_low * (1.03 + 0.02 * ratio)))
+            dec_low_ref = max(floor_px * 0.98, min(base_px * 0.98, last_week_low * (1.03 + 0.02 * ratio)))
             est = round(est * 0.35 + dec_low_ref * 0.65, 2)
     else:
         ratio = max(0.0, min(1.0, (tech_score - neutral_score) / (98.0 - neutral_score)))
-        est = eff_anchor + (ceil_px - eff_anchor) * ratio
+        est = base_px + (ceil_px - base_px) * ratio
 
     return round(est, 2)
 
@@ -1812,7 +1812,8 @@ def build_rolling_12m_cycle_rows(
     nonce = int(st.session_state.get("calc_refresh_nonce", 0))
 
     anchor_info = fetch_cycle_anchor_prices(symbol, round(spot, 2), refresh_nonce=nonce)
-    base_anchor_px = float(anchor_info["mid_nov_anchor"]) if anchor_info["mid_nov_anchor"] > 0 else spot
+    # 优先以个股自身真实价格 spot 为锚点，无实盘现价时才用 anchor_info 兜底
+    base_anchor_px = spot if spot > 0 else float(anchor_info["mid_nov_anchor"])
     last_week_low = float(anchor_info["last_week_low"])
 
     cur_phase = get_earnings_phase_status(start_year, start_month, e_months, ref_dt=now_dt, tone_overrides=tone_overrides)
@@ -1899,8 +1900,6 @@ def build_rolling_12m_cycle_rows(
             spot_px=spot,
             is_current_month=(step == 0),
         )
-        if cur_ev and cur_ev.get("anchor_low_mode") and spot > 0:
-            approx_px = round(spot * 1.01, 2)
         approx_str = _fmt_price_ref(approx_px, symbol) if (spot > 0 or base_anchor_px > 0) else ""
 
         axis_nature, axis_kind = _classify_month_axis_nature(
@@ -2093,7 +2092,7 @@ def render_12m_cycle_block_above_options(
     h_col1.markdown(
         f"<div class='card-header' style='margin-bottom:2px;'>🧭 {symbol} 未来12个月滚动能量表 (3分九运离火 · 7分本身天干地支 | 定盘: <b>{meta_info['ganzhi']}·{meta_info['element']}</b> · {meta_info['role']})</div>"
         f"<div style='font-size:13.5px; color:#cbd5e1;'>大运背景: <b>{meta_info['era_name']}（{meta_info['era_tag']}）</b> | 现年柱: <b>{meta_info['year_ganzhi']}({meta_info['cur_year_note']})</b> | 区间: <b>{cur_year}年{cur_month}月 → {end_row['year_num']}年{end_row['month_num']}月</b> | 财报季: <b>{e_str}</b>{cur_phase_txt}<br>"
-        f"📌 校准锚点({meta_info['mid_nov_label']}): <b style='color:#facc15;'>{meta_info['mid_nov_anchor_str']}</b>{cur_spot_str} | 上周低位{lw_dt_txt}: <b style='color:#38bdf8;'>{meta_info['last_week_low_str']}</b> | 推算12月中低位: <b style='color:#f87171;'>{meta_info['dec_low_str']}</b> | 高:<b>{meta_info['peak_label']}</b> / 低:<b>{meta_info['trough_label']}</b>{meta_info['price_range_str']}</div>",
+        f"📌 定价锚点({meta_info['mid_nov_label']}): <b style='color:#facc15;'>{meta_info['mid_nov_anchor_str']}</b>{cur_spot_str} | 上周低位{lw_dt_txt}: <b style='color:#38bdf8;'>{meta_info['last_week_low_str']}</b> | 推算12月中低位: <b style='color:#f87171;'>{meta_info['dec_low_str']}</b> | 高:<b>{meta_info['peak_label']}</b> / 低:<b>{meta_info['trough_label']}</b>{meta_info['price_range_str']}</div>",
         unsafe_allow_html=True,
     )
 
