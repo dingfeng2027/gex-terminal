@@ -1721,7 +1721,6 @@ def _estimate_range_anchored_price(
     last_week_low: float = 0.0,
     month_num: int = 0,
 ) -> float:
-    """锚点价格计算（12 月税务低点校准回 ≈$135 附近，对齐期权 Put Wall）"""
     if anchor_px <= 0:
         return 0.0
 
@@ -1753,7 +1752,6 @@ def _estimate_range_anchored_price(
         ratio = max(0.0, min(1.0, (tech_score - 10.0) / (neutral_score - 10.0)))
         est = floor_px + (anchor_px - floor_px) * ratio
         if month_num == 12 and last_week_low > 0:
-            # 12月税务低点融合校准：约 $135 附近对齐期权 Put Wall
             dec_low_ref = last_week_low * (1.07 + 0.03 * ratio)
             est = round(est * 0.20 + dec_low_ref * 0.80, 2)
     else:
@@ -1962,8 +1960,8 @@ def build_rolling_12m_cycle_rows(
             action_hint = "等财报波动消化/守纪律"
             badge_color = "#38bdf8"
         elif dist["is_pre_earnings"]:
-            stance = f"财报前窗·{flow['short_tag']}"
-            action_hint = "防冲高兑现 / 不盲目追高" if flow["state"] == "偏抛盘" else "留意抢跑节奏 / 控仓"
+            stance = f"财报前窗·{flow_info['short_tag']}"
+            action_hint = "防冲高兑现 / 不盲目追高" if flow_info["state"] == "偏抛盘" else "留意抢跑节奏 / 控仓"
             badge_color = "#f59e0b"
         elif tech_score >= 72:
             stance = "干支顺势·强旺窗"
