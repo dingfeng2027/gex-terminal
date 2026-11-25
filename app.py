@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+import json
 import os
 from datetime import datetime, timedelta
 from typing import Any
@@ -1121,7 +1122,7 @@ def build_custom_option_matrix_html(symbol, spot):
     """
     return html
 
-# ==================== 3. DUAL-TRACK ENGINE: NATAL BIRTHDAY + PERIOD 9 LI-FIRE (UPPER) & INSTITUTIONAL FLOW (LOWER) ====================
+# ==================== 3. DUAL-TRACK ENGINE: PILLARS -> SHORT TAG -> TIERED SCORE (UPPER) & INSTITUTIONAL FLOW (LOWER) ====================
 
 TIANGAN = ["甲", "乙", "丙", "丁", "戊", "己", "庚", "辛", "壬", "癸"]
 DIZHI = ["子", "丑", "寅", "卯", "辰", "巳", "午", "未", "申", "酉", "戌", "亥"]
@@ -1178,6 +1179,23 @@ SOLAR_MONTH_TO_ZHI_IDX = {
     8: 8, 9: 9, 10: 10, 11: 11, 12: 0, 1: 1,
 }
 
+# 核心短标签库（沿用能量图短定性风格，先定短标签再对应分数层级）
+TAG_SCORE_BENCHMARKS: dict[str, tuple[float, str]] = {
+    "旺月爆发":   (90.0, "peak"),
+    "成果入库":   (65.0, "harvest"),
+    "天克地冲":   (10.0, "severe"),
+    "刑月重塑":   (15.0, "severe"),
+    "破晓祈生":   (35.0, "rebound"),
+    "冲月清洗":   (30.0, "wash"),
+    "虚火诱多":   (45.0, "trap"),
+    "季末冲克":   (38.0, "wash"),
+    "春回蓄势":   (55.0, "steady"),
+    "顺势起势":   (68.0, "rising"),
+    "火旺助燃":   (74.0, "rising"),
+    "高位整固":   (62.0, "steady"),
+    "夏末震荡":   (52.0, "steady"),
+}
+
 INSTITUTIONAL_MONTH_CALENDAR = {
     1:  {"top_label": "假期回流砸盘",       "hist_pts": -14.0, "default_tone": "yellow", "detail": "元旦后机构资金回流先砸坑清洗获利盘"},
     2:  {"top_label": "财报尾声+流动性收缩", "hist_pts": 6.5,   "default_tone": "green",  "detail": "芯片财报压轴与节后流动性博弈"},
@@ -1193,13 +1211,16 @@ INSTITUTIONAL_MONTH_CALENDAR = {
     12: {"top_label": "税务结算抛盘+三巫日", "hist_pts": -15.5, "default_tone": "red",    "detail": "年底税务结算抛盘+12月三巫日+圣诞长假"},
 }
 
-def _year_to_ganzhi(year: int) -> tuple[str, str]:
-    offset = year - 1984
+def _year_to_ganzhi(year: int, month: int = 6) -> tuple[str, str]:
+    # 立春（公历2月）前沿用上一干支年，立春后进入当年干支年
+    gz_year = year - 1 if month == 1 else year
+    offset = gz_year - 1984
     return TIANGAN[offset % 10], DIZHI[offset % 12]
 
 def _solar_month_ganzhi(year: int, month: int) -> tuple[str, str]:
+    # 五虎遁年上起月 + 节气月份地支顺排
     gz_year = year - 1 if month == 1 else year
-    y_gan, _ = _year_to_ganzhi(gz_year)
+    y_gan, _ = _year_to_ganzhi(gz_year, month=6)
     y_gan_idx = TIANGAN.index(y_gan)
     start_gan_idx = ((y_gan_idx % 5) * 2 + 2) % 10
     month_step = 11 if month == 1 else (month - 2)
@@ -1208,11 +1229,8 @@ def _solar_month_ganzhi(year: int, month: int) -> tuple[str, str]:
     return m_gan, m_zhi
 
 def _date_to_day_ganzhi(dt_obj: datetime) -> tuple[str, str]:
-    # 1984-02-02 为甲子日（儒略日基准推算）
-    base_jdn = 2445733  # 1984-02-02 JDN
-    y = dt_obj.year
-    m = dt_obj.month
-    d = dt_obj.day
+    base_jdn = 2445733  # 1984-02-02 甲子日基准
+    y, m, d = dt_obj.year, dt_obj.month, dt_obj.day
     a = (14 - m) // 12
     y_adj = y + 4800 - a
     m_adj = m + 12 * a - 3
@@ -1235,13 +1253,13 @@ def _parse_birthday_str(b_str: str, fallback_sym: str) -> tuple[datetime, str]:
 
 def _score_to_arrow_str(score: float, neutral: float = 50.0) -> str:
     diff = score - neutral
-    if diff >= 16:
+    if diff >= 18:
         return f"↑↑ {score:.0f}"
-    if diff >= 4:
+    if diff >= 5:
         return f"↗ {score:.0f}"
-    if diff > -4:
+    if diff > -5:
         return f"→ {score:.0f}"
-    if diff > -16:
+    if diff > -20:
         return f"↘ {score:.0f}"
     return f"↓↓ {score:.0f}"
 
@@ -1256,60 +1274,81 @@ def _pts_to_arrow_str(pts: float) -> str:
         return f"↘ {pts:+.1f}点"
     return f"↓↓ {pts:+.1f}点"
 
-def _classify_month_axis_label(
+def _derive_short_tag_from_pillars(
     base_gan: str,
     base_zhi: str,
     base_el: str,
     month_num: int,
-    other_gan: str,
-    other_zhi: str,
+    y_gan: str,
+    y_zhi: str,
+    m_gan: str,
+    m_zhi: str,
 ) -> tuple[str, str]:
-    pair_zhi = frozenset({base_zhi, other_zhi})
-    other_el = TIANGAN_ELEMENT[other_gan]
-    overcomes_base = OVERCOMES.get(other_el) == base_el
+    """
+    先按年柱、月柱及干支生克冲合关系推导短定性标签（2~4字短词），
+    后续如拿到能量图最新标签，可在此处或配置表中直接替换。
+    """
+    pair_m_zhi = frozenset({base_zhi, m_zhi})
+    m_el = TIANGAN_ELEMENT[m_gan]
+    y_el = TIANGAN_ELEMENT[y_gan]
+    m_gan_overcomes_base = OVERCOMES.get(m_el) == base_el
 
-    if pair_zhi in CLASH_PAIRS:
-        if overcomes_base or TIANGAN_ELEMENT[other_gan] == "水" and base_el == "火":
-            return f"{month_num}月-天冲地克", "clash"
-        return f"{month_num}月-地支相冲", "clash"
-    if pair_zhi in PUNISHMENT_PAIRS:
-        return f"{month_num}月-干支相刑", "punish"
-    if pair_zhi in SIX_HARMONY_PAIRS:
-        return f"{month_num}月-六合顺势", "harmony"
-    if GENERATES.get(other_el) == base_el:
-        return f"{month_num}月-生助得力", "harmony"
-    if overcomes_base:
-        return f"{month_num}月-五行克制", "clash"
-    if other_el == base_el:
-        return f"{month_num}月-比和共振", "harmony"
-    return f"{month_num}月-气场平衡", "neutral"
+    if month_num == 12 and (pair_m_zhi in CLASH_PAIRS or m_gan_overcomes_base):
+        return "天克地冲", "severe"
+    if pair_m_zhi in CLASH_PAIRS and m_gan_overcomes_base:
+        return "天克地冲", "severe"
+    if month_num == 12 and pair_m_zhi in PUNISHMENT_PAIRS:
+        return "刑月重塑", "severe"
+    if month_num == 10 and (pair_m_zhi in SIX_HARMONY_PAIRS or GENERATES.get(m_el) == base_el or m_el in ("土", "火") or y_el == "火"):
+        return "旺月爆发", "peak"
+    if month_num == 11:
+        return "成果入库", "harvest"
+    if month_num == 1:
+        return "破晓祈生", "rebound"
+    if month_num == 9 or pair_m_zhi in CLASH_PAIRS:
+        return "冲月清洗", "wash"
+    if month_num == 8:
+        return "虚火诱多", "trap"
+    if month_num == 3 or pair_m_zhi in PUNISHMENT_PAIRS:
+        return "季末冲克", "wash"
+    if month_num == 2:
+        return "春回蓄势", "steady"
+    if month_num == 4 or pair_m_zhi in SIX_HARMONY_PAIRS:
+        return "顺势起势", "rising"
+    if month_num == 5 or m_el == "火":
+        return "火旺助燃", "rising"
+    if month_num == 6:
+        return "高位整固", "steady"
+    return "夏末震荡", "steady"
 
-def _ganzhi_pair_delta(base_gan: str, base_zhi: str, base_el: str, other_gan: str, other_zhi: str) -> float:
-    other_el = TIANGAN_ELEMENT[other_gan]
-    delta = 0.0
-    pair_zhi = frozenset({base_zhi, other_zhi})
+def _compute_score_from_tag(
+    short_tag: str,
+    base_gan: str,
+    base_zhi: str,
+    base_el: str,
+    y_gan: str,
+    y_zhi: str,
+    m_gan: str,
+    m_zhi: str,
+) -> tuple[float, str]:
+    """
+    先出短标签后按标签基准分数层次评分，个股本命与年/月干支仅做小幅微调（±5分以内），
+    确保高/中/低分数层次清晰对位（如 10月~90 / 11月~65 / 12月~10）。
+    """
+    base_score, tier_kind = TAG_SCORE_BENCHMARKS.get(short_tag, (55.0, "steady"))
 
-    if pair_zhi in CLASH_PAIRS:
-        delta -= 16.0
-    elif pair_zhi in PUNISHMENT_PAIRS:
-        delta -= 12.0
-    elif pair_zhi in SIX_HARMONY_PAIRS:
-        delta += 14.0
-    elif base_zhi == other_zhi:
-        delta += 8.0
+    micro_adj = 0.0
+    if GENERATES.get(base_el) == "火" or base_el == "火":
+        micro_adj += 1.5
+    if frozenset({base_zhi, m_zhi}) in SIX_HARMONY_PAIRS:
+        micro_adj += 2.0
+    elif frozenset({base_zhi, m_zhi}) in CLASH_PAIRS:
+        micro_adj -= 2.0
 
-    if GENERATES.get(other_el) == base_el:
-        delta += 11.0
-    elif OVERCOMES.get(other_el) == base_el:
-        delta -= 13.0
-    elif GENERATES.get(base_el) == other_el:
-        delta -= 4.0
-    elif OVERCOMES.get(base_el) == other_el:
-        delta += 6.5
-    elif other_el == base_el:
-        delta += 6.0
-
-    return delta
+    # 限制微调幅度，避免冲破标签对应的分数层级
+    micro_adj = max(-4.0, min(4.0, micro_adj))
+    final_score = round(max(5.0, min(98.0, base_score + micro_adj)), 1)
+    return final_score, tier_kind
 
 def resolve_stock_natal_chart(symbol: str, ref_dt: datetime | None = None) -> dict[str, Any]:
     clean_sym = symbol.upper().strip() or "NVDA"
@@ -1321,25 +1360,18 @@ def resolve_stock_natal_chart(symbol: str, ref_dt: datetime | None = None) -> di
     element = TIANGAN_ELEMENT[d_gan]
     zhi_element = DIZHI_ELEMENT[d_zhi]
 
-    # 九紫离火大运 (2024-2043) 顺合度
     if element == "火":
-        era_bonus = 7.5
         era_tag = "离火当运·火势同频"
     elif element == "木":
-        era_bonus = 5.5
         era_tag = "木生离火·顺势助推"
     elif element == "土":
-        era_bonus = 3.0
         era_tag = "火生厚土·承接稳健"
     elif element == "金":
-        era_bonus = -4.5
         era_tag = "离火炼金·震荡洗炼"
     else:
-        era_bonus = -3.5
         era_tag = "水火交激·冲克明显"
 
-    cur_y_gan, cur_y_zhi = _year_to_ganzhi(now_dt.year)
-    cur_year_delta = _ganzhi_pair_delta(d_gan, d_zhi, element, cur_y_gan, cur_y_zhi)
+    cur_y_gan, cur_y_zhi = _year_to_ganzhi(now_dt.year, now_dt.month)
 
     profile = {
         "symbol": clean_sym,
@@ -1351,10 +1383,8 @@ def resolve_stock_natal_chart(symbol: str, ref_dt: datetime | None = None) -> di
         "element": element,
         "zhi_element": zhi_element,
         "era_name": "九紫离火运 (2024-2043)",
-        "era_bonus": era_bonus,
         "era_tag": era_tag,
         "cur_year_ganzhi": f"{cur_y_gan}{cur_y_zhi}",
-        "cur_year_delta": round(cur_year_delta, 1),
         "resolved_at": now_dt.strftime("%H:%M:%S"),
     }
     st.session_state["stock_natal_registry"][clean_sym] = profile
@@ -1396,7 +1426,6 @@ def build_dual_track_12m_data(
     d_gan = natal["gan"]
     d_zhi = natal["zhi"]
     d_el = natal["element"]
-    era_bonus = float(natal["era_bonus"])
 
     raw_rows: list[dict[str, Any]] = []
     for col_idx in range(12):
@@ -1404,22 +1433,20 @@ def build_dual_track_12m_data(
         y_num = ym_idx // 12
         m_num = (ym_idx % 12) + 1
 
-        y_gan, y_zhi = _year_to_ganzhi(y_num)
+        # 1) 先调出年柱与月柱
+        y_gan, y_zhi = _year_to_ganzhi(y_num, m_num)
         m_gan, m_zhi = _solar_month_ganzhi(y_num, m_num)
 
-        yr_delta = _ganzhi_pair_delta(d_gan, d_zhi, d_el, y_gan, y_zhi)
-        mo_delta = _ganzhi_pair_delta(d_gan, d_zhi, d_el, m_gan, m_zhi)
+        # 2) 再定出当月短标签
+        short_tag, tier_kind = _derive_short_tag_from_pillars(
+            d_gan, d_zhi, d_el, m_num, y_gan, y_zhi, m_gan, m_zhi
+        )
+        axis_label = f"{m_num}月-{short_tag}"
 
-        # 九紫离火运季节微调（巳/午火旺月、亥/子水旺月）
-        if m_zhi in ("巳", "午"):
-            li_fire_m = 4.0 if d_el in ("火", "木") else -2.0
-        elif m_zhi in ("亥", "子"):
-            li_fire_m = -5.5 if d_el in ("火", "金") else 2.5
-        else:
-            li_fire_m = 0.0
-
-        natal_score = round(max(12.0, min(96.0, 52.0 + mo_delta * 1.15 + yr_delta * 0.45 + era_bonus + li_fire_m)), 1)
-        axis_label, axis_kind = _classify_month_axis_label(d_gan, d_zhi, d_el, m_num, m_gan, m_zhi)
+        # 3) 最后按标签对应分数层次评分
+        natal_score, _ = _compute_score_from_tag(
+            short_tag, d_gan, d_zhi, d_el, y_gan, y_zhi, m_gan, m_zhi
+        )
 
         if col_idx == 0:
             slot_role = "上月复盘"
@@ -1441,8 +1468,9 @@ def build_dual_track_12m_data(
             "slot_role": slot_role,
             "y_ganzhi": f"{y_gan}{y_zhi}",
             "m_ganzhi": f"{m_gan}{m_zhi}",
+            "short_tag": short_tag,
             "axis_label": axis_label,
-            "axis_kind": axis_kind,
+            "tier_kind": tier_kind,
             "natal_score": natal_score,
             "natal_arrow": _score_to_arrow_str(natal_score),
             "inst_top_label": cal["top_label"],
@@ -1453,28 +1481,27 @@ def build_dual_track_12m_data(
             "override_key": override_key,
         })
 
-    # 节气提前约 15 天气场渗透提示
+    # 节气提前约 15 天气场渗透/爆发提示
     alerts: list[str] = []
     for i, r in enumerate(raw_rows):
         nxt = raw_rows[i + 1] if i + 1 < len(raw_rows) else None
         early_shift = False
         alert_txt = ""
-        if nxt and nxt["axis_kind"] in ("clash", "punish"):
+        if nxt and nxt["tier_kind"] in ("severe", "wash"):
             early_shift = True
-            alert_txt = f"⚡ 提前~15天气场渗透：下月({nxt['month_num']}月)见 {nxt['axis_label']}，本月下旬提前控仓/挂单"
-        elif r["axis_kind"] in ("clash", "punish"):
+            alert_txt = f"⚡ 提早~15天爆发/渗透：下月({nxt['month_num']}月)见 {nxt['axis_label']}，本月下旬提前防备与控仓"
+        elif r["tier_kind"] in ("severe", "harvest"):
             early_shift = True
-            alert_txt = f"⚡ 气场提前约15天已生效：{r['axis_label']}，注意波动放大与低吸节奏"
+            alert_txt = f"⚡ 气场提早~15天作用：{r['axis_label']}（得分 {r['natal_score']:.0f}），注意波动与节奏切换"
 
         r["early_shift"] = early_shift
         r["early_alert"] = alert_txt
         if r["col_idx"] in (1, 2) and alert_txt:
             alerts.append(alert_txt)
 
-        # 上轨 X 轴：月份 + 干支 + 下方明确显示 "X月-天冲地克" 式定性
         short_yr = str(r["year_num"])[2:]
-        role_tag = "[已过]" if r["col_idx"] == 0 else ("[本月]" if r["slot_role"] == "本月基准" else "")
-        r["upper_x"] = f"{role_tag}{short_yr}年{r['m_ganzhi']}<br><b>{r['axis_label']}</b>"
+        role_tag = "[上月]" if r["col_idx"] == 0 else ("[本月]" if r["slot_role"] == "本月基准" else "")
+        r["upper_x"] = f"{role_tag}{short_yr}年{r['y_ganzhi']}/{r['m_ganzhi']}<br><b>{r['axis_label']}</b>"
         r["lower_x"] = f"{short_yr}年{r['month_num']}月<br><b>{r['inst_top_label']}</b>"
 
     meta = {
@@ -1482,6 +1509,18 @@ def build_dual_track_12m_data(
         "col1_label": f"{raw_rows[0]['year_num']}年{raw_rows[0]['month_num']}月(上月)",
         "col2_label": f"{raw_rows[1]['year_num']}年{raw_rows[1]['month_num']}月(本月)",
         "alerts": alerts,
+        "schedule_json": json.dumps(
+            [
+                {
+                    "ym": f"{r['year_num']}-{r['month_num']:02d}",
+                    "pillar": f"{r['y_ganzhi']}/{r['m_ganzhi']}",
+                    "tag": r["axis_label"],
+                    "score": r["natal_score"],
+                }
+                for r in raw_rows
+            ],
+            ensure_ascii=False,
+        ),
     }
     return raw_rows, meta
 
@@ -1498,10 +1537,10 @@ def render_12m_cycle_block_above_options(
 
     top_h1, top_h2 = st.columns([4.2, 2.2])
     top_h1.markdown(
-        f"<div class='card-header' style='margin-bottom:2px;'>🧭 {symbol} 双轨12月联动面板 · 上轨(成立生日八字×九紫离火) / 下轨(机构资金与造市商)</div>"
+        f"<div class='card-header' style='margin-bottom:2px;'>🧭 {symbol} 双轨12月联动面板 · 上轨(年柱月柱→短标签→分数层次) / 下轨(机构资金与造市商)</div>"
         f"<div style='font-size:13.5px; color:#cbd5e1;'>"
         f"本命定盘: <b>{meta['birthday_mode']} · 日柱 {meta['ganzhi']}({meta['element']}命)</b> | "
-        f"大运: <b>{meta['era_name']}（{meta['era_tag']}）</b> | 流年: <b>{meta['cur_year_ganzhi']}({meta['cur_year_delta']:+.1f})</b><br>"
+        f"大运: <b>{meta['era_name']}（{meta['era_tag']}）</b> | 流年: <b>{meta['cur_year_ganzhi']}</b><br>"
         f"时间轴对齐: <b>第1栏={meta['col1_label']}（已过复盘）</b> → <b>第2栏={meta['col2_label']}（本月）</b> → 顺延10个月（每月自动更新）"
         f"</div>",
         unsafe_allow_html=True,
@@ -1544,52 +1583,53 @@ def render_12m_cycle_block_above_options(
     upper_y = [r["natal_score"] for r in rows]
     upper_arrows = [r["natal_arrow"] for r in rows]
     upper_colors = [
-        "#dc2626" if r["axis_kind"] == "clash" else ("#d97706" if r["axis_kind"] == "punish" else "#16a34a")
+        "#dc2626" if r["tier_kind"] in ("severe", "wash") else ("#ea580c" if r["tier_kind"] in ("harvest", "trap") else "#16a34a")
         for r in rows
     ]
 
-    # ---------- 图表 1（上轨）：个股成立生日八字 + 九紫离火 + 年月干支（箭头标分数） ----------
+    # ---------- 图表 1（上轨）：年柱/月柱 → 短标签 → 分数层次（箭头标分数） ----------
     fig_upper = go.Figure()
     fig_upper.add_trace(go.Scatter(
         x=upper_x,
         y=upper_y,
         mode="lines+markers+text",
-        name=f"{symbol} 成立生日×九紫离火分数",
+        name=f"{symbol} 干支气场能量分数",
         text=upper_arrows,
         textposition="top center",
         textfont=dict(size=12, color="#0f172a"),
         line=dict(color="#ea580c", width=3.0),
-        marker=dict(size=10, color=upper_colors, line=dict(color="#ffffff", width=1.5)),
-        hovertemplate="%{x}<br>能量分数: %{text}<extra></extra>",
+        marker=dict(size=11, color=upper_colors, line=dict(color="#ffffff", width=1.5)),
+        hovertemplate="%{x}<br>能量箭头: %{text}<extra></extra>",
     ))
     fig_upper.add_vrect(x0=-0.45, x1=0.45, fillcolor="rgba(148, 163, 184, 0.18)", line_width=0)
     fig_upper.add_vrect(x0=0.55, x1=1.45, fillcolor="rgba(250, 204, 21, 0.22)", line_width=0)
 
     for r in rows:
         if r["early_shift"]:
+            y_pos = min(100.0, r["natal_score"] + 12.0) if r["natal_score"] < 80 else max(8.0, r["natal_score"] - 12.0)
             fig_upper.add_annotation(
                 x=r["upper_x"],
-                y=min(98.0, r["natal_score"] + 11.0),
-                text="⚡提前~15天气场",
+                y=y_pos,
+                text="⚡提早~15天",
                 showarrow=False,
                 font=dict(size=10, color="#b45309"),
                 bgcolor="rgba(254, 243, 199, 0.92)",
             )
 
     fig_upper.update_layout(
-        title=dict(text=f"① 上轨：个股出生八字({meta['ganzhi']}·{meta['element']}) × 九紫离火 × 年月干支（箭头标分数）", font=dict(size=13.5, color="#0f172a")),
+        title=dict(text=f"① 上轨：年柱/月柱 → 气场短标签 → 分数层次（{meta['ganzhi']}·{meta['element']} × 九紫离火 | 箭头标分数）", font=dict(size=13.5, color="#0f172a")),
         template="plotly_white",
         paper_bgcolor="#ffffff",
         plot_bgcolor="#ffffff",
-        height=275,
-        margin=dict(l=14, r=14, t=42, b=52),
+        height=285,
+        margin=dict(l=16, r=16, t=44, b=58),
         showlegend=False,
     )
-    fig_upper.update_xaxes(tickfont=dict(size=11, color="#0f172a"))
+    fig_upper.update_xaxes(tickfont=dict(size=10.5, color="#0f172a"))
     fig_upper.update_yaxes(range=[0, 112], title="能量分", gridcolor="#e2e8f0")
     st.plotly_chart(fig_upper, use_container_width=True)
 
-    # ---------- 图表 2（下轨）：1-12月机构资金与造市商监控（上方机构周期标签 + 箭头标历史波动点数 + 红黄绿三色） ----------
+    # ---------- 图表 2（下轨）：1-12月机构资金与造市商监控（箭头标历史波动点数 + 红黄绿三色） ----------
     lower_x = [r["lower_x"] for r in rows]
     lower_y = [r["flow_pts"] for r in rows]
     lower_arrows = [r["flow_arrow"] for r in rows]
@@ -1618,11 +1658,11 @@ def render_12m_cycle_block_above_options(
         template="plotly_white",
         paper_bgcolor="#ffffff",
         plot_bgcolor="#ffffff",
-        height=275,
-        margin=dict(l=14, r=14, t=42, b=52),
+        height=285,
+        margin=dict(l=16, r=16, t=44, b=58),
         showlegend=False,
     )
-    fig_lower.update_xaxes(tickfont=dict(size=11, color="#0f172a"))
+    fig_lower.update_xaxes(tickfont=dict(size=10.5, color="#0f172a"))
     fig_lower.update_yaxes(range=[-26, 26], title="历史波动点数", gridcolor="#e2e8f0")
     st.plotly_chart(fig_lower, use_container_width=True)
 
@@ -1638,7 +1678,7 @@ def render_12m_cycle_block_above_options(
             f"<span style='color:#93c5fd;'>{r['year_num']}年{r['month_num']}月 ({r['slot_role']})</span>"
             f"<span style='color:{tone_col};'>{tone_badge}</span>"
             f"</div>"
-            f"<div style='font-size:12px; color:#fb923c; font-weight:800; margin-top:2px;'>上轨: {r['natal_arrow']} · {r['axis_label']}</div>"
+            f"<div style='font-size:12px; color:#fb923c; font-weight:800; margin-top:2px;'>上轨: {r['natal_arrow']} · {r['axis_label']} ({r['y_ganzhi']}/{r['m_ganzhi']})</div>"
             f"<div style='font-size:12px; color:#e2e8f0; margin-top:1px;'>下轨: {r['flow_arrow']} · {r['inst_top_label']}</div>"
             f"</div>"
         )
