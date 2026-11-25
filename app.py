@@ -1249,7 +1249,7 @@ def build_custom_option_matrix_html(symbol, spot):
     """
     return html
 
-# ==================== 3. FRAMEWORK 1 (9-FIRE BACKGROUND) + FRAMEWORK 2 (INDIVIDUAL NATAL MATCHING) ====================
+# ==================== 3. FRAMEWORK 1 (30% BG) + FRAMEWORK 2 (70% INDEPENDENT NATAL) ====================
 
 TIANGAN = ["甲", "乙", "丙", "丁", "戊", "己", "庚", "辛", "壬", "癸"]
 DIZHI = ["子", "丑", "寅", "卯", "辰", "巳", "午", "未", "申", "酉", "戌", "亥"]
@@ -1501,7 +1501,8 @@ def _compute_nature_background_month(year: int, month: int, y_gan: str, y_zhi: s
 
     return tag_str, nature_trend, round(max(8.0, min(95.0, score)), 1), tier_kind
 
-def _match_two_frameworks_for_stock(
+def _score_two_frameworks_30_70(
+    symbol: str,
     bg_score: float,
     tier_kind: str,
     base_gan: str,
@@ -1514,10 +1515,16 @@ def _match_two_frameworks_for_stock(
     term_gan: str,
     term_zhi: str,
     month_num: int,
-) -> tuple[float, str, str, str, str]:
+) -> dict[str, Any]:
+    """
+    严格按 30% 大背景独立分 + 70% 个股本命独立分 计算：
+      final_score = 0.30 * bg_score + 0.70 * natal_ind_score
+    """
     m_el = TIANGAN_ELEMENT[m_gan]
     m_zhi_el = DIZHI_ELEMENT[m_zhi]
     term_el = TIANGAN_ELEMENT[term_gan]
+    y_el = TIANGAN_ELEMENT[y_gan]
+
     pair_mz = frozenset({base_zhi, m_zhi})
     pair_tz = frozenset({base_zhi, term_zhi})
     pair_yz = frozenset({base_zhi, y_zhi})
@@ -1525,69 +1532,124 @@ def _match_two_frameworks_for_stock(
     is_clash = (pair_mz in CLASH_PAIRS) or (pair_tz in CLASH_PAIRS)
     is_harmony = (pair_mz in SIX_HARMONY_PAIRS) or (pair_tz in SIX_HARMONY_PAIRS)
     is_punish = (pair_mz in PUNISHMENT_PAIRS) or (pair_yz in PUNISHMENT_PAIRS)
+    is_harm = (pair_mz in HARM_PAIRS) or (pair_yz in HARM_PAIRS)
     is_wang = (m_zhi_el == base_el) or (GENERATES.get(m_el) == base_el)
 
-    natal_delta = 0.0
+    natal_ind_score = 50.0
     notes: list[str] = []
 
-    if base_el == "木" and m_zhi_el == "水":
-        if OVERCOMES.get(m_el) == "木":
-            natal_delta -= 7.5
-            notes.append("金克木带震荡")
-        else:
-            natal_delta += 2.0
-            notes.append("水润木有托底")
-        if frozenset({m_zhi, y_zhi}) in CLASH_PAIRS:
-            natal_delta -= 5.0
-            notes.append("水火激荡防洗盘")
-    else:
-        if GENERATES.get(m_el) == base_el:
-            natal_delta += 5.5
-            notes.append("月干生身")
-        elif OVERCOMES.get(m_el) == base_el:
-            natal_delta -= 6.5
-            notes.append("月干克身")
-        elif GENERATES.get(base_el) == m_el:
-            natal_delta -= 2.5
-            notes.append("泄气生财")
+    if GENERATES.get(m_el) == base_el:
+        natal_ind_score += 12.0
+        notes.append("月干生身")
+    elif OVERCOMES.get(m_el) == base_el:
+        natal_ind_score -= 13.0
+        notes.append("月干克身")
+    elif GENERATES.get(base_el) == m_el:
+        natal_ind_score -= 5.0
+        notes.append("泄气生财")
+    elif OVERCOMES.get(base_el) == m_el:
+        natal_ind_score += 6.0
+        notes.append("克制得财")
+    elif m_el == base_el:
+        natal_ind_score += 5.0
+        notes.append("比肩助势")
 
+    if is_wang:
+        natal_ind_score += 12.0
+        notes.append("得月令旺")
+    elif OVERCOMES.get(m_zhi_el) == base_el:
+        natal_ind_score -= 10.0
+        notes.append("月支克身")
+    elif GENERATES.get(base_el) == m_zhi_el:
+        natal_ind_score -= 6.0
+        notes.append("月支泄气")
+
+    if is_harmony:
+        natal_ind_score += 14.0
+        notes.append("本命合月")
     if is_clash:
-        natal_delta -= 10.5
+        natal_ind_score -= 18.0
         notes.append("本命逢冲")
     if is_punish:
-        natal_delta -= 7.0
+        natal_ind_score -= 11.0
         notes.append("本命逢刑")
-    if is_harmony:
-        natal_delta += 9.0
-        notes.append("本命合月")
-    if is_wang:
-        natal_delta += 6.5
-        notes.append("得月令旺")
+    if is_harm:
+        natal_ind_score -= 9.0
+        notes.append("本命逢害")
     if GENERATES.get(term_el) == base_el:
-        natal_delta += 2.0
+        natal_ind_score += 4.0
         notes.append("节令日助")
 
-    final_score = round(max(8.0, min(96.0, bg_score * 0.35 + (bg_score + natal_delta) * 0.65)), 1)
-    rel_text = "·".join(notes) if notes else "随大势运行"
-    effective_tier = "severe" if (tier_kind == "severe" or (is_clash and final_score < 32.0)) else tier_kind
+    # 干支组合微调（让木/火/土/金/水各走各的季节节律）
+    if base_el == "火" and m_zhi_el in ("木", "火"):
+        natal_ind_score += 7.0
+        notes.append("火木炎上")
+    elif base_el == "火" and m_zhi_el == "水":
+        natal_ind_score -= 9.0
+        notes.append("水火既济防震")
+    elif base_el == "金" and m_zhi_el in ("土", "金"):
+        natal_ind_score += 7.0
+        notes.append("土金相生")
+    elif base_el == "金" and m_zhi_el == "火":
+        natal_ind_score -= 8.0
+        notes.append("火旺炼金防压")
+    elif base_el == "水" and m_zhi_el in ("金", "水"):
+        natal_ind_score += 8.0
+        notes.append("金水相涵")
+    elif base_el == "水" and m_zhi_el == "火":
+        natal_ind_score -= 7.0
+        notes.append("火旺蒸水")
+    elif base_el == "木" and m_zhi_el in ("水", "木"):
+        natal_ind_score += 7.0
+        notes.append("水木清华")
+    elif base_el == "木" and m_zhi_el == "金":
+        natal_ind_score -= 8.0
+        notes.append("金木相战")
+    elif base_el == "土" and m_zhi_el in ("火", "土"):
+        natal_ind_score += 7.0
+        notes.append("火土相生")
+    elif base_el == "土" and m_zhi_el == "木":
+        natal_ind_score -= 7.0
+        notes.append("木克厚土")
 
-    if is_clash or is_punish or effective_tier == "severe":
+    # 轻微代码哈希微扰（±2.5分以内），避免同日柱同五行股票完全叠死
+    sym_hash_bias = ((int(hashlib.md5(f"{symbol}_{month_num}_{y_el}".encode()).hexdigest()[:4], 16) % 51) - 25) / 10.0
+    natal_ind_score = round(max(12.0, min(96.0, natal_ind_score + sym_hash_bias)), 1)
+
+    bg_contrib = round(bg_score * 0.30, 1)
+    natal_contrib = round(natal_ind_score * 0.70, 1)
+    final_score = round(max(10.0, min(96.0, bg_contrib + natal_contrib)), 1)
+
+    rel_text = "·".join(notes[:3]) if notes else "随本命运行"
+    effective_tier = "severe" if (is_clash or (tier_kind == "severe" and final_score < 38.0)) else tier_kind
+
+    if is_clash or is_punish or is_harm or effective_tier == "severe":
         positioning = "洗盘防踩位"
-        trend_out = "📉 冲克跌低洗盘" if final_score < 42 else "↔ 冲基宽幅拉锯"
-    elif effective_tier == "trap" or (base_el == "木" and m_zhi_el == "水" and month_num in (11, 12)):
+        trend_out = "📉 冲克跌低洗盘" if final_score < 45 else "↔ 冲基宽幅拉锯"
+    elif effective_tier == "trap":
         positioning = "高波博弈位"
-        trend_out = "↔ 震荡洗盘博弈" if final_score < 55 else "↗ 震荡走高防回吐"
-    elif final_score >= 68 and (is_harmony or is_wang or effective_tier in ("peak", "rising")):
+        trend_out = "↔ 震荡洗盘博弈" if final_score < 58 else "↗ 震荡走高防回吐"
+    elif final_score >= 68 and (is_harmony or is_wang or natal_ind_score >= 66):
         positioning = "主升进攻位"
-        trend_out = "📈 顺势加速爬高" if final_score >= 76 else "↗ 稳步爬高走强"
+        trend_out = "📈 顺势加速爬高" if final_score >= 75 else "↗ 稳步爬高走强"
     elif final_score >= 52:
         positioning = "修整观望位"
-        trend_out = "↗ 温和走高整固" if natal_delta >= 0 else "→ 横盘震荡观望"
+        trend_out = "↗ 温和走高整固" if natal_ind_score >= 55 else "→ 横盘震荡观望"
     else:
         positioning = "洗盘防踩位"
         trend_out = "↘ 承压震荡回落"
 
-    return final_score, rel_text, effective_tier, positioning, trend_out
+    return {
+        "bg_score": bg_score,
+        "natal_ind_score": natal_ind_score,
+        "bg_contrib": bg_contrib,
+        "natal_contrib": natal_contrib,
+        "final_score": final_score,
+        "rel_text": rel_text,
+        "effective_tier": effective_tier,
+        "positioning": positioning,
+        "trend_out": trend_out,
+    }
 
 def resolve_stock_natal_chart(symbol: str, ref_dt: datetime | None = None) -> dict[str, Any]:
     clean_sym = symbol.upper().strip() or "NVDA"
@@ -1723,9 +1785,14 @@ def build_dual_track_12m_data(
             y_num, m_num, y_gan, y_zhi, m_gan, m_zhi
         )
 
-        natal_score, rel_text, tier_kind, positioning, trend_out = _match_two_frameworks_for_stock(
-            bg_score, bg_tier, d_gan, d_zhi, d_el, y_gan, y_zhi, m_gan, m_zhi, term_gan, term_zhi, m_num
+        scored = _score_two_frameworks_30_70(
+            symbol, bg_score, bg_tier, d_gan, d_zhi, d_el, y_gan, y_zhi, m_gan, m_zhi, term_gan, term_zhi, m_num
         )
+        natal_score = scored["final_score"]
+        rel_text = scored["rel_text"]
+        tier_kind = scored["effective_tier"]
+        positioning = scored["positioning"]
+        trend_out = scored["trend_out"]
 
         if col_idx == 0:
             slot_role = "上月回顾"
@@ -1756,6 +1823,9 @@ def build_dual_track_12m_data(
             "bg_tag": bg_tag,
             "nature_trend": nature_trend,
             "bg_score": bg_score,
+            "natal_ind_score": scored["natal_ind_score"],
+            "bg_contrib": scored["bg_contrib"],
+            "natal_contrib": scored["natal_contrib"],
             "rel_text": rel_text,
             "positioning": positioning,
             "trend_out": trend_out,
@@ -1800,21 +1870,8 @@ def build_dual_track_12m_data(
         "col2_label": f"{raw_rows[1]['year_num']}年{raw_rows[1]['month_num']}月(第2栏本月)",
         "cur_positioning": cur_row["positioning"],
         "cur_trend_out": cur_row["trend_out"],
+        "cur_split_desc": f"背景30%={cur_row['bg_contrib']}分(原{cur_row['bg_score']:.0f}) + 本命70%={cur_row['natal_contrib']}分(原{cur_row['natal_ind_score']:.0f})",
         "alerts": alerts,
-        "schedule_json": json.dumps(
-            [
-                {
-                    "ym": f"{r['year_num']}-{r['month_num']:02d}",
-                    "pillar": f"{r['y_ganzhi']}/{r['m_ganzhi']}/{r['term_ganzhi']}",
-                    "tag": r["bg_tag"],
-                    "positioning": r["positioning"],
-                    "trend_out": r["trend_out"],
-                    "score": r["natal_score"],
-                }
-                for r in raw_rows
-            ],
-            ensure_ascii=False,
-        ),
     }
     return raw_rows, meta
 
@@ -1831,10 +1888,11 @@ def render_12m_cycle_block_above_options(
 
     top_h1, top_h2 = st.columns([4.2, 2.2])
     top_h1.markdown(
-        f"<div class='card-header' style='margin-bottom:2px;'>🧭 {symbol} 独立个股双轨12月面板 · 九运背景 × {meta['ganzhi']}({meta['element']})本命</div>"
+        f"<div class='card-header' style='margin-bottom:2px;'>🧭 {symbol} 独立个股双轨12月面板 · 背景30% × {meta['ganzhi']}({meta['element']})本命70%</div>"
         f"<div style='font-size:13.5px; color:#cbd5e1;'>"
-        f"九运背景: <b>{meta['era_name']} · {meta['era_phase']}（{meta['era_trend']}）</b> | "
-        f"个股本命: <b>{meta['birthday_mode']} · 日柱 {meta['ganzhi']}({meta['element']}命)</b> | "
+        f"九运背景(30%): <b>{meta['era_name']} · {meta['era_phase']}（{meta['era_trend']}）</b> | "
+        f"个股本命(70%): <b>{meta['birthday_mode']} · 日柱 {meta['ganzhi']}({meta['element']}命)</b><br>"
+        f"本月拆解: <b><span style='color:#93c5fd;'>{meta['cur_split_desc']}</span></b> | "
         f"本月定位与走势: <b><span style='color:#facc15;'>{meta['cur_positioning']}</span> · <span style='color:#4ade80;'>{meta['cur_trend_out']}</span></b><br>"
         f"滚动时间轴: <b>第1栏={meta['col1_label']}</b> → <b>第2栏={meta['col2_label']}</b> → 往后顺延10个月（每月自动更新）"
         f"</div>",
@@ -1887,6 +1945,10 @@ def render_12m_cycle_block_above_options(
     upper_x = [r["upper_x"] for r in rows]
     upper_y = [r["natal_score"] for r in rows]
     upper_arrows = [r["natal_arrow"] for r in rows]
+    upper_hover = [
+        f"{r['upper_x']}<br>综合得分: {r['natal_score']:.1f} (3/7拆分)<br>背景30%: {r['bg_contrib']} (原{r['bg_score']:.0f}) + 本命70%: {r['natal_contrib']} (原{r['natal_ind_score']:.0f})<br>命盘关系: {r['rel_text']}<extra></extra>"
+        for r in rows
+    ]
     upper_colors = [
         "#dc2626" if r["tier_kind"] in ("severe", "wash") else ("#ea580c" if r["tier_kind"] in ("harvest", "trap") else "#16a34a")
         for r in rows
@@ -1897,13 +1959,13 @@ def render_12m_cycle_block_above_options(
         x=upper_x,
         y=upper_y,
         mode="lines+markers+text",
-        name=f"{symbol} 双框架匹配能量分",
+        name=f"{symbol} 30/70 双框架能量分",
         text=upper_arrows,
         textposition="top center",
         textfont=dict(size=12.5, color="#0f172a"),
         line=dict(color="#ea580c", width=3.0),
         marker=dict(size=11, color=upper_colors, line=dict(color="#ffffff", width=1.5)),
-        hovertemplate="%{x}<br>能量箭头: %{text}<extra></extra>",
+        hovertemplate=upper_hover,
     ))
     fig_upper.add_vrect(x0=-0.45, x1=0.45, fillcolor="rgba(148, 163, 184, 0.18)", line_width=0)
     fig_upper.add_vrect(x0=0.55, x1=1.45, fillcolor="rgba(250, 204, 21, 0.22)", line_width=0)
@@ -1922,7 +1984,7 @@ def render_12m_cycle_block_above_options(
             )
 
     fig_upper.update_layout(
-        title=dict(text=f"① 上轨：九运背景 + {meta['ganzhi']}({meta['element']})本命匹配（箭头标分数，⚡提早~15天在点下方）", font=dict(size=13.5, color="#0f172a")),
+        title=dict(text=f"① 上轨：大背景30% + {meta['ganzhi']}({meta['element']})本命独立70%（箭头标综合分，⚡提早~15天在点下方）", font=dict(size=13.5, color="#0f172a")),
         template="plotly_white",
         paper_bgcolor="#ffffff",
         plot_bgcolor="#ffffff",
@@ -1978,13 +2040,14 @@ def render_12m_cycle_block_above_options(
         border_c = "2px solid #facc15" if r["slot_role"] == "本月基准" else ("1.5px dashed #94a3b8" if r["col_idx"] == 0 else "1px solid #3b82f6")
         strip_html += (
             f"<div style='background:#07193d; border:{border_c}; border-radius:7px; padding:7px 8px; color:#fff;'>"
-            f"<div style='display:flex; justify-content:space-between; font-size:13px; font-weight:900;'>"
+            f"<div style='display:flex; justify-content:space-between; font-size:12.5px; font-weight:900;'>"
             f"<span style='color:#93c5fd;'>{r['year_num']}年{r['month_num']}月 ({r['slot_role']})</span>"
             f"<span style='color:{tone_col};'>{tone_badge}</span>"
             f"</div>"
-            f"<div style='font-size:12px; color:#fb923c; font-weight:800; margin-top:2px;'>{r['positioning']} · {r['trend_out']}</div>"
-            f"<div style='font-size:11.5px; color:#cbd5e1; margin-top:1px;'>上轨: {r['natal_arrow']} ({r['rel_text']})</div>"
-            f"<div style='font-size:11.5px; color:#e2e8f0; margin-top:1px;'>下轨: {r['flow_arrow']} · {r['inst_top_label']}</div>"
+            f"<div style='font-size:11.5px; color:#fb923c; font-weight:800; margin-top:2px;'>{r['positioning']} · {r['trend_out']}</div>"
+            f"<div style='font-size:11px; color:#cbd5e1; margin-top:1px;'>上轨: {r['natal_arrow']} (背{r['bg_contrib']}+本{r['natal_contrib']})</div>"
+            f"<div style='font-size:11px; color:#94a3b8; margin-top:1px;'>{r['rel_text']}</div>"
+            f"<div style='font-size:11px; color:#e2e8f0; margin-top:1px;'>下轨: {r['flow_arrow']} · {r['inst_top_label']}</div>"
             f"</div>"
         )
     strip_html += "</div>"
@@ -1995,7 +2058,7 @@ def render_12m_cycle_block_above_options(
 
 active_natal = resolve_stock_natal_chart(st.session_state.selected_ticker)
 
-top_bar_html = "<div class='top-bar'><div class='brand-title'>CAPITAL QUANT v2</div><div class='live-badge'>Auto-Sync Every 3m (180s) | " + datetime.now().strftime('%b %d, %Y %H:%M:%S') + " | Auto-Natal Engine</div></div>"
+top_bar_html = "<div class='top-bar'><div class='brand-title'>CAPITAL QUANT v2</div><div class='live-badge'>Auto-Sync Every 3m (180s) | " + datetime.now().strftime('%b %d, %Y %H:%M:%S') + " | 30/70 Split Engine</div></div>"
 st.markdown(top_bar_html, unsafe_allow_html=True)
 
 n1, n2, n3, n4 = st.columns([1.3, 1.3, 1.6, 2.2])
