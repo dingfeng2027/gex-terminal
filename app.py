@@ -1249,7 +1249,7 @@ def build_custom_option_matrix_html(symbol, spot):
     """
     return html
 
-# ==================== 3. FRAMEWORK 1 (30% BG) + FRAMEWORK 2 (70% INDEPENDENT NATAL) ====================
+# ==================== 3. FRAMEWORK 1 (DRIFTING 30% BG) + FRAMEWORK 2 (70% INDEPENDENT NATAL) ====================
 
 TIANGAN = ["甲", "乙", "丙", "丁", "戊", "己", "庚", "辛", "壬", "癸"]
 DIZHI = ["子", "丑", "寅", "卯", "辰", "巳", "午", "未", "申", "酉", "戌", "亥"]
@@ -1446,60 +1446,86 @@ def _pts_to_arrow_str(pts: float) -> str:
     return f"↓↓ {pts:+.1f}点"
 
 def _compute_nature_background_month(year: int, month: int, y_gan: str, y_zhi: str, m_gan: str, m_zhi: str) -> tuple[str, str, float, str]:
+    """
+    30% 九运背景逐月漂移计算：
+    以当年九运背景分（bg_score）为基础，结合流月天干地支、五行生克、
+    年支与月支冲合刑害，让每个月的九运背景得分自然漂移（区间约 18~95 分，折算 30% 后约 5.4~28.5 分）。
+    """
     gz_year = year - 1 if month == 1 else year
     yr_bg = NINE_FIRE_YEAR_BACKGROUND.get(gz_year, {"bg_score": 55.0, "phase": "九紫离火运", "trend": "→ 稳健震荡"})
     el_pair = MONTH_SOLAR_META[month]["el_pair"]
 
-    if gz_year == 2027 and month in FIXED_2027_MONTH_LABELS:
-        tag_str, nature_trend, base_bg_score, tier_kind = FIXED_2027_MONTH_LABELS[month]
-        return tag_str, nature_trend, base_bg_score, tier_kind
-
     pair_ym = frozenset({y_zhi, m_zhi})
     m_el = TIANGAN_ELEMENT[m_gan]
+    m_zhi_el = DIZHI_ELEMENT[m_zhi]
     y_el = TIANGAN_ELEMENT[y_gan]
+
     score = float(yr_bg["bg_score"])
+    drift = 0.0
 
     if y_gan == m_gan and y_zhi == m_zhi:
         tag_str = f"{month}月-岁运伏吟-{el_pair}月"
         nature_trend = "↘ 伏吟剧震"
-        score -= 8.0
+        drift -= 9.0
         tier_kind = "trap"
     elif pair_ym in CLASH_PAIRS:
         tag_str = f"{month}月-年支对冲-{el_pair}月"
         nature_trend = "📉 冲月跌低"
-        score -= 22.0
+        drift -= 20.0
         tier_kind = "severe"
     elif pair_ym in HARM_PAIRS:
         tag_str = f"{month}月-支穿相害-{el_pair}月"
         nature_trend = "📉 相害跌低"
-        score -= 16.0
+        drift -= 14.0
         tier_kind = "severe"
     elif pair_ym in PUNISHMENT_PAIRS:
         tag_str = f"{month}月-刑克洗盘-{el_pair}月"
         nature_trend = "↘ 刑克回落"
-        score -= 12.0
+        drift -= 11.0
         tier_kind = "wash"
     elif pair_ym in SIX_HARMONY_PAIRS:
         tag_str = f"{month}月-六合顺势-{el_pair}月"
         nature_trend = "📈 合局爬高"
-        score += 14.0
+        drift += 13.0
         tier_kind = "peak"
     elif GENERATES.get(m_el) == "火" or m_el == "火":
         tag_str = f"{month}月-火木助势-{el_pair}月"
         nature_trend = "📈 顺势爬高"
-        score += 10.0
+        drift += 9.0
         tier_kind = "rising"
     elif OVERCOMES.get(m_el) == "火" or m_el == "水":
         tag_str = f"{month}月-水气克火-{el_pair}月"
         nature_trend = "📉 承压跌低"
-        score -= 14.0
+        drift -= 12.0
         tier_kind = "wash"
     else:
         tag_str = f"{month}月-{y_el}{m_el}交接-{el_pair}月"
         nature_trend = "→ 稳健震荡"
         tier_kind = "steady"
 
-    return tag_str, nature_trend, round(max(8.0, min(95.0, score)), 1), tier_kind
+    if m_zhi_el == "火":
+        drift += 6.5
+    elif m_zhi_el == "木":
+        drift += 4.5
+    elif m_zhi_el == "土":
+        drift += 1.5 if gz_year in (2026, 2027) else -1.5
+    elif m_zhi_el == "金":
+        drift -= 4.5
+    elif m_zhi_el == "水":
+        drift -= 6.5
+
+    if gz_year == 2027 and month in FIXED_2027_MONTH_LABELS:
+        ref_tag, ref_trend, ref_score, ref_tier = FIXED_2027_MONTH_LABELS[month]
+        score = score * 0.75 + ref_score * 0.25 + drift * 0.75
+        if tier_kind == "steady":
+            tag_str = ref_tag
+            nature_trend = ref_trend
+            tier_kind = ref_tier
+    else:
+        score = score + drift
+
+    drifted_bg_score = round(max(18.0, min(95.0, score)), 1)
+    return tag_str, nature_trend, drifted_bg_score, tier_kind
 
 def _score_two_frameworks_30_70(
     symbol: str,
@@ -1517,7 +1543,7 @@ def _score_two_frameworks_30_70(
     month_num: int,
 ) -> dict[str, Any]:
     """
-    严格按 30% 大背景独立分 + 70% 个股本命独立分 计算：
+    严格按 30% 大背景独立分（逐月漂移） + 70% 个股本命独立分 计算：
       final_score = 0.30 * bg_score + 0.70 * natal_ind_score
     """
     m_el = TIANGAN_ELEMENT[m_gan]
@@ -1580,7 +1606,6 @@ def _score_two_frameworks_30_70(
         natal_ind_score += 4.0
         notes.append("节令日助")
 
-    # 干支组合微调（让木/火/土/金/水各走各的季节节律）
     if base_el == "火" and m_zhi_el in ("木", "火"):
         natal_ind_score += 7.0
         notes.append("火木炎上")
@@ -1612,7 +1637,6 @@ def _score_two_frameworks_30_70(
         natal_ind_score -= 7.0
         notes.append("木克厚土")
 
-    # 轻微代码哈希微扰（±2.5分以内），避免同日柱同五行股票完全叠死
     sym_hash_bias = ((int(hashlib.md5(f"{symbol}_{month_num}_{y_el}".encode()).hexdigest()[:4], 16) % 51) - 25) / 10.0
     natal_ind_score = round(max(12.0, min(96.0, natal_ind_score + sym_hash_bias)), 1)
 
@@ -1870,7 +1894,7 @@ def build_dual_track_12m_data(
         "col2_label": f"{raw_rows[1]['year_num']}年{raw_rows[1]['month_num']}月(第2栏本月)",
         "cur_positioning": cur_row["positioning"],
         "cur_trend_out": cur_row["trend_out"],
-        "cur_split_desc": f"背景30%={cur_row['bg_contrib']}分(原{cur_row['bg_score']:.0f}) + 本命70%={cur_row['natal_contrib']}分(原{cur_row['natal_ind_score']:.0f})",
+        "cur_split_desc": f"背景30%={cur_row['bg_contrib']}分(漂移{cur_row['bg_score']:.1f}) + 本命70%={cur_row['natal_contrib']}分(本命{cur_row['natal_ind_score']:.1f})",
         "alerts": alerts,
     }
     return raw_rows, meta
@@ -1888,10 +1912,10 @@ def render_12m_cycle_block_above_options(
 
     top_h1, top_h2 = st.columns([4.2, 2.2])
     top_h1.markdown(
-        f"<div class='card-header' style='margin-bottom:2px;'>🧭 {symbol} 独立个股双轨12月面板 · 背景30% × {meta['ganzhi']}({meta['element']})本命70%</div>"
+        f"<div class='card-header' style='margin-bottom:2px;'>🧭 {symbol} 独立个股双轨12月面板 · 漂移背景30% × {meta['ganzhi']}({meta['element']})本命70%</div>"
         f"<div style='font-size:13.5px; color:#cbd5e1;'>"
-        f"九运背景(30%): <b>{meta['era_name']} · {meta['era_phase']}（{meta['era_trend']}）</b> | "
-        f"个股本命(70%): <b>{meta['birthday_mode']} · 日柱 {meta['ganzhi']}({meta['element']}命)</b><br>"
+        f"九运背景(30%逐月漂移): <b>{meta['era_name']} · {meta['era_phase']}（{meta['era_trend']}）</b> | "
+        f"个股本命(70%主导): <b>{meta['birthday_mode']} · 日柱 {meta['ganzhi']}({meta['element']}命)</b><br>"
         f"本月拆解: <b><span style='color:#93c5fd;'>{meta['cur_split_desc']}</span></b> | "
         f"本月定位与走势: <b><span style='color:#facc15;'>{meta['cur_positioning']}</span> · <span style='color:#4ade80;'>{meta['cur_trend_out']}</span></b><br>"
         f"滚动时间轴: <b>第1栏={meta['col1_label']}</b> → <b>第2栏={meta['col2_label']}</b> → 往后顺延10个月（每月自动更新）"
@@ -1946,7 +1970,7 @@ def render_12m_cycle_block_above_options(
     upper_y = [r["natal_score"] for r in rows]
     upper_arrows = [r["natal_arrow"] for r in rows]
     upper_hover = [
-        f"{r['upper_x']}<br>综合得分: {r['natal_score']:.1f} (3/7拆分)<br>背景30%: {r['bg_contrib']} (原{r['bg_score']:.0f}) + 本命70%: {r['natal_contrib']} (原{r['natal_ind_score']:.0f})<br>命盘关系: {r['rel_text']}<extra></extra>"
+        f"{r['upper_x']}<br>综合得分: {r['natal_score']:.1f} (3/7拆分)<br>背景30%: {r['bg_contrib']} (漂移{r['bg_score']:.1f}) + 本命70%: {r['natal_contrib']} (本命{r['natal_ind_score']:.1f})<br>命盘关系: {r['rel_text']}<extra></extra>"
         for r in rows
     ]
     upper_colors = [
@@ -1984,7 +2008,7 @@ def render_12m_cycle_block_above_options(
             )
 
     fig_upper.update_layout(
-        title=dict(text=f"① 上轨：大背景30% + {meta['ganzhi']}({meta['element']})本命独立70%（箭头标综合分，⚡提早~15天在点下方）", font=dict(size=13.5, color="#0f172a")),
+        title=dict(text=f"① 上轨：漂移背景30% + {meta['ganzhi']}({meta['element']})本命独立70%（箭头标综合分，⚡提早~15天在点下方）", font=dict(size=13.5, color="#0f172a")),
         template="plotly_white",
         paper_bgcolor="#ffffff",
         plot_bgcolor="#ffffff",
@@ -2058,7 +2082,7 @@ def render_12m_cycle_block_above_options(
 
 active_natal = resolve_stock_natal_chart(st.session_state.selected_ticker)
 
-top_bar_html = "<div class='top-bar'><div class='brand-title'>CAPITAL QUANT v2</div><div class='live-badge'>Auto-Sync Every 3m (180s) | " + datetime.now().strftime('%b %d, %Y %H:%M:%S') + " | 30/70 Split Engine</div></div>"
+top_bar_html = "<div class='top-bar'><div class='brand-title'>CAPITAL QUANT v2</div><div class='live-badge'>Auto-Sync Every 3m (180s) | " + datetime.now().strftime('%b %d, %Y %H:%M:%S') + " | 30/70 Drift Engine</div></div>"
 st.markdown(top_bar_html, unsafe_allow_html=True)
 
 n1, n2, n3, n4 = st.columns([1.3, 1.3, 1.6, 2.2])
