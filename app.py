@@ -1283,7 +1283,7 @@ def build_custom_option_matrix_html(symbol, spot):
     return html
 
 
-# ==================== 3. 个股五行主导(70%) + 月份环境(30%) 双向节律引擎 ====================
+# ==================== 3. 个股自身五行 100% 主导双向节律引擎 ====================
 
 TIANGAN = ["甲", "乙", "丙", "丁", "戊", "己", "庚", "辛", "壬", "癸"]
 DIZHI = ["子", "丑", "寅", "卯", "辰", "巳", "午", "未", "申", "酉", "戌", "亥"]
@@ -1421,22 +1421,22 @@ def _stock_ganzhi_signature(symbol: str, d_gan: str, d_zhi: str, y_birth_zhi: st
     b_y_el = DIZHI_ELEMENT[y_birth_zhi]
 
     profile_table: dict[str, tuple[str, str, float]] = {
-        "甲": ("水", "金", 1.15),
-        "乙": ("水", "金", 1.05),
-        "丙": ("木", "水", 1.20),
-        "丁": ("木", "水", 1.08),
-        "戊": ("火", "木", 1.00),
-        "己": ("火", "木", 0.92),
-        "庚": ("土", "火", 1.12),
-        "辛": ("土", "火", 0.98),
-        "壬": ("金", "土", 1.10),
-        "癸": ("金", "土", 0.95),
+        "甲": ("水", "金", 1.18),
+        "乙": ("水", "金", 1.08),
+        "丙": ("木", "水", 1.25),
+        "丁": ("木", "水", 1.12),
+        "戊": ("火", "木", 1.05),
+        "己": ("火", "木", 0.96),
+        "庚": ("土", "火", 1.15),
+        "辛": ("土", "火", 1.02),
+        "壬": ("金", "土", 1.14),
+        "癸": ("金", "土", 1.00),
     }
-    favored_el, avoid_el, vol_sens = profile_table.get(d_gan, ("木", "金", 1.0))
+    favored_el, avoid_el, vol_sens = profile_table.get(d_gan, ("木", "金", 1.05))
 
     digest = hashlib.md5(f"{symbol}:{d_gan}{d_zhi}:{y_birth_zhi}".encode("utf-8")).hexdigest()
-    phase_shift = ((int(digest[:4], 16) % 12) - 6) * 1.4
-    amp_factor = 0.85 + (int(digest[4:8], 16) % 31) / 100.0
+    phase_shift = ((int(digest[:4], 16) % 12) - 6) * 1.5
+    amp_factor = 0.90 + (int(digest[4:8], 16) % 31) / 100.0
 
     return {
         "d_el": d_el,
@@ -1463,11 +1463,10 @@ def resolve_stock_natal_chart(symbol: str, ref_dt: datetime | None = None) -> di
 
     cur_y_gan, cur_y_zhi = _year_ganzhi(now_dt.year, now_dt.month)
     gz_yr_num = now_dt.year - 1 if now_dt.month == 1 else now_dt.year
-    yr_factor = NINE_FIRE_YEAR_FACTOR.get(gz_yr_num, 0.95)
     era_phase = (
-        f"九紫离火大运·{clean_sym}({d_gan}{d_zhi}·{element}命)五行主导70%"
+        f"九紫离火大运·{clean_sym}({d_gan}{d_zhi}·{element}命)五行100%主导"
         if gz_yr_num == 2026
-        else f"{gz_yr_num}年·{clean_sym}({d_gan}{d_zhi}·{element}命)五行主导70%"
+        else f"{gz_yr_num}年·{clean_sym}({d_gan}{d_zhi}·{element}命)五行100%主导"
     )
 
     profile = {
@@ -1485,7 +1484,7 @@ def resolve_stock_natal_chart(symbol: str, ref_dt: datetime | None = None) -> di
         "avoid_element": sig["avoid_el"],
         "era_name": "九紫离火运 (2024-2043)",
         "era_phase": era_phase,
-        "era_trend": f"{element}行主导·喜{sig['favored_el']}·忌{sig['avoid_el']}",
+        "era_trend": f"{element}行100%跳动·喜{sig['favored_el']}·忌{sig['avoid_el']}",
         "cur_year_ganzhi": f"{cur_y_gan}{cur_y_zhi}",
         "resolved_at": now_dt.strftime("%H:%M:%S"),
     }
@@ -1508,9 +1507,9 @@ def _qualitative_month_adjust(
     real_base: float,
 ) -> tuple[float, float, str]:
     """
-    月份/流月大环境占 30%，个股自身天干地支五行生克冲合占 70%。
+    个股自身天干地支五行生克冲合占 100% 主导跳动，九紫离火大运背景不变。
     """
-    _ = y_gan
+    _ = (y_gan, virtual_base, real_base)
     gz_year = y_num - 1 if m_num == 1 else y_num
     yr_factor = NINE_FIRE_YEAR_FACTOR.get(gz_year, 0.95)
 
@@ -1522,54 +1521,51 @@ def _qualitative_month_adjust(
     d_el = sig["d_el"]
     d_zhi_el = sig["d_zhi_el"]
 
-    # 1. 月份背景分量（30% 权重）
-    month_v_part = virtual_base * (0.90 + 0.10 * yr_factor)
-    month_r_part = real_base * (0.94 + 0.06 * yr_factor)
-
-    # 2. 个股自身五行分量（70% 权重）
-    gan_rel_m = _element_relation_delta(d_el, m_gan_el) * 1.4
-    zhi_rel_m = _element_relation_delta(d_zhi_el, m_zhi_el) * 1.2
-    year_rel_d = _element_relation_delta(d_el, y_zhi_el) * 0.6
+    # 个股自身五行生克（100% 自身驱动，放大生克与喜忌张力）
+    gan_rel_m = _element_relation_delta(d_el, m_gan_el) * 2.1
+    zhi_rel_m = _element_relation_delta(d_zhi_el, m_zhi_el) * 1.9
+    year_rel_d = _element_relation_delta(d_el, y_zhi_el) * 0.9
 
     fav_hit = 0.0
     if m_gan_el == sig["favored_el"] or m_zhi_el == sig["favored_el"]:
-        fav_hit += 10.0
+        fav_hit += 16.0
     if m_gan_el == sig["avoid_el"] or m_zhi_el == sig["avoid_el"]:
-        fav_hit -= 10.5
+        fav_hit -= 17.0
 
     clash_合_delta_v = 0.0
     clash_合_delta_r = 0.0
     tags: list[str] = [f"{d_gan}{d_zhi}·{d_el}命"]
 
     if m_zhi == d_zhi:
-        clash_合_delta_v -= 8.0
-        clash_合_delta_r -= 4.0
-        tags.append("日支伏吟")
-    if frozenset({d_zhi, m_zhi}) in CLASH_PAIRS:
-        clash_合_delta_v -= 16.0
-        clash_合_delta_r -= 8.5
-        tags.append(f"{d_zhi}{m_zhi}相冲")
-    if frozenset({d_zhi, m_zhi}) in SIX_HARMONY_PAIRS:
-        clash_合_delta_v += 11.5
-        clash_合_delta_r += 7.0
-        tags.append(f"{d_zhi}{m_zhi}六合")
-    if frozenset({d_zhi, m_zhi}) in PUNISHMENT_PAIRS:
         clash_合_delta_v -= 12.0
         clash_合_delta_r -= 6.0
+        tags.append("日支伏吟")
+    if frozenset({d_zhi, m_zhi}) in CLASH_PAIRS:
+        clash_合_delta_v -= 24.0
+        clash_合_delta_r -= 14.0
+        tags.append(f"{d_zhi}{m_zhi}相冲")
+    if frozenset({d_zhi, m_zhi}) in SIX_HARMONY_PAIRS:
+        clash_合_delta_v += 18.0
+        clash_合_delta_r += 11.0
+        tags.append(f"{d_zhi}{m_zhi}六合")
+    if frozenset({d_zhi, m_zhi}) in PUNISHMENT_PAIRS:
+        clash_合_delta_v -= 18.0
+        clash_合_delta_r -= 10.0
         tags.append(f"{d_zhi}{m_zhi}相刑")
 
     if frozenset({b_y_zhi, m_zhi}) in CLASH_PAIRS:
-        clash_合_delta_v -= 7.5
-        clash_合_delta_r -= 4.0
+        clash_合_delta_v -= 11.0
+        clash_合_delta_r -= 6.0
         tags.append("年支逢冲")
     elif frozenset({b_y_zhi, m_zhi}) in SIX_HARMONY_PAIRS:
-        clash_合_delta_v += 5.5
-        clash_合_delta_r += 3.0
+        clash_合_delta_v += 8.0
+        clash_合_delta_r += 4.5
         tags.append("年支逢合")
 
+    # 个股自身逐月五行波峰波谷（100% 源自个股干支与流月节律）
     stock_wave = np.sin(
-        (m_num + (TIANGAN.index(d_gan) % 5) * 1.1 + (DIZHI.index(d_zhi) % 4) * 0.8) * 1.05
-    ) * 10.0
+        (m_num + (TIANGAN.index(d_gan) % 5) * 1.25 + (DIZHI.index(d_zhi) % 4) * 0.95) * 1.25
+    ) * 18.0 * yr_factor
 
     if m_gan_el == sig["favored_el"]:
         tags.append(f"得{m_gan_el}助")
@@ -1580,21 +1576,21 @@ def _qualitative_month_adjust(
     elif gan_rel_m <= -5.0:
         tags.append(f"{m_gan_el}克{d_el}")
 
-    stock_v_part = 52.0 + (
+    raw_v = 52.0 + (
         (gan_rel_m + zhi_rel_m + year_rel_d + fav_hit) * sig["vol_sens"]
         + clash_合_delta_v
         + stock_wave
-        + sig["phase_shift"]
+        + sig["phase_shift"] * 1.3
     )
-    stock_r_part = 62.0 + (
-        (zhi_rel_m * 0.8 + gan_rel_m * 0.5 + fav_hit * 0.7) * (0.85 + 0.15 * sig["vol_sens"])
+    raw_r = 60.0 + (
+        (zhi_rel_m * 0.95 + gan_rel_m * 0.65 + fav_hit * 0.85) * (0.85 + 0.20 * sig["vol_sens"])
         + clash_合_delta_r
-        + stock_wave * 0.65
-        + sig["phase_shift"] * 0.6
+        + stock_wave * 0.85
+        + sig["phase_shift"] * 0.8
     )
 
-    v_final = round(max(10.0, min(95.0, float(0.30 * month_v_part + 0.70 * stock_v_part))), 1)
-    r_final = round(max(20.0, min(95.0, float(0.30 * month_r_part + 0.70 * stock_r_part))), 1)
+    v_final = round(max(10.0, min(95.0, float(raw_v))), 1)
+    r_final = round(max(20.0, min(95.0, float(raw_r))), 1)
     return v_final, r_final, "·".join(tags[:4])
 
 
@@ -1660,8 +1656,8 @@ def build_12m_stock_series(
             real_base=float(anchor["real_base"]),
         )
 
-        base_pts = (total_score - 50.0) * 0.42
-        vol_scale = 0.72 if is_low_vol else 1.05
+        base_pts = (total_score - 50.0) * 0.45
+        vol_scale = 0.75 if is_low_vol else 1.08
         short_adj = 0.0
         if col_idx in (1, 2) and m_data:
             rsi_val = float(m_data.get("rsi") or 50.0)
@@ -1679,7 +1675,7 @@ def build_12m_stock_series(
                 elif pcr_v <= 0.75:
                     short_adj += 2.0
 
-        flow_pts = round(max(-22.0, min(22.0, base_pts * vol_scale + short_adj)), 1)
+        flow_pts = round(max(-24.0, min(24.0, base_pts * vol_scale + short_adj)), 1)
 
         if col_idx == 0:
             slot_role = "上月回顾"
@@ -1781,7 +1777,7 @@ def render_12m_cycle_block_above_options(
 
     top_h1, top_h2 = st.columns([4.2, 2.2])
     top_h1.markdown(
-        f"<div class='card-header' style='margin-bottom:2px;'>🧭 {symbol} [{meta['ganzhi']}·{meta['element']}命] 虚实双向12月能量面板 · 五行70%主导</div>"
+        f"<div class='card-header' style='margin-bottom:2px;'>🧭 {symbol} [{meta['ganzhi']}·{meta['element']}命] 虚实双向12月能量面板 · 五行100%主导</div>"
         f"<div style='font-size:13.5px; color:#cbd5e1;'>"
         f"大运与五行: <b>{meta['era_name']} · {meta['era_phase']}（{meta['era_trend']}）</b> | "
         f"标的命盘: <b>{meta['birthday_mode']} · 日柱 {meta['ganzhi']}({meta['element']}命)</b><br>"
@@ -1885,7 +1881,7 @@ def render_12m_cycle_block_above_options(
             )
 
     fig_upper.update_layout(
-        title=dict(text=f"① 上轨：{symbol} [{meta['ganzhi']}({meta['element']}命)] 五行70%主导12个月能量曲线", font=dict(size=13.5, color="#0f172a")),
+        title=dict(text=f"① 上轨：{symbol} [{meta['ganzhi']}({meta['element']}命)] 五行100%主导12个月能量曲线", font=dict(size=13.5, color="#0f172a")),
         template="plotly_white",
         paper_bgcolor="#ffffff",
         plot_bgcolor="#ffffff",
@@ -1960,7 +1956,7 @@ def render_12m_cycle_block_above_options(
 
 active_natal = resolve_stock_natal_chart(st.session_state.selected_ticker)
 
-top_bar_html = "<div class='top-bar'><div class='brand-title'>CAPITAL QUANT v2</div><div class='live-badge'>Auto-Sync Every 3m (180s) | " + datetime.now().strftime('%b %d, %Y %H:%M:%S') + " | 70% Stock Element Engine</div></div>"
+top_bar_html = "<div class='top-bar'><div class='brand-title'>CAPITAL QUANT v2</div><div class='live-badge'>Auto-Sync Every 3m (180s) | " + datetime.now().strftime('%b %d, %Y %H:%M:%S') + " | 100% Stock Element Engine</div></div>"
 st.markdown(top_bar_html, unsafe_allow_html=True)
 
 n1, n2, n3, n4 = st.columns([1.3, 1.3, 1.6, 2.2])
