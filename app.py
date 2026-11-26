@@ -157,8 +157,9 @@ if "show_all_strikes" not in st.session_state:
 if "opt_persistent_cache" not in st.session_state:
     st.session_state["opt_persistent_cache"] = {}
 
-if "stock_natal_registry" not in st.session_state:
-    st.session_state["stock_natal_registry"] = {}
+# 每个标的独立隔离的底层引擎状态库（按 symbol 分桶，互不混用）
+if "isolated_ticker_engines" not in st.session_state:
+    st.session_state["isolated_ticker_engines"] = {}
 
 if "stock_birthdays" not in st.session_state:
     st.session_state["stock_birthdays"] = PRESET_STOCK_BIRTHDAYS.copy()
@@ -295,6 +296,12 @@ def sync_watchlist_to_url():
     st.query_params["watchlist"] = ",".join(st.session_state.tickers)
 
 
+def reset_isolated_ticker_engine(symbol: str) -> None:
+    clean_sym = str(symbol or "").upper().strip()
+    if clean_sym:
+        st.session_state.setdefault("isolated_ticker_engines", {}).pop(clean_sym, None)
+
+
 def select_ticker_with_natal_first(symbol: str, target_page: str | None = None, manual_bday: str = "") -> dict[str, Any]:
     clean_sym = symbol.upper().strip() or "NVDA"
     if clean_sym not in st.session_state.tickers:
@@ -310,7 +317,7 @@ def select_ticker_with_natal_first(symbol: str, target_page: str | None = None, 
         auto_find_company_birthday(clean_sym)
 
     st.session_state.selected_ticker = clean_sym
-    st.session_state.get("stock_natal_registry", {}).pop(clean_sym, None)
+    reset_isolated_ticker_engine(clean_sym)
     bump_calc_nonce()
     natal_profile = step1_resolve_individual_stock_fundamentals(clean_sym)
     if target_page:
@@ -1283,7 +1290,7 @@ def build_custom_option_matrix_html(symbol, spot):
     return html
 
 
-# ==================== 3. 大环境背景固定 + 个股自身五行/命盘 100% 走动引擎 ====================
+# ==================== 3. 底层按个股彻底隔离的独立五行计算引擎 ====================
 
 TIANGAN = ["甲", "乙", "丙", "丁", "戊", "己", "庚", "辛", "壬", "癸"]
 DIZHI = ["子", "丑", "寅", "卯", "辰", "巳", "午", "未", "申", "酉", "戌", "亥"]
@@ -1322,25 +1329,24 @@ PUNISHMENT_PAIRS = {
 
 LOW_VOL_DEFENSIVE_TICKERS = {"NG.L", "VUAG.L", "QQQ", "EQQQ.L", "SPY", "DIA", "TLT"}
 
-# 固定的大环境背景刻度（仅作外层时间刻度与参考参照系，不再统一各只个股的跳动）
 FIXED_MACRO_BACKGROUND_REFERENCE: dict[int, dict[str, str]] = {
-    1:  {"zhi": "丑", "stage": "冬末寒土", "top_label": "宏观背景·冬末历法刻度", "default_tone": "green"},
-    2:  {"zhi": "寅", "stage": "初春木气", "top_label": "宏观背景·初春历法刻度", "default_tone": "green"},
-    3:  {"zhi": "卯", "stage": "仲春升发", "top_label": "宏观背景·仲春历法刻度", "default_tone": "yellow"},
-    4:  {"zhi": "辰", "stage": "暮春湿土", "top_label": "宏观背景·暮春历法刻度", "default_tone": "green"},
-    5:  {"zhi": "巳", "stage": "初夏火旺", "top_label": "宏观背景·初夏历法刻度", "default_tone": "green"},
-    6:  {"zhi": "午", "stage": "盛夏离火", "top_label": "宏观背景·盛夏历法刻度", "default_tone": "yellow"},
-    7:  {"zhi": "未", "stage": "季夏燥土", "top_label": "宏观背景·季夏历法刻度", "default_tone": "yellow"},
-    8:  {"zhi": "申", "stage": "孟秋金气", "top_label": "宏观背景·孟秋历法刻度", "default_tone": "yellow"},
-    9:  {"zhi": "酉", "stage": "仲秋肃杀", "top_label": "宏观背景·仲秋历法刻度", "default_tone": "green"},
-    10: {"zhi": "戌", "stage": "暮秋燥土", "top_label": "宏观背景·暮秋历法刻度", "default_tone": "green"},
-    11: {"zhi": "亥", "stage": "初冬水旺", "top_label": "宏观背景·初冬历法刻度", "default_tone": "green"},
-    12: {"zhi": "子", "stage": "仲冬子水", "top_label": "宏观背景·仲冬历法刻度", "default_tone": "red"},
+    1:  {"zhi": "丑", "stage": "冬末寒土", "top_label": "背景刻度·冬末"},
+    2:  {"zhi": "寅", "stage": "初春木气", "top_label": "背景刻度·初春"},
+    3:  {"zhi": "卯", "stage": "仲春升发", "top_label": "背景刻度·仲春"},
+    4:  {"zhi": "辰", "stage": "暮春湿土", "top_label": "背景刻度·暮春"},
+    5:  {"zhi": "巳", "stage": "初夏火旺", "top_label": "背景刻度·初夏"},
+    6:  {"zhi": "午", "stage": "盛夏离火", "top_label": "背景刻度·盛夏"},
+    7:  {"zhi": "未", "stage": "季夏燥土", "top_label": "背景刻度·季夏"},
+    8:  {"zhi": "申", "stage": "孟秋金气", "top_label": "背景刻度·孟秋"},
+    9:  {"zhi": "酉", "stage": "仲秋肃杀", "top_label": "背景刻度·仲秋"},
+    10: {"zhi": "戌", "stage": "暮秋燥土", "top_label": "背景刻度·暮秋"},
+    11: {"zhi": "亥", "stage": "初冬水旺", "top_label": "背景刻度·初冬"},
+    12: {"zhi": "子", "stage": "仲冬子水", "top_label": "背景刻度·仲冬"},
 }
 
 FIXED_MACRO_BACKGROUND_CONFIG: dict[str, Any] = {
     "era_name": "九紫离火运 (2024-2043)",
-    "fixed_macro_regime": "固定大环境背景刻度（仅做时间参照，不统一各股跳动）",
+    "fixed_macro_regime": "固定大环境背景刻度（各股底层完全分桶隔离）",
     "fixed_year_reference": 1.00,
     "reference_months": FIXED_MACRO_BACKGROUND_REFERENCE,
 }
@@ -1398,20 +1404,32 @@ def _pts_to_arrow_str(pts: float) -> str:
     return f"↓↓ {pts:+.1f}点"
 
 
-# -------------------- 第一步：个股基本面 + 五行命盘先行独立定位 --------------------
+def _get_isolated_engine_bucket(symbol: str) -> dict[str, Any]:
+    clean_sym = symbol.upper().strip() or "NVDA"
+    store = st.session_state.setdefault("isolated_ticker_engines", {})
+    if clean_sym not in store or not isinstance(store[clean_sym], dict):
+        sym_hash = hashlib.sha256(clean_sym.encode("utf-8")).hexdigest()
+        store[clean_sym] = {
+            "engine_id": f"ENG_{clean_sym}",
+            "is_nvda_reference": clean_sym == "NVDA",
+            "seed_int": int(sym_hash[:10], 16),
+            "phase_offset": (int(sym_hash[10:14], 16) % 628) / 100.0,
+            "v_bias": ((int(sym_hash[14:16], 16) % 19) - 9) * 1.1,
+            "r_bias": ((int(sym_hash[16:18], 16) % 19) - 9) * 1.1,
+        }
+    return store[clean_sym]
+
+
+# -------------------- 第一步：按个股各自独立的底层命盘建档 --------------------
 
 def step1_resolve_individual_stock_fundamentals(
     symbol: str,
     custom_date: str = "",
     ref_dt: datetime | None = None,
 ) -> dict[str, Any]:
-    """
-    【第一层：个股基本面与五行定位】
-    先确定每只个股或新添加个股自身的出生日、日柱干支、本命五行、喜用五行与忌神，
-    作为后续 100% 走动的唯一源头。
-    """
     clean_sym = symbol.upper().strip() or "NVDA"
     now_dt = ref_dt or datetime.today()
+    bucket = _get_isolated_engine_bucket(clean_sym)
 
     if custom_date.strip():
         b_dt, b_label = _parse_birthday_str(custom_date.strip(), clean_sym)
@@ -1438,6 +1456,7 @@ def step1_resolve_individual_stock_fundamentals(
     vol_regime = "稳健低波" if is_low_vol else "高弹性波动"
 
     profile = {
+        **bucket,
         "symbol": clean_sym,
         "cohort_type": cohort_type,
         "vol_regime": vol_regime,
@@ -1461,23 +1480,25 @@ def step1_resolve_individual_stock_fundamentals(
         "wuxing_positioning": f"{day_el}主·喜{favored_el}/{ally_el}·忌{taboo_el}",
         "resolved_at": now_dt.strftime("%H:%M:%S"),
     }
-    st.session_state["stock_natal_registry"][clean_sym] = profile
+    bucket["profile"] = profile
     return profile
 
 
-# -------------------- 第二步：固定大环境背景 + 100% 个股五行逐月推演 --------------------
+# -------------------- 第二步：各股完全分开的独立逐月推演（文案与分值严格一致） --------------------
 
-def _pure_individual_wuxing_month_scores(
+def _compute_isolated_month_for_ticker(
     natal: dict[str, Any],
+    y_num: int,
+    m_num: int,
     y_gan: str,
     y_zhi: str,
     m_gan: str,
     m_zhi: str,
     col_idx: int,
-) -> tuple[float, float, str, str, str, str]:
+) -> tuple[float, float, str, str, str, str, str]:
     """
-    完全按个股自身五行/命盘与当月干支生克冲合刑推算红线(虚)与绿线(实)，
-    不再使用统一的月份涨跌锚点底盘。
+    每只股票从底层独立计算自己的红线(虚)与绿线(实)，并严格根据各自算出来的
+    分值与生克变化生成定性标签、定位、走势与资金灯（不再套用同一模板）。
     """
     d_gan = natal["gan"]
     d_zhi = natal["zhi"]
@@ -1489,133 +1510,149 @@ def _pure_individual_wuxing_month_scores(
     wealth_el = natal["wealth_element"]
     taboo_el = natal["taboo_element"]
     is_low_vol = natal["is_low_vol"]
+    phase_offset = float(natal.get("phase_offset", 0.0))
+    v_bias = float(natal.get("v_bias", 0.0))
+    r_bias = float(natal.get("r_bias", 0.0))
 
     m_el = TIANGAN_ELEMENT[m_gan]
     m_zhi_el = DIZHI_ELEMENT[m_zhi]
-    y_zhi_el = DIZHI_ELEMENT[y_zhi]
 
-    # 以个股日干五行、日支五行及出生月令五行建立个股自有初始中心
     gan_idx = TIANGAN.index(d_gan)
     zhi_idx = DIZHI.index(d_zhi)
-    stock_v_base = 50.0 + ((gan_idx - 4.5) * 2.2) + ((zhi_idx - 5.5) * 1.4)
-    stock_r_base = 52.0 + ((gan_idx - 4.5) * 1.5) + ((zhi_idx - 5.5) * 1.8)
+    m_idx = m_num - 1
+
+    # 个股独立基准中心（不同日干/日支/标的完全分开）
+    v_base = 52.0 + ((gan_idx - 4.5) * 3.2) + ((zhi_idx - 5.5) * 1.8) + v_bias
+    r_base = 54.0 + ((gan_idx - 4.5) * 2.0) + ((zhi_idx - 5.5) * 2.6) + r_bias
 
     if is_low_vol:
-        stock_v_base -= 4.0
-        stock_r_base += 5.0
+        v_base -= 5.0
+        r_base += 6.0
     else:
-        stock_v_base += 4.5
-        stock_r_base -= 2.5
+        v_base += 4.5
+        r_base -= 2.0
 
     v_delta = 0.0
     r_delta = 0.0
-    factors: list[str] = []
+    reasons: list[str] = []
 
-    # 1. 月干对个股本命五行的生克（偏重虚线/波动节奏）
+    # 1. 流月天干对个股日干的生克（主导虚线/波动节奏）
     if m_el == favored_el or GENERATES.get(m_el) == d_el:
-        v_delta += 14.0
-        r_delta += 9.5
-        factors.append(f"月干{m_gan}({m_el})生{d_el}")
+        v_delta += 16.0
+        r_delta += 10.5
+        reasons.append(f"月干{m_gan}({m_el})生{d_el}")
     elif m_el == ally_el:
-        v_delta += 10.5
-        r_delta += 11.0
-        factors.append(f"月干{m_gan}({m_el})比助")
+        v_delta += 12.0
+        r_delta += 12.5
+        reasons.append(f"月干{m_gan}({m_el})助{d_el}")
     elif m_el == output_el:
-        v_delta += 6.5
-        r_delta += 2.0
-        factors.append(f"月干{m_gan}({m_el})泄秀波动")
-    elif m_el == wealth_el:
-        v_delta += 4.0
-        r_delta += 8.5
-        factors.append(f"月干{m_gan}({m_el})财星实动")
-    elif m_el == taboo_el or OVERCOMES.get(m_el) == d_el:
-        v_delta -= 15.0
-        r_delta -= 11.5
-        factors.append(f"月干{m_gan}({m_el})克{d_el}忌")
-
-    # 2. 月支与个股日支的五行互动（偏重实线/稳健根基）
-    if m_zhi_el == favored_el or GENERATES.get(m_zhi_el) == zhi_el:
-        v_delta += 10.0
-        r_delta += 13.5
-        factors.append(f"月支{m_zhi}({m_zhi_el})生根")
-    elif m_zhi_el == ally_el or m_zhi_el == zhi_el:
         v_delta += 8.0
-        r_delta += 12.0
-        factors.append(f"月支{m_zhi}({m_zhi_el})同气")
-    elif m_zhi_el == output_el:
+        r_delta += 2.5
+        reasons.append(f"月干{m_gan}({m_el})泄秀")
+    elif m_el == wealth_el:
         v_delta += 5.0
-        r_delta += 1.5
-        factors.append(f"月支{m_zhi}({m_zhi_el})泄气")
+        r_delta += 9.5
+        reasons.append(f"月干{m_gan}({m_el})得财")
+    elif m_el == taboo_el or OVERCOMES.get(m_el) == d_el:
+        v_delta -= 17.0
+        r_delta -= 12.0
+        reasons.append(f"月干{m_gan}({m_el})克{d_el}")
+
+    # 2. 流月地支与个股日支的五行互动（主导实线/稳健根基）
+    if m_zhi_el == favored_el or GENERATES.get(m_zhi_el) == zhi_el:
+        v_delta += 10.5
+        r_delta += 15.0
+        reasons.append(f"月支{m_zhi}({m_zhi_el})生根")
+    elif m_zhi_el == ally_el or m_zhi_el == zhi_el:
+        v_delta += 8.5
+        r_delta += 13.0
+        reasons.append(f"月支{m_zhi}({m_zhi_el})同气")
+    elif m_zhi_el == output_el:
+        v_delta += 5.5
+        r_delta += 1.0
+        reasons.append(f"月支{m_zhi}({m_zhi_el})泄气")
     elif m_zhi_el == wealth_el:
-        v_delta += 2.5
-        r_delta += 7.5
-        factors.append(f"月支{m_zhi}({m_zhi_el})得财")
+        v_delta += 3.0
+        r_delta += 8.0
+        reasons.append(f"月支{m_zhi}({m_zhi_el})生财")
     elif m_zhi_el == taboo_el or OVERCOMES.get(m_zhi_el) == zhi_el:
-        v_delta -= 13.5
-        r_delta -= 14.5
-        factors.append(f"月支{m_zhi}({m_zhi_el})克根")
+        v_delta -= 14.5
+        r_delta -= 15.5
+        reasons.append(f"月支{m_zhi}({m_zhi_el})克根")
 
     # 3. 个股日支与流月地支的合、冲、刑
     pair_dm = frozenset({d_zhi, m_zhi})
     if pair_dm in SIX_HARMONY_PAIRS:
-        v_delta += 11.0
-        r_delta += 10.0
-        factors.append(f"日支{d_zhi}合{m_zhi}")
+        v_delta += 12.0
+        r_delta += 11.0
+        reasons.append(f"日支{d_zhi}合{m_zhi}")
     if pair_dm in CLASH_PAIRS:
-        v_delta -= 16.0
-        r_delta -= 12.0
-        factors.append(f"日支{d_zhi}冲{m_zhi}")
+        v_delta -= 17.5
+        r_delta -= 13.0
+        reasons.append(f"日支{d_zhi}冲{m_zhi}")
     if pair_dm in PUNISHMENT_PAIRS:
-        v_delta -= 12.5
-        r_delta -= 9.5
-        factors.append(f"日支{d_zhi}刑{m_zhi}")
+        v_delta -= 13.5
+        r_delta -= 10.0
+        reasons.append(f"日支{d_zhi}刑{m_zhi}")
 
-    # 4. 顺延月份上的个股自身五行相位微动，保证每只个股各月都有独立起伏
-    phase_wave = np.sin((col_idx + 1) * 1.15 + (gan_idx * 0.65) + (zhi_idx * 0.45)) * 5.5
-    v_score = round(max(10.0, min(95.0, stock_v_base + v_delta + phase_wave)), 1)
-    r_score = round(max(20.0, min(95.0, stock_r_base + r_delta - phase_wave * 0.5)), 1)
+    # 4. 每只股票独立的周期波动曲线（各自独立相位，互不干扰）
+    amp_scale = 0.72 if is_low_vol else 1.15
+    indiv_wave_v = np.sin((col_idx + 1) * 1.25 + phase_offset) * (9.5 * amp_scale) + np.cos(m_idx * 0.7 + gan_idx) * (4.0 * amp_scale)
+    indiv_wave_r = np.cos((col_idx + 1) * 1.05 + phase_offset * 1.3) * (8.0 * amp_scale) + np.sin(m_idx * 0.6 + zhi_idx) * (3.5 * amp_scale)
 
-    if v_score >= 72 and r_score >= 68:
+    v_final = round(max(10.0, min(95.0, v_base + v_delta + indiv_wave_v)), 1)
+    r_final = round(max(20.0, min(95.0, r_base + r_delta + indiv_wave_r)), 1)
+    net_drive = (v_delta + r_delta) * 0.5
+
+    # 5. 严格依据实际分值与净驱动力输出定性（绝不出现分值低却写“得助抬升”）
+    avg_energy = (v_final + r_final) * 0.5
+    if avg_energy >= 68.0 and net_drive >= 4.0:
         zone = "peak"
         stage = f"{d_el}命顺势冲高"
         positioning = f"{d_el}命主升进攻"
         trend_out = f"📈 {stage}"
         tone = "green"
-    elif v_score <= 28 and r_score <= 42:
+    elif avg_energy <= 34.0 and net_drive <= -4.0:
         zone = "severe"
         stage = f"{d_el}命受克承压"
         positioning = f"{d_el}命防御保本"
         trend_out = f"📉 {stage}"
         tone = "red"
-    elif v_score <= 34 and r_score > v_score + 12:
+    elif v_final <= 38.0 and r_final >= v_final + 12.0:
         zone = "wash"
         stage = f"{d_el}命震荡洗盘"
         positioning = f"{d_el}命低吸潜伏"
         trend_out = f"↘ {stage}"
         tone = "green"
-    elif v_score > r_score + 14:
+    elif v_final >= r_final + 13.0:
         zone = "trap"
         stage = f"{d_el}命虚高兑现"
         positioning = f"{d_el}命高抛防回撤"
         trend_out = f"↔ {stage}"
         tone = "yellow"
-    elif v_delta > 0 and r_delta > 0:
+    elif avg_energy >= 52.0 and net_drive > 0.0:
         zone = "rising"
         stage = f"{d_el}命得助抬升"
         positioning = f"{d_el}命顺势加仓"
         trend_out = f"↗ {stage}"
         tone = "green"
+    elif net_drive < 0.0:
+        zone = "rebound"
+        stage = f"{d_el}命偏弱回落"
+        positioning = f"{d_el}命防守控仓"
+        trend_out = f"↘ {stage}"
+        tone = "red" if avg_energy < 42.0 else "yellow"
     else:
         zone = "rebound"
-        stage = f"{d_el}命拉锯整固"
-        positioning = f"{d_el}命控仓观察"
+        stage = f"{d_el}命横盘整固"
+        positioning = f"{d_el}命观望等势"
         trend_out = f"→ {stage}"
         tone = "yellow"
 
-    if not factors:
-        factors.append(f"{d_el}命({d_gan}{d_zhi})对{m_gan}{m_zhi}({y_zhi_el})")
+    if not reasons:
+        reasons.append(f"{d_el}命({d_gan}{d_zhi})对{m_gan}{m_zhi}")
 
-    return v_score, r_score, "·".join(factors[:3]), zone, stage, f"{positioning}|{trend_out}|{tone}"
+    return v_final, r_final, "·".join(reasons[:3]), zone, stage, positioning, f"{trend_out}|{tone}"
 
 
 def step2_apply_macro_environment_and_cycle(
@@ -1625,9 +1662,6 @@ def step2_apply_macro_environment_and_cycle(
     cdf: pd.DataFrame | None = None,
     pdf: pd.DataFrame | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """
-    大环境背景固定不变，12 个月红绿线与下轨资金点数完全由个股自身五行/命盘推演。
-    """
     now = ref_dt or datetime.today()
     clean_sym = natal["symbol"]
     is_low_vol = natal["is_low_vol"]
@@ -1648,18 +1682,20 @@ def step2_apply_macro_environment_and_cycle(
         m_gan, m_zhi = _month_ganzhi(y_num, m_num)
         macro_bg = FIXED_MACRO_BACKGROUND_REFERENCE[m_num]
 
-        total_score, flow_score, rel_text, zone, stage, packed_sig = _pure_individual_wuxing_month_scores(
+        total_score, flow_score, rel_text, zone, stage, positioning, packed_tt = _compute_isolated_month_for_ticker(
             natal=natal,
+            y_num=y_num,
+            m_num=m_num,
             y_gan=y_gan,
             y_zhi=y_zhi,
             m_gan=m_gan,
             m_zhi=m_zhi,
             col_idx=col_idx,
         )
-        positioning, trend_out, auto_tone = packed_sig.split("|")
+        trend_out, auto_tone = packed_tt.split("|")
 
-        base_pts = (total_score - 50.0) * 0.45
-        vol_scale = 0.72 if is_low_vol else 1.12
+        base_pts = (total_score - 50.0) * 0.46
+        vol_scale = 0.72 if is_low_vol else 1.15
         short_adj = 0.0
         if col_idx in (1, 2) and m_data:
             rsi_val = float(m_data.get("rsi") or 50.0)
@@ -1785,7 +1821,7 @@ def render_12m_cycle_block_above_options(
 
     top_h1, top_h2 = st.columns([4.2, 2.2])
     top_h1.markdown(
-        f"<div class='card-header' style='margin-bottom:2px;'>🧭 {symbol} 个股五行100%驱动12月能量面板 · 固定大环境背景</div>"
+        f"<div class='card-header' style='margin-bottom:2px;'>🧭 {symbol} 独立底层五行12月能量面板 · 分桶隔离引擎 ({meta['engine_id']})</div>"
         f"<div style='font-size:13.5px; color:#cbd5e1;'>"
         f"① 个股独立五行盘({meta['cohort_type']}·{meta['vol_regime']}): <b>{meta['birthday_mode']} · 日柱 {meta['ganzhi']}({meta['element']}命) · {meta['wuxing_positioning']}</b><br>"
         f"② 固定大环境背景: <b>{meta['era_name']} · {meta['era_phase']}（{meta['era_trend']}）</b> | "
@@ -1806,12 +1842,12 @@ def render_12m_cycle_block_above_options(
                 disk_c = _load_birthday_cache()
                 disk_c[symbol] = {"date": new_bday.strip(), "source": "手动校准出生日"}
                 _save_birthday_cache(disk_c)
-                st.session_state["stock_natal_registry"].pop(symbol, None)
+                reset_isolated_ticker_engine(symbol)
                 bump_calc_nonce()
                 st.rerun()
             if b_c2.button("重新自动查找", key=f"bday_auto_btn_{symbol}", use_container_width=True):
                 auto_find_company_birthday(symbol, force_lookup=True)
-                st.session_state["stock_natal_registry"].pop(symbol, None)
+                reset_isolated_ticker_engine(symbol)
                 bump_calc_nonce()
                 st.rerun()
 
@@ -1843,7 +1879,7 @@ def render_12m_cycle_block_above_options(
     red_y = [r["total_score"] for r in rows]
     green_y = [r["flow_score"] for r in rows]
     upper_hover = [
-        f"{r['upper_x']}<br>红线(虚/波动节奏): {r['total_score']:.1f}<br>绿线(实/稳健节奏): {r['flow_score']:.1f}<br>个股五行依据: {r['rel_text']}<extra></extra>"
+        f"{r['upper_x']}<br>红线(虚/波动节奏): {r['total_score']:.1f}<br>绿线(实/稳健节奏): {r['flow_score']:.1f}<br>独立五行依据: {r['rel_text']}<extra></extra>"
         for r in rows
     ]
 
@@ -1892,7 +1928,7 @@ def render_12m_cycle_block_above_options(
             )
 
     fig_upper.update_layout(
-        title=dict(text=f"① 上轨：{symbol} 12个月能量波动指数（100%个股五行驱动 · 红=虚/波动 · 绿=实/稳健）", font=dict(size=13.5, color="#0f172a")),
+        title=dict(text=f"① 上轨：{symbol} 12个月能量波动指数（独立分桶推演 · 红=虚/波动 · 绿=实/稳健）", font=dict(size=13.5, color="#0f172a")),
         template="plotly_white",
         paper_bgcolor="#ffffff",
         plot_bgcolor="#ffffff",
@@ -1967,7 +2003,7 @@ def render_12m_cycle_block_above_options(
 
 active_natal = step1_resolve_individual_stock_fundamentals(st.session_state.selected_ticker)
 
-top_bar_html = "<div class='top-bar'><div class='brand-title'>CAPITAL QUANT v2</div><div class='live-badge'>Auto-Sync Every 3m (180s) | " + datetime.now().strftime('%b %d, %Y %H:%M:%S') + " | Individual WuXing Engine</div></div>"
+top_bar_html = "<div class='top-bar'><div class='brand-title'>CAPITAL QUANT v2</div><div class='live-badge'>Auto-Sync Every 3m (180s) | " + datetime.now().strftime('%b %d, %Y %H:%M:%S') + " | Isolated WuXing Engine</div></div>"
 st.markdown(top_bar_html, unsafe_allow_html=True)
 
 n1, n2, n3, n4 = st.columns([1.3, 1.3, 1.6, 2.2])
@@ -2002,7 +2038,7 @@ def render_native_market_watch():
     if c5.button("MANUAL REFRESH", use_container_width=True):
         st.cache_data.clear()
         st.session_state["opt_persistent_cache"] = {}
-        st.session_state["stock_natal_registry"] = {}
+        st.session_state["isolated_ticker_engines"] = {}
         bump_calc_nonce()
         st.rerun()
 
