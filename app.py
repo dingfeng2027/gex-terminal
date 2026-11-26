@@ -157,7 +157,7 @@ if "show_all_strikes" not in st.session_state:
 if "opt_persistent_cache" not in st.session_state:
     st.session_state["opt_persistent_cache"] = {}
 
-# 每只股票各自独立的底层计算命名空间（严格按 symbol 隔离，永不共用或回退到 NVDA）
+# 每只股票各自独立的底层计算命名空间（严格按 symbol 隔离）
 if "per_ticker_core_store" not in st.session_state:
     st.session_state["per_ticker_core_store"] = {}
 
@@ -1294,7 +1294,7 @@ def build_custom_option_matrix_html(symbol, spot):
     return html
 
 
-# ==================== 3. 个股独立五行/干支计算引擎（严格隔离 + 2026虚实双向套利定性量化逻辑） ====================
+# ==================== 3. 红线(个股独立五行) 与 绿线(实体外卖店独立走势) 双线彻底分算引擎 ====================
 
 TIANGAN = ["甲", "乙", "丙", "丁", "戊", "己", "庚", "辛", "壬", "癸"]
 DIZHI = ["子", "丑", "寅", "卯", "辰", "巳", "午", "未", "申", "酉", "戌", "亥"]
@@ -1346,6 +1346,22 @@ FIXED_MACRO_BACKGROUND_REFERENCE: dict[int, dict[str, str]] = {
     10: {"zhi": "戌", "stage": "暮秋燥土", "top_label": "背景刻度·暮秋"},
     11: {"zhi": "亥", "stage": "初冬水旺", "top_label": "背景刻度·初冬"},
     12: {"zhi": "子", "stage": "仲冬子水", "top_label": "背景刻度·仲冬"},
+}
+
+# 实体外卖店独立基准节奏（木、火、土、水经营周期，完全独立于股票五行）
+TAKEAWAY_STORE_MONTH_BASE: dict[int, tuple[float, str]] = {
+    1:  (72.0, "新品回升"),
+    2:  (58.0, "节后整固"),
+    3:  (66.0, "春暖回流"),
+    4:  (70.0, "稳步爬升"),
+    5:  (76.0, "旺季蓄力"),
+    6:  (74.0, "夏令稳盘"),
+    7:  (68.0, "暑期拉锯"),
+    8:  (35.0, "研发蓄势"),
+    9:  (48.0, "低成本入驻"),
+    10: (82.0, "旺季冲高"),
+    11: (94.0, "口碑利润顶峰"),
+    12: (58.0, "寒冬淡季守盘"),
 }
 
 
@@ -1479,20 +1495,17 @@ def step1_resolve_individual_stock_fundamentals(
     return profile
 
 
-def _compute_individual_wuxing_month_scores(
+def _calc_red_stock_score(
     natal: dict[str, Any],
     year_num: int,
     month_num: int,
-    y_gan: str,
     y_zhi: str,
     m_gan: str,
     m_zhi: str,
-) -> tuple[float, float, str, str, str, str, str, str]:
+) -> tuple[float, str, str, str, str, str]:
     """
-    结合《2026年下半年【虛實雙向套利】能量波動模型圖》的定性量化逻辑，
-    但完全基于该只股票自身的日柱/干支/五行喜忌与流月干支互动独立计算：
-    - 红线（虚 / 波动节奏）：对流月火气、冲合刑动荡与财报/波动窗口更敏感，震荡幅度大（10~95）
-    - 绿线（实 / 稳健节奏）：对生扶、财库/长生积蓄更敏感，波动较平稳且有阶梯承接（30~95）
+    红线（股票走势）：完全只用该只股票自己的干支/五行喜忌 + 流月干支与冲合刑独立计算，
+    不与外卖店绿线混算。
     """
     d_zhi = natal["zhi"]
     d_el = natal["element"]
@@ -1509,119 +1522,125 @@ def _compute_individual_wuxing_month_scores(
     m_zhi_el = DIZHI_ELEMENT[m_zhi]
     y_zhi_el = DIZHI_ELEMENT[y_zhi]
 
-    # 各自独立起盘基线
-    red_val = 55.0 + (7.0 if birth_m_el in (favored_el, ally_el) else (-7.0 if birth_m_el == taboo_el else 0.0))
-    green_val = 58.0 + (7.0 if zhi_el in (favored_el, ally_el) else (-7.0 if zhi_el == taboo_el else 0.0))
-
+    score = 54.0 + (6.0 if birth_m_el in (favored_el, ally_el) else (-6.0 if birth_m_el == taboo_el else 0.0))
     if is_low_vol:
-        red_val -= 6.0
-        green_val += 5.0
+        score -= 6.0
 
     reasons: list[str] = []
+    delta_total = 0.0
 
-    # 1. 流月干支对该股自身五行的生克（虚/红线重动荡与泄秀，实/绿线重印比与财库）
     if m_el == favored_el or GENERATES.get(m_el) == d_el:
-        red_val += 15.0
-        green_val += 12.0
-        reasons.append(f"月干{m_gan}({m_el})生{d_el}")
+        step_d = 18.0
+        score += step_d
+        delta_total += step_d
+        reasons.append(f"月干{m_gan}({m_el})生{d_el}喜")
     elif m_el == ally_el:
-        red_val += 11.0
-        green_val += 13.0
+        step_d = 13.0
+        score += step_d
+        delta_total += step_d
         reasons.append(f"月干{m_gan}({m_el})比助")
     elif m_el == output_el:
-        red_val += 10.0
-        green_val += 3.0
+        step_d = 11.0
+        score += step_d
+        delta_total += step_d
         reasons.append(f"月干{m_gan}({m_el})泄秀")
     elif m_el == wealth_el:
-        red_val += 6.0
-        green_val += 11.0
+        step_d = 8.0
+        score += step_d
+        delta_total += step_d
         reasons.append(f"月干{m_gan}({m_el})得财")
     elif m_el == taboo_el or OVERCOMES.get(m_el) == d_el:
-        red_val -= 22.0
-        green_val -= 12.0
-        reasons.append(f"月干{m_gan}({m_el})克{d_el}")
+        step_d = -24.0
+        score += step_d
+        delta_total += step_d
+        reasons.append(f"月干{m_gan}({m_el})克{d_el}忌")
 
     if m_zhi_el == favored_el or GENERATES.get(m_zhi_el) == zhi_el:
-        red_val += 12.0
-        green_val += 16.0
+        step_d = 15.0
+        score += step_d
+        delta_total += step_d
         reasons.append(f"月支{m_zhi}({m_zhi_el})生根")
     elif m_zhi_el == ally_el or m_zhi_el == zhi_el:
-        red_val += 8.0
-        green_val += 13.0
+        step_d = 10.0
+        score += step_d
+        delta_total += step_d
         reasons.append(f"月支{m_zhi}({m_zhi_el})同气")
     elif m_zhi_el == output_el:
-        red_val += 7.0
-        green_val += 4.0
+        step_d = 7.0
+        score += step_d
+        delta_total += step_d
         reasons.append(f"月支{m_zhi}({m_zhi_el})泄气")
     elif m_zhi_el == wealth_el:
-        red_val += 4.0
-        green_val += 10.0
+        step_d = 5.0
+        score += step_d
+        delta_total += step_d
         reasons.append(f"月支{m_zhi}({m_zhi_el})入财")
     elif m_zhi_el == taboo_el or OVERCOMES.get(m_zhi_el) == zhi_el:
-        red_val -= 18.0
-        green_val -= 13.0
+        step_d = -20.0
+        score += step_d
+        delta_total += step_d
         reasons.append(f"月支{m_zhi}({m_zhi_el})克根")
 
-    # 2. 该股日支与流月地支的 六合 / 相冲 / 相刑 节点
     pair_dm = frozenset({d_zhi, m_zhi})
     if pair_dm in SIX_HARMONY_PAIRS:
-        red_val += 16.0
-        green_val += 14.0
+        step_d = 16.0
+        score += step_d
+        delta_total += step_d
         reasons.append(f"日支{d_zhi}合{m_zhi}")
     if pair_dm in CLASH_PAIRS:
-        red_val -= 24.0
-        green_val -= 12.0
+        step_d = -25.0
+        score += step_d
+        delta_total += step_d
         reasons.append(f"日支{d_zhi}冲{m_zhi}")
     if pair_dm in PUNISHMENT_PAIRS:
-        red_val -= 18.0
-        green_val -= 10.0
+        step_d = -18.0
+        score += step_d
+        delta_total += step_d
         reasons.append(f"日支{d_zhi}刑{m_zhi}")
 
-    # 3. 2026丙午年关键流月节点（9月丁酉冲月清洗 / 10月戊戌合局财库 / 12月庚子刑冲破月）独立微调
     if year_num == 2026 and month_num == 9:
-        red_val -= 14.0 if d_el != "火" else -6.0
-        green_val += 4.0 if (favored_el == "金" or ally_el == "金") else -4.0
-        reasons.append("2026丁酉冲月清洗")
+        step_d = -14.0 if d_el != "火" else -6.0
+        score += step_d
+        delta_total += step_d
+        reasons.append("9月丁酉冲月")
     elif year_num == 2026 and month_num == 10:
-        red_val += 16.0 if (d_el in ("木", "火") or favored_el == "火") else 6.0
-        green_val += 12.0 if d_el in ("木", "火", "土") else 4.0
-        reasons.append("2026戊戌合局蓄势")
+        step_d = 16.0 if (d_el in ("木", "火") or favored_el == "火") else 7.0
+        score += step_d
+        delta_total += step_d
+        reasons.append("10月戊戌合局")
     elif year_num == 2026 and month_num == 12:
-        red_val -= 18.0 if d_el in ("木", "火") else -8.0
-        green_val -= 8.0
-        reasons.append("2026庚子刑冲破月")
+        step_d = -18.0 if d_el in ("木", "火") else -8.0
+        score += step_d
+        delta_total += step_d
+        reasons.append("12月庚子刑冲")
 
-    red_score = round(max(10.0, min(95.0, red_val)), 1)
-    green_score = round(max(30.0, min(95.0, green_val)), 1)
+    red_score = round(max(10.0, min(95.0, score)), 1)
 
-    avg_energy = (red_score + green_score) * 0.5
-    spread = red_score - green_score
-
-    if avg_energy >= 70.0 and red_score >= 75.0:
+    if red_score >= 75.0 and delta_total >= 5.0:
         zone = "peak"
         stage = f"{d_el}命顺势冲高"
         positioning = f"{d_el}命主升进攻"
         trend_out = f"📈 {stage}"
         tone = "green"
-    elif red_score <= 25.0 and green_score <= 48.0:
+    elif red_score <= 25.0 or delta_total <= -18.0:
         zone = "severe"
         stage = f"{d_el}命冲刑承压"
         positioning = f"{d_el}命防御保本"
         trend_out = f"📉 {stage}"
         tone = "red"
-    elif red_score <= 42.0 and green_score >= red_score + 12.0:
+    elif red_score <= 42.0:
         zone = "wash"
         stage = f"{d_el}命震荡洗盘"
         positioning = f"{d_el}命低吸潜伏"
         trend_out = f"↘ {stage}"
         tone = "green"
-    elif spread >= 14.0:
+    elif delta_total >= 12.0 and red_score >= 65.0:
         zone = "trap"
-        stage = f"{d_el}命虚高兑现"
+        stage = f"{d_el}命冲高兑现"
         positioning = f"{d_el}命高抛防回撤"
         trend_out = f"↔ {stage}"
         tone = "yellow"
-    elif avg_energy >= 55.0:
+    elif delta_total > 0.0:
         zone = "rising"
         stage = f"{d_el}命得助抬升"
         positioning = f"{d_el}命顺势加仓"
@@ -1629,7 +1648,7 @@ def _compute_individual_wuxing_month_scores(
         tone = "green"
     else:
         zone = "rebound"
-        stage = f"{d_el}命横盘整固"
+        stage = f"{d_el}命震荡整固"
         positioning = f"{d_el}命控仓等势"
         trend_out = f"→ {stage}"
         tone = "yellow"
@@ -1637,7 +1656,38 @@ def _compute_individual_wuxing_month_scores(
     if not reasons:
         reasons.append(f"{d_el}命对{m_gan}{m_zhi}({y_zhi_el})")
 
-    return red_score, green_score, "·".join(reasons[:3]), zone, stage, positioning, trend_out, tone
+    return red_score, "·".join(reasons[:3]), zone, stage, positioning, trend_out, tone
+
+
+def _calc_green_takeaway_store_score(
+    year_num: int,
+    month_num: int,
+    m_gan: str,
+    m_zhi: str,
+) -> tuple[float, str]:
+    """
+    绿线（实体外卖店走势）：完全独立的实体餐饮/门店经营逻辑，
+    不套用股票的出生日与生克结果。
+    """
+    base_val, store_tag = TAKEAWAY_STORE_MONTH_BASE.get(month_num, (65.0, "常规经营"))
+    m_el = TIANGAN_ELEMENT[m_gan]
+    m_zhi_el = DIZHI_ELEMENT[m_zhi]
+
+    adj = 0.0
+    if m_el in ("木", "火", "土"):
+        adj += 3.0
+    elif m_el == "水":
+        adj += 1.5
+    else:
+        adj -= 2.0
+
+    if m_zhi in ("戌", "亥", "丑", "辰"):
+        adj += 2.5
+    elif m_zhi in ("子", "酉"):
+        adj -= 2.0
+
+    green_score = round(max(30.0, min(95.0, base_val + adj)), 1)
+    return green_score, f"外卖店·{store_tag}({m_gan}{m_zhi}·{m_zhi_el})"
 
 
 def _build_ticker_isolated_12m_payload(
@@ -1669,19 +1719,26 @@ def _build_ticker_isolated_12m_payload(
         m_gan, m_zhi = _month_ganzhi(y_num, m_num)
         macro_bg = FIXED_MACRO_BACKGROUND_REFERENCE[m_num]
 
-        total_score, flow_score, rel_text, zone, stage, positioning, trend_out, auto_tone = _compute_individual_wuxing_month_scores(
+        # 红线：仅算当前股票独立五行/干支
+        total_score, rel_text, zone, stage, positioning, trend_out, auto_tone = _calc_red_stock_score(
             natal=natal,
             year_num=y_num,
             month_num=m_num,
-            y_gan=y_gan,
             y_zhi=y_zhi,
             m_gan=m_gan,
             m_zhi=m_zhi,
         )
 
-        # 下轨资金点数由该股自身两条曲线的综合强弱与波动属性独立推算
-        composite_idx = total_score * 0.6 + flow_score * 0.4
-        base_pts = (composite_idx - 50.0) * 0.45
+        # 绿线：仅算独立的外卖店经营走势
+        flow_score, store_desc = _calc_green_takeaway_store_score(
+            year_num=y_num,
+            month_num=m_num,
+            m_gan=m_gan,
+            m_zhi=m_zhi,
+        )
+
+        # 下轨资金点数以红线（个股独立推演）为主导，叠加短线技术/期权微调
+        base_pts = (total_score - 50.0) * 0.45
         vol_scale = 0.72 if is_low_vol else 1.12
         short_adj = 0.0
         if col_idx in (1, 2) and m_data:
@@ -1730,6 +1787,7 @@ def _build_ticker_isolated_12m_payload(
             "zone": zone,
             "total_score": total_score,
             "flow_score": flow_score,
+            "store_desc": store_desc,
             "flow_pts": flow_pts,
             "flow_arrow": _pts_to_arrow_str(flow_pts),
             "inst_top_label": macro_bg["top_label"],
@@ -1763,14 +1821,14 @@ def _build_ticker_isolated_12m_payload(
     meta_out = {
         **natal,
         "era_name": "九紫离火运 (2024-2043)",
-        "era_phase": "固定大环境背景刻度（各股底层独立推演）",
-        "era_trend": "固定背景基准 1.00",
+        "era_phase": "红=个股独立五行 · 绿=实体外卖店独立走势",
+        "era_trend": "双线分算不混用",
         "cur_year_ganzhi": f"{cur_y_gan}{_year_ganzhi(now.year, now.month)[1]}",
         "col1_label": f"{rows[0]['year_num']}年{rows[0]['month_num']}月({rows[0]['m_ganzhi']}·{rows[0]['stage']})",
         "col2_label": f"{rows[1]['year_num']}年{rows[1]['month_num']}月({rows[1]['m_ganzhi']}·{rows[1]['stage']})",
         "cur_positioning": cur_row["positioning"],
         "cur_trend_out": cur_row["trend_out"],
-        "cur_split_desc": f"红线(虚/波动)={cur_row['total_score']:.1f} · 绿线(实/稳健)={cur_row['flow_score']:.1f} ({cur_row['rel_text']})",
+        "cur_split_desc": f"红线({clean_sym}个股)={cur_row['total_score']:.1f} ({cur_row['rel_text']}) · 绿线(外卖店)={cur_row['flow_score']:.1f} ({cur_row['store_desc']})",
         "alerts": alerts,
     }
     ns["rows"] = rows
@@ -1809,10 +1867,10 @@ def render_12m_cycle_block_above_options(
 
     top_h1, top_h2 = st.columns([4.2, 2.2])
     top_h1.markdown(
-        f"<div class='card-header' style='margin-bottom:2px;'>🧭 {symbol} 独立五行12月能量面板 · 底层完全隔离 ({meta['engine_id']})</div>"
+        f"<div class='card-header' style='margin-bottom:2px;'>🧭 {symbol} 独立五行12月能量面板 · 红绿双线分算 ({meta['engine_id']})</div>"
         f"<div style='font-size:13.5px; color:#cbd5e1;'>"
         f"① 个股独立五行盘({meta['cohort_type']}·{meta['vol_regime']}): <b>{meta['birthday_mode']} · 日柱 {meta['ganzhi']}({meta['element']}命) · {meta['wuxing_positioning']}</b><br>"
-        f"② 固定大环境背景: <b>{meta['era_name']} · {meta['era_phase']}（{meta['era_trend']}）</b> | "
+        f"② 双线独立口径: <b>{meta['era_phase']}（{meta['era_trend']}）</b> | "
         f"本月定位与走势: <b><span style='color:#facc15;'>{meta['cur_positioning']}</span> · <span style='color:#4ade80;'>{meta['cur_trend_out']}</span></b><br>"
         f"本月指数: <b><span style='color:#93c5fd;'>{meta['cur_split_desc']}</span></b> | "
         f"时间轴: <b>第1栏={meta['col1_label']}</b> → <b>第2栏={meta['col2_label']}</b> → 顺延12月"
@@ -1867,7 +1925,7 @@ def render_12m_cycle_block_above_options(
     red_y = [r["total_score"] for r in rows]
     green_y = [r["flow_score"] for r in rows]
     upper_hover = [
-        f"{r['upper_x']}<br>红线(虚/波动节奏): {r['total_score']:.1f}<br>绿线(实/稳健节奏): {r['flow_score']:.1f}<br>个股五行依据: {r['rel_text']}<extra></extra>"
+        f"{r['upper_x']}<br>红线({symbol}个股): {r['total_score']:.1f} ({r['rel_text']})<br>绿线(实体外卖店): {r['flow_score']:.1f} ({r['store_desc']})<extra></extra>"
         for r in rows
     ]
 
@@ -1879,7 +1937,7 @@ def render_12m_cycle_block_above_options(
         x=upper_x,
         y=red_y,
         mode="lines+markers+text",
-        name=f"{symbol} 红线(虚/波动节奏)",
+        name=f"红线：{symbol} 股票走势",
         text=[f"{v:.0f}" for v in red_y],
         textposition=red_text_pos,
         textfont=dict(size=12.5, color="#b91c1c"),
@@ -1891,13 +1949,13 @@ def render_12m_cycle_block_above_options(
         x=upper_x,
         y=green_y,
         mode="lines+markers+text",
-        name=f"{symbol} 绿线(实/稳健节奏)",
+        name="绿线：实体外卖店走势",
         text=[f"{v:.0f}" for v in green_y],
         textposition=green_text_pos,
         textfont=dict(size=12, color="#15803d"),
         line=dict(color="#16a34a", width=3.0),
         marker=dict(size=9, color="#16a34a", line=dict(color="#ffffff", width=1.2)),
-        hovertemplate="%{x}<br>绿线指数: %{y:.1f}<extra></extra>",
+        hovertemplate="%{x}<br>绿线(实体外卖店): %{y:.1f}<extra></extra>",
     ))
     fig_upper.add_vrect(x0=-0.45, x1=0.45, fillcolor="rgba(148, 163, 184, 0.16)", line_width=0)
     fig_upper.add_vrect(x0=0.55, x1=1.45, fillcolor="rgba(250, 204, 21, 0.20)", line_width=0)
@@ -1916,16 +1974,16 @@ def render_12m_cycle_block_above_options(
             )
 
     fig_upper.update_layout(
-        title=dict(text=f"① 上轨：{symbol} 12个月能量波动指数（独立五行推演 · 红=虚/波动 · 绿=实/稳健）", font=dict(size=13.5, color="#0f172a")),
+        title=dict(text=f"① 上轨：红线={symbol} 股票走势 · 绿线=实体外卖店走势（两条线各自独立计算）", font=dict(size=13.5, color="#0f172a")),
         template="plotly_white",
         paper_bgcolor="#ffffff",
         plot_bgcolor="#ffffff",
-        height=315,
-        margin=dict(l=20, r=16, t=46, b=66),
-        legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="left", x=0),
+        height=325,
+        margin=dict(l=20, r=16, t=54, b=66),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
     )
     fig_upper.update_xaxes(tickfont=dict(size=10.5, color="#0f172a"))
-    fig_upper.update_yaxes(range=[0, 108], title="能量指数 (0-100)", gridcolor="#e2e8f0")
+    fig_upper.update_yaxes(range=[0, 108], title="指数 (0-100)", gridcolor="#e2e8f0")
     st.plotly_chart(fig_upper, use_container_width=True)
 
     lower_x = [r["lower_x"] for r in rows]
@@ -1977,8 +2035,8 @@ def render_12m_cycle_block_above_options(
             f"<span style='color:{tone_col};'>{tone_badge}</span>"
             f"</div>"
             f"<div style='font-size:11.5px; color:#fb923c; font-weight:800; margin-top:2px;'>{r['positioning']} · {r['trend_out']}</div>"
-            f"<div style='font-size:11px; color:#cbd5e1; margin-top:1px;'>红线(虚): {r['total_score']:.1f} · 绿线(实): {r['flow_score']:.1f}</div>"
-            f"<div style='font-size:11px; color:#4ade80; margin-top:1px;'>五行: {r['rel_text']}</div>"
+            f"<div style='font-size:11px; color:#fca5a5; margin-top:1px;'>红线({symbol}股): {r['total_score']:.1f}</div>"
+            f"<div style='font-size:11px; color:#4ade80; margin-top:1px;'>绿线(外卖店): {r['flow_score']:.1f}</div>"
             f"<div style='font-size:11px; color:#e2e8f0; margin-top:1px;'>下轨: {r['flow_arrow']} · {r['inst_top_label']}</div>"
             f"</div>"
         )
@@ -1991,7 +2049,7 @@ def render_12m_cycle_block_above_options(
 
 active_natal = step1_resolve_individual_stock_fundamentals(st.session_state.selected_ticker)
 
-top_bar_html = "<div class='top-bar'><div class='brand-title'>CAPITAL QUANT v2</div><div class='live-badge'>Auto-Sync Every 3m (180s) | " + datetime.now().strftime('%b %d, %Y %H:%M:%S') + " | Isolated WuXing Engine</div></div>"
+top_bar_html = "<div class='top-bar'><div class='brand-title'>CAPITAL QUANT v2</div><div class='live-badge'>Auto-Sync Every 3m (180s) | " + datetime.now().strftime('%b %d, %Y %H:%M:%S') + " | Red=Stock · Green=Takeaway</div></div>"
 st.markdown(top_bar_html, unsafe_allow_html=True)
 
 n1, n2, n3, n4 = st.columns([1.3, 1.3, 1.6, 2.2])
