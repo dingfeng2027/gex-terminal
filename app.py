@@ -41,6 +41,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+
 def _get_secret_or_env(key: str) -> str:
     val = os.getenv(key, "")
     try:
@@ -49,6 +50,7 @@ def _get_secret_or_env(key: str) -> str:
     except Exception:
         pass
     return val.strip()
+
 
 def _require_owner_access() -> None:
     expected = _get_secret_or_env("APP_ACCESS_PASSWORD")
@@ -71,6 +73,7 @@ def _require_owner_access() -> None:
                 st.error("密码不正确")
         st.markdown("</div>", unsafe_allow_html=True)
     st.stop()
+
 
 _require_owner_access()
 
@@ -97,7 +100,7 @@ FALLBACK_DATA = {
     "NFLX": {"name": "Netflix", "price": 845.20, "prev": 830.00, "pe": 45.6, "mcap": "362B"},
     "QQQ": {"name": "QQQ ETF", "price": 512.40, "prev": 506.80, "pe": None, "mcap": "ETF"},
     "VUAG.L": {"name": "Vanguard S&P", "price": 108.54, "prev": 107.66, "pe": None, "mcap": "ETF"},
-    "EQQQ.L": {"name": "Invesco EQQQ", "price": 405.70, "prev": 402.15, "pe": None, "mcap": "ETF"}
+    "EQQQ.L": {"name": "Invesco EQQQ", "price": 405.70, "prev": 402.15, "pe": None, "mcap": "ETF"},
 }
 
 PRESET_STOCK_BIRTHDAYS = {
@@ -169,6 +172,7 @@ if "flow_manual_overrides" not in st.session_state:
 if "calc_refresh_nonce" not in st.session_state:
     st.session_state["calc_refresh_nonce"] = 0
 
+
 def _load_birthday_cache() -> dict[str, dict[str, str]]:
     if BIRTHDAY_CACHE_FILE.exists():
         try:
@@ -179,6 +183,7 @@ def _load_birthday_cache() -> dict[str, dict[str, str]]:
             pass
     return {}
 
+
 def _save_birthday_cache(cache: dict[str, dict[str, str]]) -> None:
     try:
         BIRTHDAY_CACHE_FILE.write_text(
@@ -187,6 +192,7 @@ def _save_birthday_cache(cache: dict[str, dict[str, str]]) -> None:
         )
     except Exception:
         pass
+
 
 def _ts_or_str_to_ymd(val: Any) -> str | None:
     if val is None:
@@ -208,6 +214,7 @@ def _ts_or_str_to_ymd(val: Any) -> str | None:
         except Exception:
             continue
     return None
+
 
 def auto_find_company_birthday(symbol: str, force_lookup: bool = False) -> tuple[str, str]:
     clean_sym = str(symbol or "").upper().strip()
@@ -278,12 +285,15 @@ def auto_find_company_birthday(symbol: str, force_lookup: bool = False) -> tuple
     src_map[clean_sym] = fb_src
     return fb_str, fb_src
 
+
 def bump_calc_nonce() -> int:
     st.session_state["calc_refresh_nonce"] = int(st.session_state.get("calc_refresh_nonce", 0)) + 1
     return st.session_state["calc_refresh_nonce"]
 
+
 def sync_watchlist_to_url():
     st.query_params["watchlist"] = ",".join(st.session_state.tickers)
+
 
 def select_ticker_with_natal_first(symbol: str, target_page: str | None = None, manual_bday: str = "") -> dict[str, Any]:
     clean_sym = symbol.upper().strip() or "NVDA"
@@ -307,10 +317,12 @@ def select_ticker_with_natal_first(symbol: str, target_page: str | None = None, 
         st.session_state.page = target_page
     return natal_profile
 
+
 def safe_col_sum(df, col_name):
     if df is None or df.empty or col_name not in df.columns:
         return 0
     return int(pd.to_numeric(df[col_name], errors="coerce").fillna(0).sum())
+
 
 def _is_valid_chain_pair(cdf: pd.DataFrame, pdf: pd.DataFrame) -> bool:
     if cdf is None or pdf is None or cdf.empty or pdf.empty:
@@ -320,6 +332,7 @@ def _is_valid_chain_pair(cdf: pd.DataFrame, pdf: pd.DataFrame) -> bool:
     c_strikes = pd.to_numeric(cdf["strike"], errors="coerce").dropna()
     p_strikes = pd.to_numeric(pdf["strike"], errors="coerce").dropna()
     return (not c_strikes.empty) and (not p_strikes.empty) and ((c_strikes > 0).any()) and ((p_strikes > 0).any())
+
 
 def _parse_float_clean(val):
     if val is None:
@@ -332,6 +345,7 @@ def _parse_float_clean(val):
     except Exception:
         return None
 
+
 # ==================== 1. STOCK & ANALYSIS ENGINE (LOCKED TO NASDAQ) ====================
 
 def _build_nasdaq_headers() -> dict[str, str]:
@@ -342,6 +356,7 @@ def _build_nasdaq_headers() -> dict[str, str]:
         "Origin": "https://www.nasdaq.com",
         "Referer": "https://www.nasdaq.com/",
     }
+
 
 def _query_nasdaq_stock_quote(symbol: str) -> dict[str, Any] | None:
     if "." in symbol:
@@ -394,6 +409,7 @@ def _query_nasdaq_stock_quote(symbol: str) -> dict[str, Any] | None:
             continue
     return None
 
+
 def _query_nasdaq_stock_candles(symbol: str, days_back: int = 365) -> pd.DataFrame:
     if "." in symbol:
         return pd.DataFrame()
@@ -438,6 +454,7 @@ def _query_nasdaq_stock_candles(symbol: str, days_back: int = 365) -> pd.DataFra
             continue
     return pd.DataFrame()
 
+
 def _query_yahoo_stock_fallback(symbol: str) -> dict[str, Any] | None:
     if not HAS_YF:
         return None
@@ -458,6 +475,7 @@ def _query_yahoo_stock_fallback(symbol: str) -> dict[str, Any] | None:
         }
     except Exception:
         return None
+
 
 def _calc_indicators_from_closes(closes, last_price, prev_price, high52=None, low52=None):
     ma20 = sum(closes[-20:]) / min(20, len(closes))
@@ -493,6 +511,7 @@ def _calc_indicators_from_closes(closes, last_price, prev_price, high52=None, lo
         "low52": round(float(l52), 2),
         "rsi": round(float(rsi), 1),
     }
+
 
 @st.cache_data(ttl=45, show_spinner=False)
 def fetch_stock_metrics(symbol, live=True, refresh_nonce: int = 0):
@@ -559,6 +578,7 @@ def fetch_stock_metrics(symbol, live=True, refresh_nonce: int = 0):
         "pe": fb.get("pe"), "eps": 5.0, "mcap": fb.get("mcap", "100B"), "src": "FB",
     }
 
+
 @st.cache_data(ttl=45, show_spinner=False)
 def fetch_history_df(symbol, period_str, current_price, refresh_nonce: int = 0):
     _ = refresh_nonce
@@ -597,6 +617,7 @@ def fetch_history_df(symbol, period_str, current_price, refresh_nonce: int = 0):
     prices = current_price * np.exp(np.cumsum(np.random.normal(0.0005, 0.015, size=len(dates))))
     return pd.DataFrame({"Date": dates, "Close": prices * (current_price / prices[-1])})
 
+
 # ==================== 2. OPTIONS ENGINE (CBOE + NASDAQ + YAHOO REAL AGGREGATOR) ====================
 
 def _parse_occ_option_symbol(occ_sym: str) -> tuple[str | None, str | None, float | None]:
@@ -616,6 +637,7 @@ def _parse_occ_option_symbol(occ_sym: str) -> tuple[str | None, str | None, floa
         return exp_str, cp_flag, strike_val
     except Exception:
         return None, None, None
+
 
 @st.cache_data(ttl=120, show_spinner=False)
 def _query_cboe_realtime_bundle(symbol: str, refresh_nonce: int = 0) -> tuple[list[str], dict[str, tuple[pd.DataFrame, pd.DataFrame]], str]:
@@ -681,6 +703,7 @@ def _query_cboe_realtime_bundle(symbol: str, refresh_nonce: int = 0) -> tuple[li
         except Exception:
             continue
     return [], {}, "CBOE 未返回"
+
 
 @st.cache_data(ttl=120, show_spinner=False)
 def _query_nasdaq_option_bundle(symbol: str, refresh_nonce: int = 0) -> tuple[list[str], dict[str, tuple[pd.DataFrame, pd.DataFrame]], str]:
@@ -750,6 +773,7 @@ def _query_nasdaq_option_bundle(symbol: str, refresh_nonce: int = 0) -> tuple[li
             continue
     return [], {}, "Nasdaq 未返回"
 
+
 def _normalize_yf_option_side(df_raw: pd.DataFrame) -> pd.DataFrame:
     if df_raw is None or df_raw.empty or "strike" not in df_raw.columns:
         return pd.DataFrame()
@@ -761,6 +785,7 @@ def _normalize_yf_option_side(df_raw: pd.DataFrame) -> pd.DataFrame:
     out["gamma"] = 0.0
     out = out.dropna(subset=["strike"])
     return out[out["strike"] > 0].reset_index(drop=True)
+
 
 @st.cache_data(ttl=120, show_spinner=False)
 def _query_yahoo_yfinance_bundle(symbol: str, refresh_nonce: int = 0) -> tuple[list[str], dict[str, tuple[pd.DataFrame, pd.DataFrame]], str]:
@@ -797,6 +822,7 @@ def _query_yahoo_yfinance_bundle(symbol: str, refresh_nonce: int = 0) -> tuple[l
         return target_exps, {}, "Yahoo 链为空"
     except Exception as e:
         return [], {}, f"Yahoo 异常: {str(e)[:35]}"
+
 
 def _collect_multi_source_options(symbol: str) -> tuple[list[str], dict[str, dict[str, Any]], int, str, str]:
     nonce = int(st.session_state.get("calc_refresh_nonce", 0))
@@ -842,6 +868,7 @@ def _collect_multi_source_options(symbol: str) -> tuple[list[str], dict[str, dic
 
     return merged_days, merged_by_day, len(merged_by_day), status_msg, cache_time_label
 
+
 def fetch_real_option_chain_for_date(symbol, target_dt_timestamp=None, spot=None):
     all_days, combined_by_day, _, _, _ = _collect_multi_source_options(symbol)
     exp_ts_list: list[int] = []
@@ -869,6 +896,7 @@ def fetch_real_option_chain_for_date(symbol, target_dt_timestamp=None, spot=None
 
     return exp_ts_list, pd.DataFrame(), pd.DataFrame()
 
+
 def _build_company_real_day_keys(real_day_keys: list[str], base_dt: datetime, max_cols: int = 10) -> list[str]:
     today_date = base_dt.date()
     unique_sorted = sorted({d for d in (real_day_keys or []) if d})
@@ -879,6 +907,7 @@ def _build_company_real_day_keys(real_day_keys: list[str], base_dt: datetime, ma
     chosen = active_or_future if active_or_future else unique_sorted
     return chosen[:max_cols]
 
+
 def _score_wall_strength(df: pd.DataFrame, delta_days: int = 3) -> pd.DataFrame:
     out = df.copy()
     oi_s = pd.to_numeric(out.get("openInterest", 0), errors="coerce").fillna(0.0)
@@ -886,6 +915,7 @@ def _score_wall_strength(df: pd.DataFrame, delta_days: int = 3) -> pd.DataFrame:
     vol_weight = 1.6 if delta_days <= 7 else 0.9
     out["wall_power"] = oi_s + vol_s * vol_weight
     return out
+
 
 def extract_top3_walls(col_cdf, col_pdf, curr_p, delta_days: int = 3):
     if not _is_valid_chain_pair(col_cdf, col_pdf):
@@ -939,6 +969,7 @@ def extract_top3_walls(col_cdf, col_pdf, curr_p, delta_days: int = 3):
 
     return c_top_list, call_wall_val, p_bot_list, put_wall_val
 
+
 def compute_aggregate_real_walls(combined_by_day: dict[str, dict[str, Any]], spot: float) -> dict[str, Any]:
     c_frames, p_frames = [], []
     for _, rec in combined_by_day.items():
@@ -960,6 +991,7 @@ def compute_aggregate_real_walls(combined_by_day: dict[str, dict[str, Any]], spo
     c_list = [(float(r["strike"]), int(r["power"]), float(r["strike"]) < spot) for _, r in c_band.iterrows()]
     p_list = [(float(r["strike"]), int(r["power"]), float(r["strike"]) > spot) for _, r in p_band.iterrows()]
     return {"call_walls": c_list, "put_walls": p_list}
+
 
 def pull_and_filter_real_expirations_locally(symbol: str, spot: float) -> tuple[list[dict[str, Any]], bool, int, str, str, dict[str, Any]]:
     today = datetime.today()
@@ -1024,6 +1056,7 @@ def pull_and_filter_real_expirations_locally(symbol: str, spot: float) -> tuple[
         })
 
     return cols_data, has_any_real_data, live_count, status_msg, cache_time, agg_walls
+
 
 def build_custom_option_matrix_html(symbol, spot):
     cols_data, _, _, status_msg, cache_time, agg_walls = pull_and_filter_real_expirations_locally(symbol, spot)
@@ -1249,7 +1282,8 @@ def build_custom_option_matrix_html(symbol, spot):
     """
     return html
 
-# ==================== 3. 干支阶段定性 + 年份背景30% + 个股本命70% 计算引擎 ====================
+
+# ==================== 3. 虚实双向套利定性推演 + 逐月干支顺延引擎（第1栏10月·第2栏11月起推12个月） ====================
 
 TIANGAN = ["甲", "乙", "丙", "丁", "戊", "己", "庚", "辛", "壬", "癸"]
 DIZHI = ["子", "丑", "寅", "卯", "辰", "巳", "午", "未", "申", "酉", "戌", "亥"]
@@ -1286,36 +1320,39 @@ PUNISHMENT_PAIRS = {
     frozenset({"戌", "未"}), frozenset({"子", "卯"}),
 }
 
-MONTH_STAGE_META: dict[int, dict[str, Any]] = {
-    1:  {"zhi": "丑", "stage": "破后新生", "base_natal": 58.0, "zone": "rebound", "top_label": "破后新生·蓄势回升", "flow_pts": 6.5,   "tone": "green",  "action": "吸筹"},
-    2:  {"zhi": "寅", "stage": "水木起势", "base_natal": 68.0, "zone": "rising",  "top_label": "水木起势·资金回流", "flow_pts": 8.0,   "tone": "green",  "action": "吸筹"},
-    3:  {"zhi": "卯", "stage": "木气生发", "base_natal": 66.0, "zone": "rising",  "top_label": "木气生发·月中换仓", "flow_pts": -11.0, "tone": "yellow", "action": "洗盘·拉锯"},
-    4:  {"zhi": "辰", "stage": "春末整固", "base_natal": 65.0, "zone": "steady",  "top_label": "春末整固·季报布局", "flow_pts": 12.0,  "tone": "green",  "action": "吸筹"},
-    5:  {"zhi": "巳", "stage": "火木渐旺", "base_natal": 73.0, "zone": "peak",    "top_label": "火木渐旺·财报波动", "flow_pts": 5.5,   "tone": "green",  "action": "吸筹"},
-    6:  {"zhi": "午", "stage": "纯火冲高", "base_natal": 76.0, "zone": "peak",    "top_label": "纯火冲高·年中结算", "flow_pts": -4.0,  "tone": "yellow", "action": "洗盘·拉锯"},
-    7:  {"zhi": "未", "stage": "火土交接", "base_natal": 56.0, "zone": "trap",    "top_label": "火土交接·中报调仓", "flow_pts": 9.5,   "tone": "green",  "action": "吸筹"},
-    8:  {"zhi": "申", "stage": "冲月清洗", "base_natal": 36.0, "zone": "wash",    "top_label": "冲月清洗·波动抬升", "flow_pts": -11.5, "tone": "yellow", "action": "洗盘·拉锯"},
-    9:  {"zhi": "酉", "stage": "洗盘筑底", "base_natal": 34.0, "zone": "wash",    "top_label": "洗盘筑底·季末调仓", "flow_pts": -14.5, "tone": "red",    "action": "派发"},
-    10: {"zhi": "戌", "stage": "旺月走高", "base_natal": 82.0, "zone": "peak",    "top_label": "旺月走高·财报催化", "flow_pts": 17.5,  "tone": "green",  "action": "吸筹"},
-    11: {"zhi": "亥", "stage": "成果切换", "base_natal": 63.0, "zone": "trap",    "top_label": "成果切换·获利消化", "flow_pts": -6.0,  "tone": "yellow", "action": "洗盘·拉锯"},
-    12: {"zhi": "子", "stage": "刑月重塑", "base_natal": 26.0, "zone": "severe",  "top_label": "刑月重塑·年底结算", "flow_pts": -16.0, "tone": "red",    "action": "派发"},
+# 锚定《2026年下半年【虚实双向套利】能量波动模型图》定性基准与逐月节律
+MODEL_MONTH_ANCHORS: dict[int, dict[str, Any]] = {
+    1:  {"zhi": "丑", "stage": "破后新生", "top_label": "新品回暖·底部整固", "virtual_base": 45.0, "real_base": 75.0, "zone": "rebound", "tone": "green",  "action": "吸筹"},
+    2:  {"zhi": "寅", "stage": "水木起势", "top_label": "开春起势·资金回流", "virtual_base": 58.0, "real_base": 78.0, "zone": "rising",  "tone": "green",  "action": "吸筹"},
+    3:  {"zhi": "卯", "stage": "木气生发", "top_label": "季末拉锯·节奏切换", "virtual_base": 52.0, "real_base": 76.0, "zone": "rising",  "tone": "yellow", "action": "洗盘·拉锯"},
+    4:  {"zhi": "辰", "stage": "春末整固", "top_label": "财报前瞻·稳步推进", "virtual_base": 62.0, "real_base": 80.0, "zone": "steady",  "tone": "green",  "action": "吸筹"},
+    5:  {"zhi": "巳", "stage": "火木渐旺", "top_label": "算力波动·顺势扩张", "virtual_base": 72.0, "real_base": 84.0, "zone": "peak",    "tone": "green",  "action": "吸筹"},
+    6:  {"zhi": "午", "stage": "纯火冲高", "top_label": "年中冲高·高波兑现", "virtual_base": 78.0, "real_base": 82.0, "zone": "peak",    "tone": "yellow", "action": "洗盘·拉锯"},
+    7:  {"zhi": "未", "stage": "火土交接", "top_label": "暑期调仓·防冲克",   "virtual_base": 55.0, "real_base": 74.0, "zone": "trap",    "tone": "yellow", "action": "洗盘·拉锯"},
+    8:  {"zhi": "申", "stage": "财报震荡", "top_label": "财报前震荡·蓄势布局", "virtual_base": 75.0, "real_base": 30.0, "zone": "rising",  "tone": "yellow", "action": "洗盘·拉锯"},
+    9:  {"zhi": "酉", "stage": "冲月清洗", "top_label": "冲月清洗·黄金坑",   "virtual_base": 20.0, "real_base": 45.0, "zone": "wash",    "tone": "green",  "action": "吸筹"},
+    10: {"zhi": "戌", "stage": "旺月爆发", "top_label": "财报旺月·利润兑现", "virtual_base": 90.0, "real_base": 80.0, "zone": "peak",    "tone": "green",  "action": "吸筹"},
+    11: {"zhi": "亥", "stage": "成果入库", "top_label": "口碑发酵·稳定增长", "virtual_base": 65.0, "real_base": 95.0, "zone": "trap",    "tone": "green",  "action": "吸筹"},
+    12: {"zhi": "子", "stage": "刑月重塑", "top_label": "天克地冲·避险保本", "virtual_base": 10.0, "real_base": 60.0, "zone": "severe",  "tone": "red",    "action": "派发"},
 }
 
-NINE_FIRE_YEAR_BG: dict[int, float] = {
-    2024: 60.0,
-    2025: 66.0,
-    2026: 74.0,
-    2027: 65.0,
-    2028: 68.0,
-    2029: 70.0,
+NINE_FIRE_YEAR_FACTOR: dict[int, float] = {
+    2024: 0.92,
+    2025: 0.98,
+    2026: 1.00,
+    2027: 0.90,
+    2028: 0.94,
+    2029: 0.96,
 }
 
 LOW_VOL_DEFENSIVE_TICKERS = {"NG.L", "VUAG.L", "QQQ", "EQQQ.L", "SPY", "DIA", "TLT"}
+
 
 def _year_ganzhi(year: int, month: int) -> tuple[str, str]:
     gz_year = year - 1 if month == 1 else year
     offset = gz_year - 1984
     return TIANGAN[offset % 10], DIZHI[offset % 12]
+
 
 def _month_ganzhi(year: int, month: int) -> tuple[str, str]:
     gz_year = year - 1 if month == 1 else year
@@ -1323,8 +1360,9 @@ def _month_ganzhi(year: int, month: int) -> tuple[str, str]:
     start_gan_idx = ((TIANGAN.index(y_gan) % 5) * 2 + 2) % 10
     step = 11 if month == 1 else (month - 2)
     m_gan = TIANGAN[(start_gan_idx + step) % 10]
-    m_zhi = MONTH_STAGE_META[month]["zhi"]
+    m_zhi = MODEL_MONTH_ANCHORS[month]["zhi"]
     return m_gan, m_zhi
+
 
 def _parse_birthday_str(b_str: str, fallback_sym: str) -> tuple[datetime, str]:
     raw = str(b_str or "").strip()
@@ -1339,6 +1377,7 @@ def _parse_birthday_str(b_str: str, fallback_sym: str) -> tuple[datetime, str]:
     dt_fb = datetime(1985, 1, 1) + timedelta(days=day_offset)
     return dt_fb, f"默认出生日 {dt_fb.strftime('%Y-%m-%d')}"
 
+
 def _date_to_day_ganzhi(dt_obj: datetime) -> tuple[str, str]:
     y, m, d = dt_obj.year, dt_obj.month, dt_obj.day
     a = (14 - m) // 12
@@ -1348,17 +1387,6 @@ def _date_to_day_ganzhi(dt_obj: datetime) -> tuple[str, str]:
     diff = jdn - 2445733
     return TIANGAN[diff % 10], DIZHI[diff % 12]
 
-def _score_to_arrow_str(score: float, neutral: float = 50.0) -> str:
-    diff = score - neutral
-    if diff >= 18:
-        return f"↑↑ {score:.0f}"
-    if diff >= 5:
-        return f"↗ {score:.0f}"
-    if diff > -5:
-        return f"→ {score:.0f}"
-    if diff > -20:
-        return f"↘ {score:.0f}"
-    return f"↓↓ {score:.0f}"
 
 def _pts_to_arrow_str(pts: float) -> str:
     if pts >= 12:
@@ -1370,6 +1398,7 @@ def _pts_to_arrow_str(pts: float) -> str:
     if pts > -12:
         return f"↘ {pts:+.1f}点"
     return f"↓↓ {pts:+.1f}点"
+
 
 def resolve_stock_natal_chart(symbol: str, ref_dt: datetime | None = None) -> dict[str, Any]:
     clean_sym = symbol.upper().strip() or "NVDA"
@@ -1383,8 +1412,8 @@ def resolve_stock_natal_chart(symbol: str, ref_dt: datetime | None = None) -> di
 
     cur_y_gan, cur_y_zhi = _year_ganzhi(now_dt.year, now_dt.month)
     gz_yr_num = now_dt.year - 1 if now_dt.month == 1 else now_dt.year
-    yr_bg_val = NINE_FIRE_YEAR_BG.get(gz_yr_num, 64.0)
-    era_phase = "丙午火旺·高位行进" if yr_bg_val >= 70 else ("九运平稳·阶段演进" if yr_bg_val >= 58 else "九运整固·蓄势调整")
+    yr_factor = NINE_FIRE_YEAR_FACTOR.get(gz_yr_num, 0.95)
+    era_phase = "丙午火旺·虚实双向节律" if gz_yr_num == 2026 else f"九运演进({gz_yr_num}年)·随月柱顺延"
 
     profile = {
         "symbol": clean_sym,
@@ -1398,12 +1427,78 @@ def resolve_stock_natal_chart(symbol: str, ref_dt: datetime | None = None) -> di
         "zhi_element": zhi_element,
         "era_name": "九紫离火运 (2024-2043)",
         "era_phase": era_phase,
-        "era_trend": f"年背景基准 {yr_bg_val:.0f}",
+        "era_trend": f"年系数 {yr_factor:.2f}",
         "cur_year_ganzhi": f"{cur_y_gan}{cur_y_zhi}",
         "resolved_at": now_dt.strftime("%H:%M:%S"),
     }
     st.session_state["stock_natal_registry"][clean_sym] = profile
     return profile
+
+
+def _qualitative_month_adjust(
+    y_num: int,
+    m_num: int,
+    y_zhi: str,
+    m_gan: str,
+    m_zhi: str,
+    d_zhi: str,
+    d_el: str,
+    virtual_base: float,
+    real_base: float,
+) -> tuple[float, float, str]:
+    gz_year = y_num - 1 if m_num == 1 else y_num
+    yr_factor = NINE_FIRE_YEAR_FACTOR.get(gz_year, 0.95)
+    m_el = TIANGAN_ELEMENT[m_gan]
+    m_zhi_el = DIZHI_ELEMENT[m_zhi]
+
+    if gz_year == 2026 and m_num in (8, 9, 10, 11, 12):
+        v_score = virtual_base
+        r_score = real_base
+        tags = [f"{m_num}月定性基准"]
+    elif y_num == 2027 and m_num == 1:
+        v_score = virtual_base
+        r_score = real_base
+        tags = ["2027年1月定性基准"]
+    else:
+        v_score = virtual_base * yr_factor
+        r_score = real_base * (0.96 + 0.04 * yr_factor)
+        tags = [f"{gz_year}年系数{yr_factor:.2f}"]
+
+    pair_ym = frozenset({y_zhi, m_zhi})
+    pair_dm = frozenset({d_zhi, m_zhi})
+
+    if pair_dm in SIX_HARMONY_PAIRS or pair_ym in SIX_HARMONY_PAIRS:
+        v_score += 5.0 if (gz_year != 2026 or m_num not in (9, 10, 12)) else 0.0
+        r_score += 3.0 if (gz_year != 2026 or m_num not in (8, 9, 10, 11, 12)) else 0.0
+        tags.append("合局顺势")
+
+    if pair_dm in CLASH_PAIRS or pair_ym in CLASH_PAIRS:
+        if not (gz_year == 2026 and m_num in (9, 10, 12)):
+            v_score -= 8.0
+            r_score -= 3.5
+        tags.append("逢冲动荡")
+
+    if pair_dm in PUNISHMENT_PAIRS or pair_ym in PUNISHMENT_PAIRS:
+        if not (gz_year == 2026 and m_num == 12):
+            v_score -= 6.5
+            r_score -= 3.0
+        tags.append("逢刑重整")
+
+    if OVERCOMES.get(m_el) == d_el or OVERCOMES.get(m_zhi_el) == d_el:
+        if not (gz_year == 2026 and m_num in (9, 10, 12)):
+            v_score -= 4.5
+            r_score -= 2.0
+        tags.append("五行受克")
+    elif GENERATES.get(m_el) == d_el or m_zhi_el == d_el:
+        if not (gz_year == 2026 and m_num in (9, 10, 12)):
+            v_score += 4.5
+            r_score += 2.5
+        tags.append("五行得助")
+
+    v_final = round(max(10.0, min(95.0, v_score)), 1)
+    r_final = round(max(20.0, min(95.0, r_score)), 1)
+    return v_final, r_final, "·".join(tags[:3])
+
 
 def build_12m_stock_series(
     symbol: str,
@@ -1420,7 +1515,14 @@ def build_12m_stock_series(
         b_dt, _ = _parse_birthday_str(custom_date.strip(), clean_sym)
         d_gan, d_zhi = _date_to_day_ganzhi(b_dt)
         d_el = TIANGAN_ELEMENT[d_gan]
-        natal = {**natal, "birthday": b_dt.strftime("%Y-%m-%d"), "gan": d_gan, "zhi": d_zhi, "ganzhi": f"{d_gan}{d_zhi}", "element": d_el}
+        natal = {
+            **natal,
+            "birthday": b_dt.strftime("%Y-%m-%d"),
+            "gan": d_gan,
+            "zhi": d_zhi,
+            "ganzhi": f"{d_gan}{d_zhi}",
+            "element": d_el,
+        }
     else:
         d_gan, d_zhi, d_el = natal["gan"], natal["zhi"], natal["element"]
 
@@ -1433,74 +1535,30 @@ def build_12m_stock_series(
         ym_idx = start_ym_idx + col_idx
         y_num = ym_idx // 12
         m_num = (ym_idx % 12) + 1
-        gz_year = y_num - 1 if m_num == 1 else y_num
 
         y_gan, y_zhi = _year_ganzhi(y_num, m_num)
         m_gan, m_zhi = _month_ganzhi(y_num, m_num)
-        m_el = TIANGAN_ELEMENT[m_gan]
-        m_zhi_el = DIZHI_ELEMENT[m_zhi]
-        meta = MONTH_STAGE_META[m_num]
+        anchor = MODEL_MONTH_ANCHORS[m_num]
 
-        # 1) 30% 九运年份 + 当月干支背景分（不同年份/月柱结果不同）
-        yr_base = NINE_FIRE_YEAR_BG.get(gz_year, 64.0)
-        bg_score = yr_base
-        notes: list[str] = [meta["stage"]]
+        total_score, flow_score, rel_text = _qualitative_month_adjust(
+            y_num=y_num,
+            m_num=m_num,
+            y_zhi=y_zhi,
+            m_gan=m_gan,
+            m_zhi=m_zhi,
+            d_zhi=d_zhi,
+            d_el=d_el,
+            virtual_base=float(anchor["virtual_base"]),
+            real_base=float(anchor["real_base"]),
+        )
 
-        if m_zhi_el in ("火", "木"):
-            bg_score += 5.0
-        elif m_zhi_el == "水":
-            bg_score -= 5.5
-
-        pair_ym = frozenset({y_zhi, m_zhi})
-        if pair_ym in SIX_HARMONY_PAIRS:
-            bg_score += 4.5
-            notes.append("年支合月")
-        elif pair_ym in CLASH_PAIRS:
-            bg_score -= 5.0 if m_num != 10 else -1.5
-            notes.append("年支冲月")
-        elif pair_ym in PUNISHMENT_PAIRS:
-            bg_score -= 4.0
-            notes.append("年支刑月")
-
-        bg_score = round(max(15.0, min(95.0, bg_score)), 1)
-
-        # 2) 70% 个股独立本命分：阶段底色 + 个股日柱与当月干支互动 + 个股独立波动
-        natal_score = float(meta["base_natal"])
-        if GENERATES.get(m_el) == d_el or m_zhi_el == d_el:
-            natal_score += 6.5
-            notes.append("得月生助")
-        elif OVERCOMES.get(m_el) == d_el:
-            natal_score -= 5.5 if m_num != 10 else 2.5
-            notes.append("月干克身")
-
-        pair_dm = frozenset({d_zhi, m_zhi})
-        if pair_dm in SIX_HARMONY_PAIRS:
-            natal_score += 5.5
-            notes.append("本命合月")
-        elif pair_dm in CLASH_PAIRS:
-            natal_score -= 6.5 if m_num != 10 else 2.0
-            notes.append("本命逢冲")
-        elif pair_dm in PUNISHMENT_PAIRS:
-            natal_score -= 4.5
-            notes.append("本命逢刑")
-
-        h_digest = hashlib.md5(f"{clean_sym}|{y_num}|{m_num}|{d_gan}{d_zhi}".encode("utf-8")).hexdigest()
-        stock_offset = ((int(h_digest[:4], 16) % 29) - 14) * 0.5
-        natal_score = round(max(12.0, min(96.0, natal_score + stock_offset)), 1)
-
-        bg_contrib = round(bg_score * 0.30, 1)
-        natal_contrib = round(natal_score * 0.70, 1)
-        total_score = round(max(12.0, min(96.0, bg_contrib + natal_contrib)), 1)
-
-        flow_delta = ((int(h_digest[4:8], 16) % 23) - 11) * 1.1
-        flow_score = round(max(12.0, min(95.0, total_score * 0.88 + flow_delta)), 1)
-
-        vol_scale = 0.75 if is_low_vol else 1.10
+        base_pts = (total_score - 50.0) * 0.42
+        vol_scale = 0.72 if is_low_vol else 1.05
         short_adj = 0.0
         if col_idx in (1, 2) and m_data:
             rsi_val = float(m_data.get("rsi") or 50.0)
             if rsi_val >= 65:
-                short_adj += 1.2
+                short_adj += 1.5
             elif rsi_val <= 35:
                 short_adj -= 1.5
         if col_idx in (1, 2) and cdf is not None and pdf is not None and _is_valid_chain_pair(cdf, pdf):
@@ -1509,11 +1567,11 @@ def build_12m_stock_series(
             if coi > 0:
                 pcr_v = poi / coi
                 if pcr_v >= 1.25:
-                    short_adj -= 1.8
+                    short_adj -= 2.0
                 elif pcr_v <= 0.75:
-                    short_adj += 1.8
+                    short_adj += 2.0
 
-        flow_pts = round(max(-22.0, min(22.0, float(meta["flow_pts"]) * vol_scale + short_adj)), 1)
+        flow_pts = round(max(-22.0, min(22.0, base_pts * vol_scale + short_adj)), 1)
 
         if col_idx == 0:
             slot_role = "上月回顾"
@@ -1522,31 +1580,31 @@ def build_12m_stock_series(
             slot_role = "本月基准"
             col_tag = "第2栏·本月"
         else:
-            slot_role = "未来推演"
+            slot_role = "顺延推演"
             col_tag = f"第{col_idx + 1}栏"
 
-        zone = meta["zone"]
+        zone = anchor["zone"]
         if zone == "peak":
-            positioning = "主升进攻位"
-            trend_out = f"📈 {meta['stage']}走高"
+            positioning = "旺月顺势进攻"
+            trend_out = f"📈 {anchor['stage']}"
         elif zone == "severe":
-            positioning = "洗盘防踩位"
-            trend_out = f"📉 {meta['stage']}回落"
+            positioning = "刑月防御保本"
+            trend_out = f"📉 {anchor['stage']}"
         elif zone == "wash":
-            positioning = "洗盘防踩位"
-            trend_out = f"↘ {meta['stage']}筑底"
+            positioning = "冲月清洗吸筹"
+            trend_out = f"↘ {anchor['stage']}"
         elif zone == "trap":
-            positioning = "高波博弈位"
-            trend_out = f"↔ {meta['stage']}震荡"
+            positioning = "高位兑现切换"
+            trend_out = f"↔ {anchor['stage']}"
         elif zone == "rebound":
-            positioning = "蓄势回升位"
-            trend_out = f"↗ {meta['stage']}回升"
+            positioning = "破后新生回升"
+            trend_out = f"↗ {anchor['stage']}"
         else:
-            positioning = "修整观望位"
-            trend_out = f"↗ {meta['stage']}推进"
+            positioning = "阶段蓄势推进"
+            trend_out = f"↗ {anchor['stage']}"
 
         override_key = f"{clean_sym}_{y_num}-{m_num:02d}"
-        flow_tone = st.session_state.get("flow_manual_overrides", {}).get(override_key, meta["tone"])
+        flow_tone = st.session_state.get("flow_manual_overrides", {}).get(override_key, anchor["tone"])
         action_label = {"green": "吸筹", "yellow": "洗盘·拉锯", "red": "派发"}[flow_tone]
 
         rows.append({
@@ -1559,26 +1617,21 @@ def build_12m_stock_series(
             "slot_role": slot_role,
             "y_ganzhi": f"{y_gan}{y_zhi}",
             "m_ganzhi": f"{m_gan}{m_zhi}",
-            "stage": meta["stage"],
+            "stage": anchor["stage"],
             "zone": zone,
-            "bg_score": bg_score,
-            "natal_score": natal_score,
-            "bg_contrib": bg_contrib,
-            "natal_contrib": natal_contrib,
             "total_score": total_score,
             "flow_score": flow_score,
             "flow_pts": flow_pts,
             "flow_arrow": _pts_to_arrow_str(flow_pts),
-            "natal_arrow": _score_to_arrow_str(total_score),
-            "inst_top_label": meta["top_label"],
-            "rel_text": "·".join(notes[:3]),
+            "inst_top_label": anchor["top_label"],
+            "rel_text": rel_text,
             "positioning": positioning,
             "trend_out": trend_out,
             "flow_tone": flow_tone,
             "action_label": action_label,
             "override_key": override_key,
-            "upper_x": f"{col_tag}<br>{str(y_num)[2:]}年{y_num}-{m_num:02d} ({m_gan}{m_zhi})<br><b>{meta['stage']}</b>",
-            "lower_x": f"{str(y_num)[2:]}年{m_num}月 ({m_gan}{m_zhi})<br><b>{meta['top_label']}</b>",
+            "upper_x": f"{col_tag}<br>{str(y_num)[2:]}年{y_num}-{m_num:02d} ({m_gan}{m_zhi})<br><b>{anchor['stage']}</b>",
+            "lower_x": f"{str(y_num)[2:]}年{m_num}月 ({m_gan}{m_zhi})<br><b>{anchor['top_label']}</b>",
         })
 
     alerts: list[str] = []
@@ -1588,7 +1641,7 @@ def build_12m_stock_series(
         alert_txt = ""
         if nxt and nxt["zone"] in ("severe", "wash"):
             early_shift = True
-            alert_txt = f"⚡ 提早~15天作用：下月({nxt['month_num']}月·{nxt['m_ganzhi']})见【{nxt['stage']}】，注意提前控仓"
+            alert_txt = f"⚡ 提早~15天作用：下月({nxt['month_num']}月·{nxt['m_ganzhi']})见【{nxt['stage']}】，注意提前调仓"
         elif r["zone"] in ("severe", "trap"):
             early_shift = True
             alert_txt = f"⚡ 提早~15天作用：当月【{r['stage']}】（{r['positioning']}），注意节奏切换"
@@ -1604,10 +1657,11 @@ def build_12m_stock_series(
         "col2_label": f"{rows[1]['year_num']}年{rows[1]['month_num']}月({rows[1]['m_ganzhi']}·{rows[1]['stage']})",
         "cur_positioning": cur_row["positioning"],
         "cur_trend_out": cur_row["trend_out"],
-        "cur_split_desc": f"背景30%={cur_row['bg_contrib']}分(年/月干支{cur_row['bg_score']:.1f}) + 本命70%={cur_row['natal_contrib']}分(本命{cur_row['natal_score']:.1f})",
+        "cur_split_desc": f"红线(虚)={cur_row['total_score']:.1f} · 绿线(实)={cur_row['flow_score']:.1f} ({cur_row['rel_text']})",
         "alerts": alerts,
     }
     return rows, meta_out
+
 
 def render_12m_cycle_block_above_options(
     symbol: str,
@@ -1622,19 +1676,19 @@ def render_12m_cycle_block_above_options(
 
     top_h1, top_h2 = st.columns([4.2, 2.2])
     top_h1.markdown(
-        f"<div class='card-header' style='margin-bottom:2px;'>🧭 {symbol} 独立个股双轨12月面板 · 年/月干支背景30% × {meta['ganzhi']}({meta['element']})本命70%</div>"
+        f"<div class='card-header' style='margin-bottom:2px;'>🧭 {symbol} 虚实双向12月能量面板 · 第1栏10月→第2栏11月起逐月推进</div>"
         f"<div style='font-size:13.5px; color:#cbd5e1;'>"
-        f"九运背景(30%逐年/逐月干支): <b>{meta['era_name']} · {meta['era_phase']}（{meta['era_trend']}）</b> | "
-        f"个股本命(70%主导): <b>{meta['birthday_mode']} · 日柱 {meta['ganzhi']}({meta['element']}命)</b><br>"
-        f"本月拆解: <b><span style='color:#93c5fd;'>{meta['cur_split_desc']}</span></b> | "
+        f"周期定性: <b>{meta['era_name']} · {meta['era_phase']}（{meta['era_trend']}）</b> | "
+        f"标的参考: <b>{meta['birthday_mode']} · 日柱 {meta['ganzhi']}({meta['element']}命)</b><br>"
+        f"本月状态: <b><span style='color:#93c5fd;'>{meta['cur_split_desc']}</span></b> | "
         f"本月定位与走势: <b><span style='color:#facc15;'>{meta['cur_positioning']}</span> · <span style='color:#4ade80;'>{meta['cur_trend_out']}</span></b><br>"
-        f"滚动时间轴: <b>第1栏={meta['col1_label']}</b> → <b>第2栏={meta['col2_label']}</b> → 往后顺延共12个月"
+        f"时间轴: <b>第1栏={meta['col1_label']}</b> → <b>第2栏={meta['col2_label']}</b> → 往后逐月顺延共12个月"
         f"</div>",
         unsafe_allow_html=True,
     )
 
     with top_h2:
-        with st.expander("🎂 自动重查/修改出生日期 · 校准红黄绿", expanded=False):
+        with st.expander("🎂 校准出生日期 · 调整红黄绿资金灯", expanded=False):
             new_bday = st.text_input("出生日期 (YYYY-MM-DD)", value=meta["birthday"], key=f"bday_in_{symbol}")
             b_c1, b_c2 = st.columns(2)
             if b_c1.button("保存手动出生日", key=f"bday_btn_{symbol}", use_container_width=True):
@@ -1659,7 +1713,7 @@ def render_12m_cycle_block_above_options(
             tone_map_cn = {"green": "🟢 绿(吸筹)", "yellow": "🟡 黄(洗盘·拉锯)", "red": "🔴 红(派发)"}
             rev_tone_map = {v: k for k, v in tone_map_cn.items()}
             chosen_tone_cn = st.radio(
-                "机构/造市商状态",
+                "资金/造市商状态",
                 list(tone_map_cn.values()),
                 index=list(tone_map_cn.keys()).index(cur_tone),
                 key=f"flow_tone_radio_{symbol}_{pick_idx}",
@@ -1680,7 +1734,7 @@ def render_12m_cycle_block_above_options(
     red_y = [r["total_score"] for r in rows]
     green_y = [r["flow_score"] for r in rows]
     upper_hover = [
-        f"{r['upper_x']}<br>红线综合能量: {r['total_score']:.1f} (背景30%={r['bg_contrib']} + 本命70%={r['natal_contrib']})<br>绿线资金/支撑能量: {r['flow_score']:.1f}<br>干支关系: {r['rel_text']}<extra></extra>"
+        f"{r['upper_x']}<br>红线(虚/波动节奏): {r['total_score']:.1f}<br>绿线(实/稳健节奏): {r['flow_score']:.1f}<br>定性依据: {r['rel_text']}<extra></extra>"
         for r in rows
     ]
 
@@ -1689,7 +1743,7 @@ def render_12m_cycle_block_above_options(
         x=upper_x,
         y=red_y,
         mode="lines+markers+text",
-        name=f"{symbol} 综合能量 (背景30%+本命70%)",
+        name=f"{symbol} 红线(虚/波动节奏)",
         text=[f"{v:.0f}" for v in red_y],
         textposition="top center",
         textfont=dict(size=12.5, color="#b91c1c"),
@@ -1701,13 +1755,13 @@ def render_12m_cycle_block_above_options(
         x=upper_x,
         y=green_y,
         mode="lines+markers+text",
-        name=f"{symbol} 资金/支撑能量",
+        name=f"{symbol} 绿线(实/稳健节奏)",
         text=[f"{v:.0f}" for v in green_y],
         textposition="bottom center",
         textfont=dict(size=12, color="#15803d"),
         line=dict(color="#16a34a", width=3.0),
         marker=dict(size=9, color="#16a34a", line=dict(color="#ffffff", width=1.2)),
-        hovertemplate="%{x}<br>资金/支撑分: %{y:.1f}<extra></extra>",
+        hovertemplate="%{x}<br>绿线指数: %{y:.1f}<extra></extra>",
     ))
     fig_upper.add_vrect(x0=-0.45, x1=0.45, fillcolor="rgba(148, 163, 184, 0.16)", line_width=0)
     fig_upper.add_vrect(x0=0.55, x1=1.45, fillcolor="rgba(250, 204, 21, 0.20)", line_width=0)
@@ -1726,7 +1780,7 @@ def render_12m_cycle_block_above_options(
             )
 
     fig_upper.update_layout(
-        title=dict(text=f"① 上轨：{symbol} [{meta['ganzhi']}({meta['element']})] 12个月能量曲线（红=综合30/70 · 绿=资金支撑）", font=dict(size=13.5, color="#0f172a")),
+        title=dict(text=f"① 上轨：{symbol} 12个月能量波动指数（红=虚/波动节奏 · 绿=实/稳健节奏）", font=dict(size=13.5, color="#0f172a")),
         template="plotly_white",
         paper_bgcolor="#ffffff",
         plot_bgcolor="#ffffff",
@@ -1735,7 +1789,7 @@ def render_12m_cycle_block_above_options(
         legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="left", x=0),
     )
     fig_upper.update_xaxes(tickfont=dict(size=10.5, color="#0f172a"))
-    fig_upper.update_yaxes(range=[0, 108], title="能量指数", gridcolor="#e2e8f0")
+    fig_upper.update_yaxes(range=[0, 108], title="能量指数 (0-100)", gridcolor="#e2e8f0")
     st.plotly_chart(fig_upper, use_container_width=True)
 
     lower_x = [r["lower_x"] for r in rows]
@@ -1750,7 +1804,7 @@ def render_12m_cycle_block_above_options(
         x=lower_x,
         y=lower_y,
         mode="lines+markers+text",
-        name="机构资金与个股波动点数",
+        name="资金与波动点数",
         text=lower_arrows,
         textposition="top center",
         textfont=dict(size=12, color="#0f172a"),
@@ -1762,7 +1816,7 @@ def render_12m_cycle_block_above_options(
     fig_lower.add_vrect(x0=0.55, x1=1.45, fillcolor="rgba(250, 204, 21, 0.20)", line_width=0)
 
     fig_lower.update_layout(
-        title=dict(text=f"② 下轨：{symbol} 逐月柱干支与资金波动弹性（🟢吸筹 · 🟡洗盘·拉锯 · 🔴派发）", font=dict(size=13.5, color="#0f172a")),
+        title=dict(text=f"② 下轨：{symbol} 逐月柱定性与资金弹性（🟢吸筹 · 🟡洗盘·拉锯 · 🔴派发）", font=dict(size=13.5, color="#0f172a")),
         template="plotly_white",
         paper_bgcolor="#ffffff",
         plot_bgcolor="#ffffff",
@@ -1787,8 +1841,8 @@ def render_12m_cycle_block_above_options(
             f"<span style='color:{tone_col};'>{tone_badge}</span>"
             f"</div>"
             f"<div style='font-size:11.5px; color:#fb923c; font-weight:800; margin-top:2px;'>{r['positioning']} · {r['trend_out']}</div>"
-            f"<div style='font-size:11px; color:#cbd5e1; margin-top:1px;'>红线: {r['total_score']:.1f} (背{r['bg_contrib']}+本{r['natal_contrib']})</div>"
-            f"<div style='font-size:11px; color:#4ade80; margin-top:1px;'>绿线资金: {r['flow_score']:.1f} · {r['rel_text']}</div>"
+            f"<div style='font-size:11px; color:#cbd5e1; margin-top:1px;'>红线(虚): {r['total_score']:.1f} · 绿线(实): {r['flow_score']:.1f}</div>"
+            f"<div style='font-size:11px; color:#4ade80; margin-top:1px;'>定性: {r['rel_text']}</div>"
             f"<div style='font-size:11px; color:#e2e8f0; margin-top:1px;'>下轨: {r['flow_arrow']} · {r['inst_top_label']}</div>"
             f"</div>"
         )
@@ -1796,11 +1850,12 @@ def render_12m_cycle_block_above_options(
     st.markdown(strip_html, unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
+
 # ==================== TOP BAR & NAVIGATION ====================
 
 active_natal = resolve_stock_natal_chart(st.session_state.selected_ticker)
 
-top_bar_html = "<div class='top-bar'><div class='brand-title'>CAPITAL QUANT v2</div><div class='live-badge'>Auto-Sync Every 3m (180s) | " + datetime.now().strftime('%b %d, %Y %H:%M:%S') + " | 30/70 Cycle Engine</div></div>"
+top_bar_html = "<div class='top-bar'><div class='brand-title'>CAPITAL QUANT v2</div><div class='live-badge'>Auto-Sync Every 3m (180s) | " + datetime.now().strftime('%b %d, %Y %H:%M:%S') + " | Dual-Track Cycle Engine</div></div>"
 st.markdown(top_bar_html, unsafe_allow_html=True)
 
 n1, n2, n3, n4 = st.columns([1.3, 1.3, 1.6, 2.2])
@@ -1816,6 +1871,7 @@ if n3.button("3. Options Intelligence", use_container_width=True):
 st.session_state.use_live_api = n4.toggle("启用行情接口", value=st.session_state.use_live_api)
 
 st.markdown("<div style='border-bottom: 1px solid #1e3a8a; margin: 4px 0 6px 0;'></div>", unsafe_allow_html=True)
+
 
 # ==================== PAGE 1: MARKET WATCH ====================
 @st.fragment(run_every=180)
@@ -1867,6 +1923,7 @@ def render_native_market_watch():
         })
 
     df_watch = pd.DataFrame(rows)
+
     def style_watch(val, col):
         base = "background-color: #07193d; font-size: 18px; font-weight: 700;"
         if col in ["CHANGE", "% CHANGE"]:
@@ -1910,8 +1967,10 @@ def render_native_market_watch():
     summary_html = "<div style='text-align:right; padding-top:4px; font-size:17px; font-weight:800;'><span style='color:#4ade80;'>▲ " + str(gainers) + " Gainers</span> | <span style='color:#f87171;'>● " + str(losers) + " Losers</span> | Total: " + str(len(df_watch)) + "</div>"
     b3.markdown(summary_html, unsafe_allow_html=True)
 
+
 if st.session_state.page == "Market Watch":
     render_native_market_watch()
+
 
 # ==================== PAGE 2: STOCK ANALYSIS ====================
 elif st.session_state.page == "Stock Analysis":
@@ -2065,6 +2124,7 @@ elif st.session_state.page == "Stock Analysis":
     k4.markdown("<div class='metric-box'><div class='metric-label'>Market Cap</div><div class='metric-val'>" + str(m.get('mcap', 'N/A')) + "</div></div>", unsafe_allow_html=True)
     k5.markdown("<div class='metric-box'><div class='metric-label'>P/E / EPS</div><div class='metric-val'>" + (str(m.get('pe', 'N/A')) if m.get('pe') else 'N/A') + " / " + str(m.get('eps', 'N/A')) + "</div></div>", unsafe_allow_html=True)
     k6.markdown("<div class='metric-box'><div class='metric-label'>RSI (14)</div><div class='metric-val' style='color:#38bdf8;'>" + f"{float(m.get('rsi', 50.0)):.1f}" + "</div></div>", unsafe_allow_html=True)
+
 
 # ==================== PAGE 3: OPTIONS INTELLIGENCE ====================
 elif st.session_state.page == "Options Intelligence":
