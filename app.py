@@ -157,8 +157,9 @@ if "show_all_strikes" not in st.session_state:
 if "opt_persistent_cache" not in st.session_state:
     st.session_state["opt_persistent_cache"] = {}
 
-if "isolated_ticker_engines" not in st.session_state:
-    st.session_state["isolated_ticker_engines"] = {}
+# 每只股票各自独立的底层计算库（按 symbol 严格隔离，互不共享）
+if "per_ticker_core_store" not in st.session_state:
+    st.session_state["per_ticker_core_store"] = {}
 
 if "stock_birthdays" not in st.session_state:
     st.session_state["stock_birthdays"] = PRESET_STOCK_BIRTHDAYS.copy()
@@ -295,10 +296,12 @@ def sync_watchlist_to_url():
     st.query_params["watchlist"] = ",".join(st.session_state.tickers)
 
 
-def reset_isolated_ticker_engine(symbol: str) -> None:
-    clean_sym = str(symbol or "").upper().strip()
-    if clean_sym:
-        st.session_state.setdefault("isolated_ticker_engines", {}).pop(clean_sym, None)
+def reset_ticker_isolated_store(symbol: str | None = None) -> None:
+    store = st.session_state.setdefault("per_ticker_core_store", {})
+    if symbol:
+        store.pop(str(symbol).upper().strip(), None)
+    else:
+        store.clear()
 
 
 def select_ticker_with_natal_first(symbol: str, target_page: str | None = None, manual_bday: str = "") -> dict[str, Any]:
@@ -316,7 +319,7 @@ def select_ticker_with_natal_first(symbol: str, target_page: str | None = None, 
         auto_find_company_birthday(clean_sym)
 
     st.session_state.selected_ticker = clean_sym
-    reset_isolated_ticker_engine(clean_sym)
+    reset_ticker_isolated_store(clean_sym)
     bump_calc_nonce()
     natal_profile = step1_resolve_individual_stock_fundamentals(clean_sym)
     if target_page:
@@ -1289,7 +1292,7 @@ def build_custom_option_matrix_html(symbol, spot):
     return html
 
 
-# ==================== 3. 个股独立五行/干支计算（无豁免规则、无人工三角波） ====================
+# ==================== 3. 最底层完全独立的个股五行/干支计算引擎（无共享基准、无NVDA兜底） ====================
 
 TIANGAN = ["甲", "乙", "丙", "丁", "戊", "己", "庚", "辛", "壬", "癸"]
 DIZHI = ["子", "丑", "寅", "卯", "辰", "巳", "午", "未", "申", "酉", "戌", "亥"]
@@ -1343,13 +1346,6 @@ FIXED_MACRO_BACKGROUND_REFERENCE: dict[int, dict[str, str]] = {
     12: {"zhi": "子", "stage": "仲冬子水", "top_label": "背景刻度·仲冬"},
 }
 
-FIXED_MACRO_BACKGROUND_CONFIG: dict[str, Any] = {
-    "era_name": "九紫离火运 (2024-2043)",
-    "fixed_macro_regime": "固定大环境背景刻度（已移除豁免规则，各股独立计算）",
-    "fixed_year_reference": 1.00,
-    "reference_months": FIXED_MACRO_BACKGROUND_REFERENCE,
-}
-
 
 def _year_ganzhi(year: int, month: int) -> tuple[str, str]:
     gz_year = year - 1 if month == 1 else year
@@ -1367,7 +1363,7 @@ def _month_ganzhi(year: int, month: int) -> tuple[str, str]:
     return m_gan, m_zhi
 
 
-def _parse_birthday_str(b_str: str, fallback_sym: str) -> tuple[datetime, str]:
+def _parse_birthday_str(b_str: str, symbol_seed: str) -> tuple[datetime, str]:
     raw = str(b_str or "").strip()
     for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%Y%m%d"):
         try:
@@ -1375,10 +1371,10 @@ def _parse_birthday_str(b_str: str, fallback_sym: str) -> tuple[datetime, str]:
             return dt_p, f"出生日 {dt_p.strftime('%Y-%m-%d')}"
         except Exception:
             continue
-    digest = hashlib.sha256(fallback_sym.encode("utf-8")).hexdigest()
+    digest = hashlib.sha256(f"ISOLATED_BIRTHDAY::{symbol_seed}".encode("utf-8")).hexdigest()
     day_offset = int(digest[:8], 16) % 14000
     dt_fb = datetime(1985, 1, 1) + timedelta(days=day_offset)
-    return dt_fb, f"默认出生日 {dt_fb.strftime('%Y-%m-%d')}"
+    return dt_fb, f"独立定盘出生日 {dt_fb.strftime('%Y-%m-%d')}"
 
 
 def _date_to_day_ganzhi(dt_obj: datetime) -> tuple[str, str]:
@@ -1403,26 +1399,29 @@ def _pts_to_arrow_str(pts: float) -> str:
     return f"↓↓ {pts:+.1f}点"
 
 
-def _get_isolated_engine_bucket(symbol: str) -> dict[str, Any]:
-    clean_sym = symbol.upper().strip() or "NVDA"
-    store = st.session_state.setdefault("isolated_ticker_engines", {})
-    if clean_sym not in store or not isinstance(store[clean_sym], dict):
-        store[clean_sym] = {
+def _get_ticker_private_namespace(symbol: str) -> dict[str, Any]:
+    clean_sym = str(symbol or "").upper().strip()
+    if not clean_sym:
+        raise ValueError("个股独立推演必须提供非空股票代码")
+    root = st.session_state.setdefault("per_ticker_core_store", {})
+    if clean_sym not in root or not isinstance(root[clean_sym], dict):
+        root[clean_sym] = {
+            "namespace": f"ISOLATED_CORE::{clean_sym}",
             "engine_id": f"ENG_{clean_sym}",
         }
-    return store[clean_sym]
+    return root[clean_sym]
 
-
-# -------------------- 第一步：按个股各自独立的底层命盘建档 --------------------
 
 def step1_resolve_individual_stock_fundamentals(
     symbol: str,
     custom_date: str = "",
     ref_dt: datetime | None = None,
 ) -> dict[str, Any]:
-    clean_sym = symbol.upper().strip() or "NVDA"
+    clean_sym = str(symbol or "").upper().strip()
+    if not clean_sym:
+        raise ValueError("个股底层建档必须指定股票代码")
     now_dt = ref_dt or datetime.today()
-    bucket = _get_isolated_engine_bucket(clean_sym)
+    ns = _get_ticker_private_namespace(clean_sym)
 
     if custom_date.strip():
         b_dt, b_label = _parse_birthday_str(custom_date.strip(), clean_sym)
@@ -1449,7 +1448,8 @@ def step1_resolve_individual_stock_fundamentals(
     vol_regime = "稳健低波" if is_low_vol else "高弹性波动"
 
     profile = {
-        **bucket,
+        "namespace": ns["namespace"],
+        "engine_id": ns["engine_id"],
         "symbol": clean_sym,
         "cohort_type": cohort_type,
         "vol_regime": vol_regime,
@@ -1473,11 +1473,9 @@ def step1_resolve_individual_stock_fundamentals(
         "wuxing_positioning": f"{day_el}主·喜{favored_el}/{ally_el}·忌{taboo_el}",
         "resolved_at": now_dt.strftime("%H:%M:%S"),
     }
-    bucket["profile"] = profile
+    ns["profile"] = profile
     return profile
 
-
-# -------------------- 第二步：各股完全分开的独立逐月推演（无豁免、无人工波形） --------------------
 
 def _compute_individual_wuxing_month_scores(
     natal: dict[str, Any],
@@ -1485,14 +1483,7 @@ def _compute_individual_wuxing_month_scores(
     y_zhi: str,
     m_gan: str,
     m_zhi: str,
-) -> tuple[float, float, str, str, str, str, str]:
-    """
-    每只股票各自独立按：
-    1) 本身出生月令/日干五行与流月天干（月干）生克喜忌
-    2) 本身日支五行与流月地支（月支）生克喜忌
-    3) 本身日支与流月地支的六合 / 相冲 / 相刑
-    直接推算红线(虚/波动节奏)与绿线(实/稳健节奏)，不套用统一月份底盘与豁免规则。
-    """
+) -> tuple[float, float, str, str, str, str, str, str]:
     d_zhi = natal["zhi"]
     d_el = natal["element"]
     zhi_el = natal["zhi_element"]
@@ -1508,7 +1499,6 @@ def _compute_individual_wuxing_month_scores(
     m_zhi_el = DIZHI_ELEMENT[m_zhi]
     y_zhi_el = DIZHI_ELEMENT[y_zhi]
 
-    # 以个股自身得令与日支根气建立初始基准（不同个股初始基准各不相同）
     base_v = 52.0 + (8.0 if birth_m_el in (favored_el, ally_el) else (-8.0 if birth_m_el == taboo_el else 0.0))
     base_r = 54.0 + (8.0 if zhi_el in (favored_el, ally_el) else (-8.0 if zhi_el == taboo_el else 0.0))
     if is_low_vol:
@@ -1519,7 +1509,6 @@ def _compute_individual_wuxing_month_scores(
     r_delta = 0.0
     reasons: list[str] = []
 
-    # 1. 月干对个股本命五行的生克喜忌
     if m_el == favored_el or GENERATES.get(m_el) == d_el:
         v_delta += 18.0
         r_delta += 11.0
@@ -1541,7 +1530,6 @@ def _compute_individual_wuxing_month_scores(
         r_delta -= 14.0
         reasons.append(f"月干{m_gan}({m_el})克{d_el}忌")
 
-    # 2. 月支与个股日支的五行互动
     if m_zhi_el == favored_el or GENERATES.get(m_zhi_el) == zhi_el:
         v_delta += 12.0
         r_delta += 17.0
@@ -1563,7 +1551,6 @@ def _compute_individual_wuxing_month_scores(
         r_delta -= 17.0
         reasons.append(f"月支{m_zhi}({m_zhi_el})克根")
 
-    # 3. 个股日支与流月地支的合、冲、刑
     pair_dm = frozenset({d_zhi, m_zhi})
     if pair_dm in SIX_HARMONY_PAIRS:
         v_delta += 14.0
@@ -1629,22 +1616,24 @@ def _compute_individual_wuxing_month_scores(
     if not reasons:
         reasons.append(f"{d_el}命对{m_gan}{m_zhi}({y_zhi_el})")
 
-    return v_score, r_score, "·".join(reasons[:3]), zone, stage, positioning, f"{trend_out}|{tone}"
+    return v_score, r_score, "·".join(reasons[:3]), zone, stage, positioning, trend_out, tone
 
 
-def step2_apply_macro_environment_and_cycle(
-    natal: dict[str, Any],
+def _build_ticker_isolated_12m_payload(
+    symbol: str,
+    custom_date: str = "",
     ref_dt: datetime | None = None,
     m_data: dict[str, Any] | None = None,
     cdf: pd.DataFrame | None = None,
     pdf: pd.DataFrame | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     now = ref_dt or datetime.today()
+    natal = step1_resolve_individual_stock_fundamentals(symbol, custom_date=custom_date, ref_dt=now)
+    ns = _get_ticker_private_namespace(natal["symbol"])
+
     clean_sym = natal["symbol"]
     is_low_vol = natal["is_low_vol"]
-
-    cur_y_gan, cur_y_zhi = _year_ganzhi(now.year, now.month)
-    fixed_macro = FIXED_MACRO_BACKGROUND_CONFIG
+    cur_y_gan, _ = _year_ganzhi(now.year, now.month)
 
     start_ym_idx = (now.year * 12 + (now.month - 1)) - 1
     cur_ym_idx = now.year * 12 + (now.month - 1)
@@ -1659,14 +1648,13 @@ def step2_apply_macro_environment_and_cycle(
         m_gan, m_zhi = _month_ganzhi(y_num, m_num)
         macro_bg = FIXED_MACRO_BACKGROUND_REFERENCE[m_num]
 
-        total_score, flow_score, rel_text, zone, stage, positioning, packed_tt = _compute_individual_wuxing_month_scores(
+        total_score, flow_score, rel_text, zone, stage, positioning, trend_out, auto_tone = _compute_individual_wuxing_month_scores(
             natal=natal,
             y_gan=y_gan,
             y_zhi=y_zhi,
             m_gan=m_gan,
             m_zhi=m_zhi,
         )
-        trend_out, auto_tone = packed_tt.split("|")
 
         base_pts = (total_score - 50.0) * 0.45
         vol_scale = 0.72 if is_low_vol else 1.12
@@ -1749,10 +1737,10 @@ def step2_apply_macro_environment_and_cycle(
     cur_row = rows[1] if len(rows) > 1 else rows[0]
     meta_out = {
         **natal,
-        "era_name": fixed_macro["era_name"],
-        "era_phase": fixed_macro["fixed_macro_regime"],
-        "era_trend": f"固定背景基准 {fixed_macro['fixed_year_reference']:.2f}",
-        "cur_year_ganzhi": f"{cur_y_gan}{cur_y_zhi}",
+        "era_name": "九紫离火运 (2024-2043)",
+        "era_phase": "固定大环境背景刻度（各股底层独立推演）",
+        "era_trend": "固定背景基准 1.00",
+        "cur_year_ganzhi": f"{cur_y_gan}{_year_ganzhi(now.year, now.month)[1]}",
         "col1_label": f"{rows[0]['year_num']}年{rows[0]['month_num']}月({rows[0]['m_ganzhi']}·{rows[0]['stage']})",
         "col2_label": f"{rows[1]['year_num']}年{rows[1]['month_num']}月({rows[1]['m_ganzhi']}·{rows[1]['stage']})",
         "cur_positioning": cur_row["positioning"],
@@ -1760,6 +1748,8 @@ def step2_apply_macro_environment_and_cycle(
         "cur_split_desc": f"红线(虚)={cur_row['total_score']:.1f} · 绿线(实)={cur_row['flow_score']:.1f} ({cur_row['rel_text']})",
         "alerts": alerts,
     }
+    ns["rows"] = rows
+    ns["meta"] = meta_out
     return rows, meta_out
 
 
@@ -1771,11 +1761,10 @@ def build_12m_stock_series(
     cdf: pd.DataFrame | None = None,
     pdf: pd.DataFrame | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    now = ref_dt or datetime.today()
-    natal_profile = step1_resolve_individual_stock_fundamentals(symbol, custom_date=custom_date, ref_dt=now)
-    return step2_apply_macro_environment_and_cycle(
-        natal=natal_profile,
-        ref_dt=now,
+    return _build_ticker_isolated_12m_payload(
+        symbol=symbol,
+        custom_date=custom_date,
+        ref_dt=ref_dt,
         m_data=m_data,
         cdf=cdf,
         pdf=pdf,
@@ -1795,7 +1784,7 @@ def render_12m_cycle_block_above_options(
 
     top_h1, top_h2 = st.columns([4.2, 2.2])
     top_h1.markdown(
-        f"<div class='card-header' style='margin-bottom:2px;'>🧭 {symbol} 独立五行12月能量面板 · 分桶隔离引擎 ({meta['engine_id']})</div>"
+        f"<div class='card-header' style='margin-bottom:2px;'>🧭 {symbol} 独立五行12月能量面板 · 底层完全隔离 ({meta['engine_id']})</div>"
         f"<div style='font-size:13.5px; color:#cbd5e1;'>"
         f"① 个股独立五行盘({meta['cohort_type']}·{meta['vol_regime']}): <b>{meta['birthday_mode']} · 日柱 {meta['ganzhi']}({meta['element']}命) · {meta['wuxing_positioning']}</b><br>"
         f"② 固定大环境背景: <b>{meta['era_name']} · {meta['era_phase']}（{meta['era_trend']}）</b> | "
@@ -1816,12 +1805,12 @@ def render_12m_cycle_block_above_options(
                 disk_c = _load_birthday_cache()
                 disk_c[symbol] = {"date": new_bday.strip(), "source": "手动校准出生日"}
                 _save_birthday_cache(disk_c)
-                reset_isolated_ticker_engine(symbol)
+                reset_ticker_isolated_store(symbol)
                 bump_calc_nonce()
                 st.rerun()
             if b_c2.button("重新自动查找", key=f"bday_auto_btn_{symbol}", use_container_width=True):
                 auto_find_company_birthday(symbol, force_lookup=True)
-                reset_isolated_ticker_engine(symbol)
+                reset_ticker_isolated_store(symbol)
                 bump_calc_nonce()
                 st.rerun()
 
@@ -2012,7 +2001,7 @@ def render_native_market_watch():
     if c5.button("MANUAL REFRESH", use_container_width=True):
         st.cache_data.clear()
         st.session_state["opt_persistent_cache"] = {}
-        st.session_state["isolated_ticker_engines"] = {}
+        reset_ticker_isolated_store()
         bump_calc_nonce()
         st.rerun()
 
