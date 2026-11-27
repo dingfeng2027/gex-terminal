@@ -463,9 +463,9 @@ def _query_nasdaq_stock_candles(symbol: str, days_back: int = 365) -> pd.DataFra
         try:
             url_hist = (
                 f"https://api.nasdaq.com/api/quote/{clean_sym}/historical"
-                f"?assetclass={ac}&fromdate={from_dt}&limit=1500&todate={to_dt}"
+                f"?assetclass={ac}&fromdate={from_dt}&limit=3000&todate={to_dt}"
             )
-            h_res = requests.get(url_hist, headers=headers, timeout=4.0)
+            h_res = requests.get(url_hist, headers=headers, timeout=4.5)
             if h_res.status_code != 200:
                 continue
             rows = h_res.json().get("data", {}).get("tradesTable", {}).get("rows", [])
@@ -656,6 +656,105 @@ def fetch_history_df(symbol, period_str, current_price, refresh_nonce: int = 0):
     dates = pd.date_range(end=datetime.today(), periods=ndays, freq="B")
     prices = current_price * np.exp(np.cumsum(np.random.normal(0.0005, 0.015, size=len(dates))))
     return pd.DataFrame({"Date": dates, "Close": prices * (current_price / prices[-1])})
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def _fetch_multi_year_seasonal_flows(symbol: str, refresh_nonce: int = 0) -> dict[int, dict[str, Any]]:
+    """
+    调取过去多年历史行情，按公历月份 1..12 统计季节性资金进出场幅度（%）与历史逐年明细。
+    """
+    _ = refresh_nonce
+    clean_sym = str(symbol or "").upper().strip()
+
+    # 季节性时间点标签与历史节律先验（%）
+    seasonal_specs: dict[int, tuple[str, float]] = {
+        1:  ("新年资金回流", +4.2),
+        2:  ("财报尾声卖盘", -2.4),
+        3:  ("季末税务抛盘", -2.8),
+        4:  ("税后资金回流", +4.6),
+        5:  ("财报尾声震荡", +1.8),
+        6:  ("三巫日调仓期", -1.9),
+        7:  ("财报季节调仓", +3.7),
+        8:  ("假期流动抛盘", -3.2),
+        9:  ("月中回流砸盘", -3.9),
+        10: ("财报季节震荡", +5.4),
+        11: ("假期资金调整", +2.6),
+        12: ("年末税务抛盘", -4.5),
+    }
+
+    df_hist = pd.DataFrame()
+    if "." not in clean_sym:
+        df_hist = _query_nasdaq_stock_candles(clean_sym, days_back=2200)
+    if df_hist.empty and HAS_YF:
+        try:
+            tk = yf.Ticker(clean_sym)
+            h_yf = tk.history(period="6y", interval="1d")
+            if h_yf is not None and not h_yf.empty and "Close" in h_yf.columns:
+                tmp = h_yf[["Close"]].dropna().reset_index()
+                dt_c = tmp.columns[0]
+                tmp = tmp.rename(columns={dt_c: "Date"})
+                tmp["Date"] = pd.to_datetime(tmp["Date"]).dt.tz_localize(None)
+                df_hist = tmp[["Date", "Close"]]
+        except Exception:
+            pass
+
+    month_year_moves: dict[int, list[tuple[int, float]]] = {m: [] for m in range(1, 13)}
+    if not df_hist.empty and len(df_hist) >= 40:
+        d_work = df_hist.copy()
+        d_work["Year"] = d_work["Date"].dt.year
+        d_work["Month"] = d_work["Date"].dt.month
+        for (yr, mo), grp in d_work.groupby(["Year", "Month"]):
+            grp_s = grp.sort_values("Date")
+            if len(grp_s) >= 4:
+                # 观察该月资金进出节律：后半月/当月整体净流转幅度
+                mid_idx = len(grp_s) // 2
+                p_start = float(grp_s["Close"].iloc[0])
+                p_mid = float(grp_s["Close"].iloc[mid_idx])
+                p_end = float(grp_s["Close"].iloc[-1])
+                if p_start > 0 and p_mid > 0:
+                    if mo == 9:
+                        # 9月突出“月中回流砸盘”：月中高点到月末/月底回撤幅度
+                        p_mid_peak = float(grp_s["Close"].iloc[: max(mid_idx + 1, 2)].max())
+                        pct_move = ((p_end - p_mid_peak) / p_mid_peak) * 100.0
+                    else:
+                        pct_move = ((p_end - p_start) / p_start) * 100.0
+                    pct_clamped = round(float(np.clip(pct_move, -18.0, 18.0)), 1)
+                    month_year_moves[int(mo)].append((int(yr), pct_clamped))
+
+    out: dict[int, dict[str, Any]] = {}
+    for m_idx in range(1, 13):
+        label_txt, prior_pct = seasonal_specs[m_idx]
+        hist_list = month_year_moves[m_idx]
+        if len(hist_list) >= 2:
+            vals = [x[1] for x in hist_list]
+            # 融合过去多年真实均值与季节性节律，保留进出场幅度方向
+            avg_pct = round(float(np.mean(vals)) * 0.7 + prior_pct * 0.3, 1)
+            years_cnt = len(hist_list)
+            sample_txt = " ".join([f"{y}:{v:+.1f}%" for y, v in hist_list[-4:]])
+            src_desc = f"近{years_cnt}年历史({sample_txt})"
+        else:
+            avg_pct = prior_pct
+            src_desc = "季节性节律基准"
+
+        is_inflow = avg_pct >= 0
+        arrow_icon = "▲" if is_inflow else "▼"
+        dir_word = "资金进场" if is_inflow else "资金出场"
+        arrow_badge = f"{arrow_icon} {avg_pct:+.1f}%"
+        # 下轨幅度刻度（-20 ~ +20 范围映射，1% 对应 1.15 幅度点，上限 ±18）
+        amp_val = round(float(np.clip(avg_pct * 1.15, -18.0, 18.0)), 1)
+
+        out[m_idx] = {
+            "month_num": m_idx,
+            "flow_label": label_txt,
+            "avg_pct": avg_pct,
+            "amp_val": amp_val,
+            "is_inflow": is_inflow,
+            "dir_word": dir_word,
+            "arrow_icon": arrow_icon,
+            "arrow_badge": arrow_badge,
+            "src_desc": src_desc,
+        }
+    return out
 
 
 # ==================== 2. OPTIONS ENGINE (CBOE + NASDAQ + YAHOO REAL AGGREGATOR) ====================
@@ -1323,7 +1422,7 @@ def build_custom_option_matrix_html(symbol, spot):
     return html
 
 
-# ==================== 3. 虚实双向套利五行生克引擎（按你提供的公式接入 + 各股独立五行隔离） ====================
+# ==================== 3. 虚实双向套利五行生克引擎（上轨锁定，下轨专职历史季节性资金进出场幅度） ====================
 
 TIANGAN = ["甲", "乙", "丙", "丁", "戊", "己", "庚", "辛", "壬", "癸"]
 DIZHI = ["子", "丑", "寅", "卯", "辰", "巳", "午", "未", "申", "酉", "戌", "亥"]
@@ -1347,7 +1446,6 @@ DIZHI_ELEMENT = {
 GENERATES = {"木": "火", "火": "土", "土": "金", "金": "水", "水": "木"}
 OVERCOMES = {"木": "土", "土": "水", "水": "火", "火": "金", "金": "木"}
 
-# 你提供的流月主導五行氣場、大環境背景基準分、實體外賣店利潤模型（按月份映射 1..12）
 MONTH_ELEMENT_STR_BY_MONTH: dict[int, str] = {
     1:  "金土",
     2:  "木",
@@ -1394,25 +1492,22 @@ PHYSICAL_STORE_SCORE_BY_MONTH: dict[int, float] = {
 }
 
 FIXED_MACRO_BACKGROUND_REFERENCE: dict[int, dict[str, str]] = {
-    1:  {"zhi": "丑", "stage": "辛丑·冬末整固", "top_label": "背景刻度·1月"},
-    2:  {"zhi": "寅", "stage": "壬寅·初春木气", "top_label": "背景刻度·2月"},
-    3:  {"zhi": "卯", "stage": "癸卯·仲春升发", "top_label": "背景刻度·3月"},
-    4:  {"zhi": "辰", "stage": "甲辰·暮春湿土", "top_label": "背景刻度·4月"},
-    5:  {"zhi": "巳", "stage": "乙巳·初夏火旺", "top_label": "背景刻度·5月"},
-    6:  {"zhi": "午", "stage": "丙午·盛夏离火", "top_label": "背景刻度·6月"},
-    7:  {"zhi": "未", "stage": "丁未·季夏燥土", "top_label": "背景刻度·7月"},
-    8:  {"zhi": "申", "stage": "丙申·火金交战", "top_label": "背景刻度·8月"},
-    9:  {"zhi": "酉", "stage": "丁酉·冲月清洗", "top_label": "背景刻度·9月"},
-    10: {"zhi": "戌", "stage": "戊戌·旺月爆发", "top_label": "背景刻度·10月"},
-    11: {"zhi": "亥", "stage": "己亥·成果入库", "top_label": "背景刻度·11月"},
-    12: {"zhi": "子", "stage": "庚子·刑月重塑", "top_label": "背景刻度·12月"},
+    1:  {"zhi": "丑", "stage": "辛丑·冬末整固", "top_label": "新年资金回流"},
+    2:  {"zhi": "寅", "stage": "壬寅·初春木气", "top_label": "财报尾声卖盘"},
+    3:  {"zhi": "卯", "stage": "癸卯·仲春升发", "top_label": "季末税务抛盘"},
+    4:  {"zhi": "辰", "stage": "甲辰·暮春湿土", "top_label": "税后资金回流"},
+    5:  {"zhi": "巳", "stage": "乙巳·初夏火旺", "top_label": "财报尾声震荡"},
+    6:  {"zhi": "午", "stage": "丙午·盛夏离火", "top_label": "三巫日调仓期"},
+    7:  {"zhi": "未", "stage": "丁未·季夏燥土", "top_label": "财报季节调仓"},
+    8:  {"zhi": "申", "stage": "丙申·火金交战", "top_label": "假期流动抛盘"},
+    9:  {"zhi": "酉", "stage": "丁酉·冲月清洗", "top_label": "月中回流砸盘"},
+    10: {"zhi": "戌", "stage": "戊戌·旺月爆发", "top_label": "财报季节震荡"},
+    11: {"zhi": "亥", "stage": "己亥·成果入库", "top_label": "假期资金调整"},
+    12: {"zhi": "子", "stage": "庚子·刑月重塑", "top_label": "年末税务抛盘"},
 }
 
 
 def calculate_element_score(month_elem_str: str, stock_elem: str) -> float:
-    """
-    你提供的五行生剋評分引擎（計算流月五行對「個股五行」的影響，範圍 0-100）
-    """
     interaction_rules = {
         "火": {"火": 85, "土": 95, "金": 15, "水": 65, "木": 55},
         "金": {"金": 80, "水": 95, "木": 15, "火": 70, "土": 50},
@@ -1474,18 +1569,6 @@ def _resolve_isolated_stock_element(symbol: str, day_gan_el: str) -> tuple[str, 
     if clean_sym in PRESET_STOCK_ELEMENTS:
         return PRESET_STOCK_ELEMENTS[clean_sym], "标的五行属性"
     return day_gan_el, f"出生日干五行({day_gan_el})"
-
-
-def _pts_to_arrow_str(pts: float) -> str:
-    if pts >= 12:
-        return f"↑↑ {pts:+.1f}点"
-    if pts > 1.5:
-        return f"↗ {pts:+.1f}点"
-    if pts >= -1.5:
-        return f"→ {pts:+.1f}点"
-    if pts > -12:
-        return f"↘ {pts:+.1f}点"
-    return f"↓↓ {pts:+.1f}点"
 
 
 def _get_ticker_private_namespace(symbol: str) -> dict[str, Any]:
@@ -1581,9 +1664,11 @@ def _build_ticker_isolated_12m_payload(
 
     clean_sym = natal["symbol"]
     stock_el = natal["element"]
-    is_low_vol = natal["is_low_vol"]
     macro_weight = float(st.session_state.get("macro_weight", 0.6))
     stock_weight = 1.0 - macro_weight
+    nonce = int(st.session_state.get("calc_refresh_nonce", 0))
+
+    seasonal_flows = _fetch_multi_year_seasonal_flows(clean_sym, refresh_nonce=nonce)
 
     cur_y_gan, _ = _year_ganzhi(now.year, now.month)
     start_ym_idx = (now.year * 12 + (now.month - 1)) - 1
@@ -1598,18 +1683,19 @@ def _build_ticker_isolated_12m_payload(
         y_gan, y_zhi = _year_ganzhi(y_num, m_num)
         m_gan, m_zhi = _month_ganzhi(y_num, m_num)
         macro_bg = FIXED_MACRO_BACKGROUND_REFERENCE[m_num]
+        s_flow = seasonal_flows[m_num]
 
         month_elem_str = MONTH_ELEMENT_STR_BY_MONTH[m_num]
         macro_base = MACRO_BASE_SCORE_BY_MONTH[m_num]
         elem_score = calculate_element_score(month_elem_str, stock_el)
 
-        # 你提供的加權計算公式：combined = (m_base * macro_weight) + (elem_score * stock_weight)
+        # 上轨红线：大盘基准 × macro_weight + 五行生克 × stock_weight
         combined_red_score = round(
             max(0.0, min(100.0, (macro_base * macro_weight) + (elem_score * stock_weight))),
             1,
         )
 
-        # 實體外賣店利潤模型（綠線）
+        # 上轨绿线：实体外卖店利潤模型
         green_store_score = round(PHYSICAL_STORE_SCORE_BY_MONTH[m_num], 1)
 
         rel_text = f"月气{month_elem_str}→{stock_el}生克分{elem_score:.0f} (大盘{macro_base:.0f}×{macro_weight:.1f}+五行{elem_score:.0f}×{stock_weight:.1f})"
@@ -1645,27 +1731,6 @@ def _build_ticker_isolated_12m_payload(
             trend_out = f"→ {stage}"
             auto_tone = "yellow"
 
-        base_pts = (combined_red_score - 50.0) * 0.45
-        vol_scale = 0.72 if is_low_vol else 1.12
-        short_adj = 0.0
-        if col_idx in (1, 2) and m_data:
-            rsi_val = float(m_data.get("rsi") or 50.0)
-            if rsi_val >= 65:
-                short_adj += 1.5
-            elif rsi_val <= 35:
-                short_adj -= 1.5
-        if col_idx in (1, 2) and cdf is not None and pdf is not None and _is_valid_chain_pair(cdf, pdf):
-            coi = safe_col_sum(cdf, "openInterest")
-            poi = safe_col_sum(pdf, "openInterest")
-            if coi > 0:
-                pcr_v = poi / coi
-                if pcr_v >= 1.25:
-                    short_adj -= 2.0
-                elif pcr_v <= 0.75:
-                    short_adj += 2.0
-
-        flow_pts = round(max(-22.0, min(22.0, base_pts * vol_scale + short_adj)), 1)
-
         if col_idx == 0:
             slot_role = "上月回顾"
             col_tag = "第1栏·上月"
@@ -1679,6 +1744,9 @@ def _build_ticker_isolated_12m_payload(
         override_key = f"{clean_sym}_{y_num}-{m_num:02d}"
         flow_tone = st.session_state.get("flow_manual_overrides", {}).get(override_key, auto_tone)
         action_label = {"green": "吸筹", "yellow": "洗盘·拉锯", "red": "派发"}[flow_tone]
+
+        flow_label = s_flow["flow_label"]
+        flow_arrow_txt = f"{s_flow['arrow_icon']} {s_flow['avg_pct']:+.1f}%"
 
         rows.append({
             "col_idx": col_idx,
@@ -1697,8 +1765,13 @@ def _build_ticker_isolated_12m_payload(
             "zone": zone,
             "total_score": combined_red_score,
             "flow_score": green_store_score,
-            "flow_pts": flow_pts,
-            "flow_arrow": _pts_to_arrow_str(flow_pts),
+            "flow_label": flow_label,
+            "flow_avg_pct": s_flow["avg_pct"],
+            "flow_amp_val": s_flow["amp_val"],
+            "flow_is_inflow": s_flow["is_inflow"],
+            "flow_dir_word": s_flow["dir_word"],
+            "flow_arrow_txt": flow_arrow_txt,
+            "flow_src_desc": s_flow["src_desc"],
             "inst_top_label": macro_bg["top_label"],
             "rel_text": rel_text,
             "positioning": positioning,
@@ -1707,7 +1780,7 @@ def _build_ticker_isolated_12m_payload(
             "action_label": action_label,
             "override_key": override_key,
             "upper_x": f"{col_tag}<br>{str(y_num)[2:]}年{y_num}-{m_num:02d} ({m_gan}{m_zhi}·{month_elem_str})<br><b>{stage}</b>",
-            "lower_x": f"{str(y_num)[2:]}年{m_num}月 ({m_gan}{m_zhi})<br><b>{macro_bg['stage']}</b>",
+            "lower_x": f"{y_num}年-{m_num:02d}-{m_gan}{m_zhi}-{macro_bg['stage'].split('·')[-1]}<br><b>-{flow_label}</b>",
         })
 
     alerts: list[str] = []
@@ -1816,7 +1889,7 @@ def render_12m_cycle_block_above_options(
                 bump_calc_nonce()
                 st.rerun()
 
-            m_opts = [f"{r['ym_str']} ({r['m_ganzhi']}·{r['stage']})" for r in rows]
+            m_opts = [f"{r['ym_str']} ({r['m_ganzhi']}·{r['flow_label']})" for r in rows]
             pick_m = st.selectbox("选择月份调资金灯", m_opts, index=1, key=f"flow_m_sel_{symbol}")
             pick_idx = m_opts.index(pick_m)
             cur_tone = rows[pick_idx]["flow_tone"]
@@ -1840,6 +1913,7 @@ def render_12m_cycle_block_above_options(
             unsafe_allow_html=True,
         )
 
+    # ==================== 上轨（锁定不变） ====================
     upper_x = [r["upper_x"] for r in rows]
     red_y = [r["total_score"] for r in rows]
     green_y = [r["flow_score"] for r in rows]
@@ -1905,40 +1979,68 @@ def render_12m_cycle_block_above_options(
     fig_upper.update_yaxes(range=[0, 108], title="相对能量 / 利潤指数 (0-100)", gridcolor="#e2e8f0")
     st.plotly_chart(fig_upper, use_container_width=True)
 
+    # ==================== 下轨：历年季节性时间点资金进出场幅度 + 箭头 ====================
     lower_x = [r["lower_x"] for r in rows]
-    lower_y = [r["flow_pts"] for r in rows]
-    lower_arrows = [r["flow_arrow"] for r in rows]
-    tone_to_hex = {"green": "#16a34a", "yellow": "#eab308", "red": "#dc2626"}
-    lower_colors = [tone_to_hex.get(r["flow_tone"], "#eab308") for r in rows]
+    lower_y = [r["flow_amp_val"] for r in rows]
+    lower_labels = [r["flow_arrow_txt"] for r in rows]
+    lower_colors = ["#16a34a" if r["flow_is_inflow"] else "#dc2626" for r in rows]
+    lower_hover = [
+        f"<b>{r['year_num']}年-{r['month_num']:02d}-{r['m_ganzhi']}</b>（-{r['flow_label']}）<br>"
+        f"方向/幅度: <b>{r['flow_dir_word']} {r['flow_avg_pct']:+.1f}%</b><br>"
+        f"历史依据: {r['flow_src_desc']}<extra></extra>"
+        for r in rows
+    ]
 
     fig_lower = go.Figure()
-    fig_lower.add_hline(y=0, line_dash="dot", line_color="#64748b", line_width=1.2)
-    fig_lower.add_trace(go.Scatter(
-        x=lower_x,
-        y=lower_y,
-        mode="lines+markers+text",
-        name="资金与波动点数",
-        text=lower_arrows,
-        textposition="top center",
-        textfont=dict(size=12, color="#0f172a"),
-        line=dict(color="#334155", width=2.4, dash="dash"),
-        marker=dict(size=13, color=lower_colors, line=dict(color="#0f172a", width=1.5)),
-        hovertemplate="%{x}<br>资金箭头: %{text}<extra></extra>",
-    ))
-    fig_lower.add_vrect(x0=-0.45, x1=0.45, fillcolor="rgba(148, 163, 184, 0.16)", line_width=0)
-    fig_lower.add_vrect(x0=0.55, x1=1.45, fillcolor="rgba(250, 204, 21, 0.20)", line_width=0)
+    fig_lower.add_hline(y=0, line_dash="dash", line_color="#64748b", line_width=1.4)
+
+    for idx_r, r in enumerate(rows):
+        amp_v = r["flow_amp_val"]
+        is_in = r["flow_is_inflow"]
+        col_hex = "#16a34a" if is_in else "#dc2626"
+        # 从 0 轴向幅度点画箭头线段与箭头头部
+        fig_lower.add_trace(go.Scatter(
+            x=[lower_x[idx_r], lower_x[idx_r]],
+            y=[0.0, amp_v],
+            mode="lines",
+            line=dict(color=col_hex, width=4.0),
+            hoverinfo="skip",
+            showlegend=False,
+        ))
+        fig_lower.add_trace(go.Scatter(
+            x=[lower_x[idx_r]],
+            y=[amp_v],
+            mode="markers+text",
+            marker=dict(
+                symbol="triangle-up" if is_in else "triangle-down",
+                size=16,
+                color=col_hex,
+                line=dict(color="#0f172a", width=1.2),
+            ),
+            text=[lower_labels[idx_r]],
+            textposition="top center" if is_in else "bottom center",
+            textfont=dict(size=12, color=col_hex),
+            hovertemplate=lower_hover[idx_r],
+            showlegend=False,
+        ))
+
+    fig_lower.add_vrect(x0=-0.45, x1=0.45, fillcolor="rgba(148, 163, 184, 0.14)", line_width=0)
+    fig_lower.add_vrect(x0=0.55, x1=1.45, fillcolor="rgba(250, 204, 21, 0.18)", line_width=0)
 
     fig_lower.update_layout(
-        title=dict(text=f"② 下轨：{symbol} 逐月柱定性与资金弹性（🟢吸筹 · 🟡洗盘·拉锯 · 🔴派发）", font=dict(size=13.5, color="#0f172a")),
+        title=dict(
+            text=f"② 下轨：{symbol} 历年季节性时间点资金进出场幅度（▲ 资金进场 / ▼ 资金出场）",
+            font=dict(size=13.5, color="#0f172a"),
+        ),
         template="plotly_white",
         paper_bgcolor="#ffffff",
         plot_bgcolor="#ffffff",
-        height=275,
-        margin=dict(l=20, r=16, t=44, b=58),
+        height=300,
+        margin=dict(l=20, r=16, t=46, b=76),
         showlegend=False,
     )
     fig_lower.update_xaxes(tickfont=dict(size=10.5, color="#0f172a"))
-    fig_lower.update_yaxes(range=[-28, 28], title="波动点数", gridcolor="#e2e8f0")
+    fig_lower.update_yaxes(range=[-24, 24], title="资金进出场幅度", gridcolor="#e2e8f0")
     st.plotly_chart(fig_lower, use_container_width=True)
 
     strip_html = "<div style='display:grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap:7px; margin-top:4px;'>"
@@ -1946,6 +2048,7 @@ def render_12m_cycle_block_above_options(
         tone_dot = {"green": "🟢", "yellow": "🟡", "red": "🔴"}[r["flow_tone"]]
         tone_badge = f"{tone_dot} {r['action_label']}"
         tone_col = {"green": "#4ade80", "yellow": "#facc15", "red": "#f87171"}[r["flow_tone"]]
+        flow_col = "#4ade80" if r["flow_is_inflow"] else "#f87171"
         border_c = "2px solid #facc15" if r["slot_role"] == "本月基准" else ("1.5px dashed #94a3b8" if r["col_idx"] == 0 else "1px solid #3b82f6")
         strip_html += (
             f"<div style='background:#07193d; border:{border_c}; border-radius:7px; padding:7px 8px; color:#fff;'>"
@@ -1956,7 +2059,7 @@ def render_12m_cycle_block_above_options(
             f"<div style='font-size:11.5px; color:#fb923c; font-weight:800; margin-top:2px;'>{r['positioning']} · {r['trend_out']}</div>"
             f"<div style='font-size:11px; color:#fca5a5; margin-top:1px;'>红线({symbol}): {r['total_score']:.1f} (生克{r['elem_score']:.0f})</div>"
             f"<div style='font-size:11px; color:#4ade80; margin-top:1px;'>绿线(外卖店): {r['flow_score']:.1f}</div>"
-            f"<div style='font-size:11px; color:#e2e8f0; margin-top:1px;'>下轨: {r['flow_arrow']} · {r['inst_top_label']}</div>"
+            f"<div style='font-size:11px; color:{flow_col}; font-weight:800; margin-top:1px;'>下轨: {r['flow_arrow_txt']} · -{r['flow_label']}</div>"
             f"</div>"
         )
     strip_html += "</div>"
@@ -1968,7 +2071,7 @@ def render_12m_cycle_block_above_options(
 
 active_natal = step1_resolve_individual_stock_fundamentals(st.session_state.selected_ticker)
 
-top_bar_html = "<div class='top-bar'><div class='brand-title'>CAPITAL QUANT v2</div><div class='live-badge'>Auto-Sync Every 3m (180s) | " + datetime.now().strftime('%b %d, %Y %H:%M:%S') + " | Element Engine Integrated</div></div>"
+top_bar_html = "<div class='top-bar'><div class='brand-title'>CAPITAL QUANT v2</div><div class='live-badge'>Auto-Sync Every 3m (180s) | " + datetime.now().strftime('%b %d, %Y %H:%M:%S') + " | Seasonal Flow Engine</div></div>"
 st.markdown(top_bar_html, unsafe_allow_html=True)
 
 n1, n2, n3, n4 = st.columns([1.3, 1.3, 1.6, 2.2])
