@@ -23,21 +23,22 @@ st.set_page_config(page_title="CAPITAL QUANT v2", layout="wide", initial_sidebar
 
 st.markdown("""
 <style>
-    .block-container { padding: 0.3rem 0.8rem 0.8rem 0.8rem !important; max-width: 100% !important; }
+    .block-container { padding: 0.25rem 0.75rem 0.6rem 0.75rem !important; max-width: 100% !important; }
     html, body, [class*="css"] { font-size: 18px !important; }
     .stApp { background: radial-gradient(circle at top center, #0a2558 0%, #040d21 65%, #020712 100%) !important; color: #fff !important; }
     header, footer, #MainMenu {visibility: hidden;}
-    .top-bar { background: linear-gradient(90deg, #061533, #0c275e, #061533); border: 1px solid #2563eb; border-radius: 8px; padding: 8px 15px; display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
-    .brand-title { font-size: 26px !important; font-weight: 800; color: #fff; }
-    .live-badge { color: #4ade80; font-weight: 700; font-size: 17px !important; }
-    .card-header { font-size: 19px !important; font-weight: 800; color: #93c5fd; border-bottom: 1px solid #1e3a8a; padding-bottom: 4px; margin-bottom: 6px; text-transform: uppercase; }
-    .module-container { background: rgba(6, 20, 48, 0.85); border: 1px solid #2563eb; border-radius: 10px; padding: 15px; margin-bottom: 15px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
-    div.stButton > button { background: linear-gradient(180deg, #2563eb, #1d4ed8) !important; color: #fff !important; border: 1px solid #60a5fa !important; border-radius: 6px !important; font-size: 18px !important; font-weight: 700 !important; padding: 6px 12px !important; }
+    div[data-testid="stVerticalBlock"] > div { gap: 0.35rem !important; }
+    .top-bar { background: linear-gradient(90deg, #061533, #0c275e, #061533); border: 1px solid #2563eb; border-radius: 8px; padding: 7px 14px; display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+    .brand-title { font-size: 25px !important; font-weight: 800; color: #fff; }
+    .live-badge { color: #4ade80; font-weight: 700; font-size: 16px !important; }
+    .card-header { font-size: 18px !important; font-weight: 800; color: #93c5fd; border-bottom: 1px solid #1e3a8a; padding-bottom: 3px; margin-bottom: 5px; text-transform: uppercase; }
+    .module-container { background: rgba(6, 20, 48, 0.85); border: 1px solid #2563eb; border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; box-shadow: 0 3px 10px rgba(0,0,0,0.25); }
+    div.stButton > button { background: linear-gradient(180deg, #2563eb, #1d4ed8) !important; color: #fff !important; border: 1px solid #60a5fa !important; border-radius: 6px !important; font-size: 18px !important; font-weight: 700 !important; padding: 5px 10px !important; }
     .stTextInput input, div[data-baseweb="select"] > div { background-color: #07193d !important; color: #fff !important; border: 1px solid #3b82f6 !important; font-size: 18px !important; }
     div[data-testid="stDataFrame"] { border: 1px solid #2563eb !important; border-radius: 8px !important; background-color: #ffffff !important; }
-    .metric-box { background: #061430; border: 1px solid #2563eb; border-radius: 8px; padding: 10px 12px; text-align: center; }
-    .metric-label { font-size: 16px !important; color: #93c5fd; margin-bottom: 2px; font-weight: 700; }
-    .metric-val { font-size: 26px !important; font-weight: 900; color: #fff; }
+    .metric-box { background: #061430; border: 1px solid #2563eb; border-radius: 8px; padding: 9px 12px; text-align: center; }
+    .metric-label { font-size: 15px !important; color: #93c5fd; margin-bottom: 2px; font-weight: 700; }
+    .metric-val { font-size: 25px !important; font-weight: 900; color: #fff; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -249,7 +250,19 @@ def _save_oi_snapshots(snap_data: dict[str, Any]) -> None:
         pass
 
 
-def _record_10d_wall_oi_snapshot(symbol: str, d_key: str, call_strike: float | None, call_oi: int, put_strike: float | None, put_oi: int, spot: float) -> list[dict[str, Any]]:
+def _record_10d_wall_oi_snapshot(
+    symbol: str,
+    d_key: str,
+    call_strike: float | None,
+    call_oi: int,
+    put_strike: float | None,
+    put_oi: int,
+    spot: float,
+) -> list[dict[str, Any]]:
+    """
+    沉淀过往最多10个交易日/到期日的期权墙 OI 快照（若无历史则从当前/最近数据开始记录）。
+    返回近10条历史快照列表（按日期升序）。
+    """
     clean_sym = str(symbol or "").upper().strip()
     today_str = datetime.today().strftime("%Y-%m-%d")
 
@@ -1148,11 +1161,6 @@ def _score_wall_strength(df: pd.DataFrame, delta_days: int = 3) -> pd.DataFrame:
 
 
 def extract_top3_walls(col_cdf, col_pdf, curr_p, delta_days: int = 3):
-    """
-    提取上方 Call 墙与下方 Put 墙：
-    1) 当现价 curr_p 高过候选 Call 墙（strike <= curr_p）时，自动把上方 Call 墙往上一档（取 > curr_p 的行权价）。
-    2) 当现价 curr_p 砸破当前候选 Put 墙（curr_p < candidate_put 或贴近击穿）时，自动把 Put 墙往下跳动到更低支撑行权价。
-    """
     if not _is_valid_chain_pair(col_cdf, col_pdf):
         return [], None, [], None
 
@@ -1162,7 +1170,6 @@ def extract_top3_walls(col_cdf, col_pdf, curr_p, delta_days: int = 3):
     cdf_clean = cdf_scored.sort_values("wall_power", ascending=False).drop_duplicates(subset=["strike"])
     pdf_clean = pdf_scored.sort_values("wall_power", ascending=False).drop_duplicates(subset=["strike"])
 
-    # 上方 Call 墙：严格高于现价 curr_p，若现价超过低档 Call 墙则自动往上一档
     strict_above = cdf_clean[cdf_clean["strike"] > curr_p].copy()
     if strict_above.empty:
         strict_above = cdf_clean.sort_values("strike", ascending=False).head(3).copy()
@@ -1184,7 +1191,6 @@ def extract_top3_walls(col_cdf, col_pdf, curr_p, delta_days: int = 3):
         higher_strikes = sorted([float(s) for s in cdf_clean["strike"] if float(s) > curr_p])
         call_wall_val = higher_strikes[0] if higher_strikes else (c_top_list[0][0] if c_top_list else None)
 
-    # 下方 Put 墙：若股价砸破或逼近击穿候选 Put 墙，自动往下跳动到更低档位
     if delta_days <= 7:
         p_min_bound, p_max_bound = curr_p * 0.85, curr_p * 1.005
     else:
@@ -1207,7 +1213,6 @@ def extract_top3_walls(col_cdf, col_pdf, curr_p, delta_days: int = 3):
 
     raw_put_wall = max(p_bot_list, key=lambda x: x[1])[0] if p_bot_list else None
     if raw_put_wall is not None:
-        # 股价砸破（或跌至击穿边缘 curr_p <= raw_put_wall * 1.003）时，自动往下跳到更低一档 Put 墙
         if curr_p <= raw_put_wall * 1.003:
             lower_candidates = sorted(
                 [float(s) for s in pdf_clean["strike"] if float(s) < min(raw_put_wall, curr_p)],
@@ -1250,7 +1255,6 @@ def compute_aggregate_real_walls(combined_by_day: dict[str, dict[str, Any]], spo
     if c_above.empty:
         c_above = c_all[c_all["strike"] > spot].sort_values("strike", ascending=True).head(3)
 
-    # 下方 Put 墙优先取严格低于现价（< spot）的支撑档，避免把已被砸破的价位算作稳固支撑
     p_below = p_all[(p_all["strike"] < spot * 0.997) & (p_all["strike"] >= spot * 0.75)].sort_values("power", ascending=False).head(3)
     if p_below.empty:
         p_below = p_all[p_all["strike"] < spot].sort_values("strike", ascending=False).head(3)
@@ -1325,40 +1329,70 @@ def pull_and_filter_real_expirations_locally(symbol: str, spot: float, max_cols:
     return cols_data, has_any_real_data, live_count, status_msg, cache_time, agg_walls
 
 
-def _style_oi_cell(cur_val: int, ref_val: int, is_put: bool = False) -> tuple[str, str]:
-    if ref_val <= 0:
-        return "#0f172a", "#ffffff"
+def _style_wall_count_cell(cur_val: int, ref_val: int | None, is_baseline_col: bool = False) -> tuple[str, str]:
+    """
+    统一 Call Wall 与 Put Wall 数量变动变色规则：
+    - 数量增加 -> 绿色 (#15803d / #dcfce7)
+    - 数量减少 -> 红色 (#b91c1c / #fee2e2)
+    - 变动很小 / 持平 -> 黑色 (#0f172a) 或黄色 (#ca8a04 / #fef9c3)
+    """
+    if is_baseline_col:
+        return "#0f172a", "#fef08a"
+    if ref_val is None or ref_val <= 0:
+        return "#0f172a", "#fef9c3"
     diff = cur_val - ref_val
     pct = (diff / ref_val) * 100.0
-    if not is_put:
-        if diff > 0 and abs(pct) >= 0.5:
-            return "#15803d", "#dcfce7"
-        return "#0f172a", "#ffffff"
-    else:
-        if diff > 0 and abs(pct) >= 0.5:
-            return "#b91c1c", "#fee2e2"
-        return "#0f172a", "#ffffff"
+    if abs(pct) < 0.5 or diff == 0:
+        return "#ca8a04", "#fef9c3"
+    if diff > 0:
+        return "#15803d", "#dcfce7"
+    return "#b91c1c", "#fee2e2"
 
 
 def build_handwritten_style_oi_table_html(symbol: str, spot: float, prev_spot: float | None = None) -> str:
+    """
+    10 个期权到期日列（最新/今天到期日如 27/11 放在最右侧第 10 栏）：
+    - 左侧 9 栏为较早/前面 9 个期权到期日，最右侧第 10 栏为当前/最近到期日（如 27/11），随每日沉淀逐步攒齐过去10天对比
+    - Call Wall 与 Put Wall 数量：增加变绿、减少变红、变动很小保持黑/黄
+    """
     clean_sym = str(symbol or "").upper().strip()
     today = datetime.today()
     today_str = today.strftime("%Y-%m-%d")
 
     all_days, combined_by_day, _, status_msg, cache_time = _collect_multi_source_options(clean_sym)
-    exp_keys = _build_company_real_day_keys(all_days, today, max_cols=5)
+    exp_keys = _build_company_real_day_keys(all_days, today, max_cols=10)
     if not exp_keys:
         exp_keys = [today_str]
 
+    # 最右侧（第10栏）放今天/最近到期日（exp_keys[0]），左侧按时间顺序排列前面9栏
+    ordered_keys = list(reversed(exp_keys[:10]))
+    while len(ordered_keys) < 10:
+        ordered_keys.insert(0, "—")
+
     exp_cols: list[dict[str, Any]] = []
-    for idx_e, d_key in enumerate(exp_keys[:5]):
+    for idx_e, d_key in enumerate(ordered_keys):
+        if d_key == "—":
+            exp_cols.append({
+                "d_key": "—",
+                "col_title": "—",
+                "is_latest_col": (idx_e == 9),
+                "cdf": pd.DataFrame(),
+                "pdf": pd.DataFrame(),
+                "c_oi": {},
+                "p_oi": {},
+            })
+            continue
+
         dt_e = datetime.strptime(d_key, "%Y-%m-%d")
         dm_e = dt_e.strftime("%d/%m")
         delta_e = (dt_e.date() - today.date()).days
-        if idx_e == 0:
-            col_title = f"{dm_e} (今天)" if delta_e == 0 else f"{dm_e} (最近)"
+        is_latest_col = (idx_e == 9)
+        if is_latest_col:
+            col_title = f"{dm_e} (今天)" if delta_e == 0 else f"{dm_e} (最新)"
+        elif delta_e == 0:
+            col_title = f"{dm_e}"
         else:
-            col_title = f"{dm_e} (+{delta_e}天)"
+            col_title = f"{dm_e} (+{delta_e}d)"
 
         rec_e = combined_by_day.get(d_key, {})
         cdf_e = rec_e.get("cdf", pd.DataFrame())
@@ -1377,30 +1411,23 @@ def build_handwritten_style_oi_table_html(symbol: str, spot: float, prev_spot: f
         exp_cols.append({
             "d_key": d_key,
             "col_title": col_title,
+            "is_latest_col": is_latest_col,
             "cdf": cdf_e,
             "pdf": pdf_e,
             "c_oi": c_oi_e,
             "p_oi": p_oi_e,
         })
 
-    while len(exp_cols) < 5:
-        exp_cols.append({
-            "d_key": "—",
-            "col_title": "—",
-            "cdf": pd.DataFrame(),
-            "pdf": pd.DataFrame(),
-            "c_oi": {},
-            "p_oi": {},
-        })
+    latest_col = exp_cols[-1]
+    c_top_list, main_call_wall, p_bot_list, main_put_wall = extract_top3_walls(
+        latest_col["cdf"], latest_col["pdf"], spot, delta_days=0
+    )
 
-    first_col = exp_cols[0]
-    c_top_list, main_call_wall, p_bot_list, main_put_wall = extract_top3_walls(first_col["cdf"], first_col["pdf"], spot, delta_days=0)
-
-    main_c_oi = int(first_col["c_oi"].get(float(main_call_wall), 0)) if main_call_wall is not None else 0
-    main_p_oi = int(first_col["p_oi"].get(float(main_put_wall), 0)) if main_put_wall is not None else 0
+    main_c_oi = int(latest_col["c_oi"].get(float(main_call_wall), 0)) if main_call_wall is not None else 0
+    main_p_oi = int(latest_col["p_oi"].get(float(main_put_wall), 0)) if main_put_wall is not None else 0
     hist_10d = _record_10d_wall_oi_snapshot(
         symbol=clean_sym,
-        d_key=first_col["d_key"],
+        d_key=latest_col["d_key"],
         call_strike=main_call_wall,
         call_oi=main_c_oi,
         put_strike=main_put_wall,
@@ -1415,15 +1442,15 @@ def build_handwritten_style_oi_table_html(symbol: str, spot: float, prev_spot: f
     c_diff = main_c_oi - prev_c_oi if prev_snap and prev_c_oi > 0 else 0
     p_diff = main_p_oi - prev_p_oi if prev_snap and prev_p_oi > 0 else 0
 
-    c_monitor_color = "#15803d" if c_diff > 0 else "#0f172a"
-    p_monitor_color = "#b91c1c" if p_diff > 0 else "#0f172a"
+    c_monitor_color = "#15803d" if c_diff > 0 else ("#b91c1c" if c_diff < 0 else "#0f172a")
+    p_monitor_color = "#15803d" if p_diff > 0 else ("#b91c1c" if p_diff < 0 else "#0f172a")
 
-    c_trend_txt = f"Call Wall({main_call_wall:g}) OI: {main_c_oi:,} ({c_diff:+,})" if main_call_wall is not None else "Call Wall: —"
-    p_trend_txt = f"Put Wall({main_put_wall:g}) OI: {main_p_oi:,} ({p_diff:+,})" if main_put_wall is not None else "Put Wall: —"
+    c_trend_txt = f"Call Wall({main_call_wall:g}) 数量: {main_c_oi:,} ({c_diff:+,})" if main_call_wall is not None else "Call Wall: —"
+    p_trend_txt = f"Put Wall({main_put_wall:g}) 数量: {main_p_oi:,} ({p_diff:+,})" if main_put_wall is not None else "Put Wall: —"
 
     up_strikes = [float(k) for k, _ in c_top_list]
     if len(up_strikes) < 3:
-        avail_c = sorted([k for k in first_col["c_oi"].keys() if k > spot])
+        avail_c = sorted([k for k in latest_col["c_oi"].keys() if k > spot])
         for k in avail_c:
             if k not in up_strikes:
                 up_strikes.append(k)
@@ -1431,7 +1458,6 @@ def build_handwritten_style_oi_table_html(symbol: str, spot: float, prev_spot: f
                 break
         up_strikes = sorted(up_strikes, reverse=True)[:3]
 
-    # 下方档位优先放当前 Put Wall 及低于现价的支撑行权价，被砸破时随 Put Wall 往下顺移
     dn_strikes: list[float] = []
     if main_put_wall is not None:
         dn_strikes.append(float(main_put_wall))
@@ -1440,7 +1466,7 @@ def build_handwritten_style_oi_table_html(symbol: str, spot: float, prev_spot: f
         if fk < spot and fk not in dn_strikes:
             dn_strikes.append(fk)
     if len(dn_strikes) < 3:
-        avail_p = sorted([k for k in first_col["p_oi"].keys() if k < spot], reverse=True)
+        avail_p = sorted([k for k in latest_col["p_oi"].keys() if k < spot], reverse=True)
         for k in avail_p:
             if k not in dn_strikes:
                 dn_strikes.append(k)
@@ -1455,9 +1481,8 @@ def build_handwritten_style_oi_table_html(symbol: str, spot: float, prev_spot: f
             k_val = strikes_list[idx_s] if idx_s < len(strikes_list) else None
             if k_val is not None:
                 day_cells: list[dict[str, str]] = []
-                ref_oi_val = (prev_p_oi if is_put_side else prev_c_oi) if prev_snap else 0
                 prev_val: int | None = None
-                for d_idx in range(5):
+                for d_idx in range(10):
                     col_obj = exp_cols[d_idx]
                     oi_map = col_obj["p_oi"] if is_put_side else col_obj["c_oi"]
                     if col_obj["d_key"] == "—":
@@ -1465,16 +1490,8 @@ def build_handwritten_style_oi_table_html(symbol: str, spot: float, prev_spot: f
                         continue
 
                     val_i = int(oi_map.get(k_val, 0))
-                    if d_idx == 0:
-                        if ref_oi_val > 0 and idx_s == 0:
-                            fg_c, bg_c = _style_oi_cell(val_i, ref_oi_val, is_put=is_put_side)
-                        else:
-                            fg_c, bg_c = "#0f172a", "#fef9c3"
-                    else:
-                        if prev_val is not None and prev_val > 0:
-                            fg_c, bg_c = _style_oi_cell(val_i, prev_val, is_put=is_put_side)
-                        else:
-                            fg_c, bg_c = "#0f172a", "#ffffff"
+                    is_last = col_obj.get("is_latest_col", False)
+                    fg_c, bg_c = _style_wall_count_cell(val_i, prev_val, is_baseline_col=is_last)
 
                     day_cells.append({
                         "txt": f"{val_i:,}",
@@ -1492,28 +1509,29 @@ def build_handwritten_style_oi_table_html(symbol: str, spot: float, prev_spot: f
                 built.append({
                     "label": lbl,
                     "strike_txt": "—",
-                    "cells": [{"txt": "—", "fg": "#0f172a", "bg": "#ffffff"} for _ in range(5)],
+                    "cells": [{"txt": "—", "fg": "#0f172a", "bg": "#ffffff"} for _ in range(10)],
                 })
         return built
 
     up_rows = _build_side_rows(up_strikes, ["上3档", "上2档", "上1档"], is_put_side=False)
     dn_rows = _build_side_rows(dn_strikes, ["下1档", "下2档", "下3档"], is_put_side=True)
 
-    spot_cells = [round(spot * (1.0 + 0.002 * i), 2) for i in range(5)]
+    spot_cells = [round(spot * (1.0 + 0.001 * (i - 9)), 2) for i in range(10)]
+    spot_cells[-1] = round(spot, 2)
+
     cache_tag = f" | 缓存:{cache_time}" if cache_time else ""
-    today_dm = today.strftime("%d/%m")
-    exp_list_txt = " / ".join([c["d_key"] for c in exp_cols if c["d_key"] != "—"])
+    latest_dm = latest_col["col_title"].split(" ")[0] if latest_col["d_key"] != "—" else today.strftime("%d/%m")
     hist_days_cnt = len(hist_10d)
 
     def _render_data_tr(r_obj: dict[str, Any]) -> str:
         tds = "".join([
-            f"<td style='border:1px solid #334155; padding:7px 5px; font-weight:900; color:{c['fg']}; background:{c['bg']}; text-align:center;'>{c['txt']}</td>"
+            f"<td style='border:1px solid #334155; padding:5px 3px; font-weight:900; color:{c['fg']}; background:{c['bg']}; text-align:center; font-size:12px;'>{c['txt']}</td>"
             for c in r_obj["cells"]
         ])
         return f"""
         <tr>
-            <td style="border:1px solid #334155; padding:7px 5px; font-weight:900; color:#0f172a; background:#f8fafc; text-align:center;">{r_obj['label']}</td>
-            <td style="border:1px solid #334155; padding:7px 5px; font-weight:900; color:#0f172a; background:#ffffff; text-align:center;">{r_obj['strike_txt']}</td>
+            <td style="border:1px solid #334155; padding:5px 3px; font-weight:900; color:#0f172a; background:#f8fafc; text-align:center; font-size:12px;">{r_obj['label']}</td>
+            <td style="border:1px solid #334155; padding:5px 3px; font-weight:900; color:#0f172a; background:#ffffff; text-align:center; font-size:12px;">{r_obj['strike_txt']}</td>
             {tds}
         </tr>
         """
@@ -1521,45 +1539,45 @@ def build_handwritten_style_oi_table_html(symbol: str, spot: float, prev_spot: f
     up_html = "".join([_render_data_tr(x) for x in up_rows])
     dn_html = "".join([_render_data_tr(x) for x in dn_rows])
     ths_html = "".join([
-        f"<th style='border:1px solid #334155; padding:7px 5px; font-weight:900; color:#0f172a; text-align:center; background:{'#fef08a' if idx_h == 0 else '#f1f5f9'};'>{c_obj['col_title']}</th>"
-        for idx_h, c_obj in enumerate(exp_cols)
+        f"<th style='border:1px solid #334155; padding:5px 3px; font-weight:900; color:#0f172a; text-align:center; font-size:11.5px; background:{'#fef08a' if c_obj.get('is_latest_col') else '#f1f5f9'};'>{c_obj['col_title']}</th>"
+        for c_obj in exp_cols
     ])
     spot_tds_html = "".join([
-        f"<td style='border:1px solid #334155; padding:7px 5px; font-weight:900; color:#0f172a; text-align:center; background:{'#fde047' if idx_s == 0 else '#fef9c3'};'>{sp_v:.2f}</td>"
+        f"<td style='border:1px solid #334155; padding:5px 3px; font-weight:900; color:#0f172a; text-align:center; font-size:12px; background:{'#fde047' if idx_s == 9 else '#fef9c3'};'>{sp_v:.2f}</td>"
         for idx_s, sp_v in enumerate(spot_cells)
     ])
 
     html = f"""
-    <div style="background:#ffffff; border:2px solid #1e293b; border-radius:8px; padding:10px 12px; margin-top:8px; font-family:sans-serif; color:#0f172a; width:100%; box-sizing:border-box;">
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; padding-bottom:5px; border-bottom:2px solid #1e293b;">
-            <div style="font-size:15px; font-weight:900; color:#0f172a;">
-                📝 {today_dm} {clean_sym} 期权未平仓数量（今天起 + 未来4个到期日: {exp_list_txt}）· {status_msg}{cache_tag}
+    <div style="background:#ffffff; border:2px solid #1e293b; border-radius:8px; padding:8px 10px; margin:0; font-family:sans-serif; color:#0f172a; width:100%; box-sizing:border-box;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px; padding-bottom:4px; border-bottom:2px solid #1e293b;">
+            <div style="font-size:14px; font-weight:900; color:#0f172a;">
+                📝 {latest_dm} {clean_sym} 期权墙数量10期对比（第10栏为 {latest_dm} 最新基准）· {status_msg}{cache_tag}
             </div>
-            <div style="display:flex; gap:14px; font-size:12.5px; font-weight:900;">
-                <span style="color:#15803d;">■ Call Wall OI 升 → 绿色</span>
-                <span style="color:#0f172a;">■ 变动很小 → 黑色</span>
-                <span style="color:#b91c1c;">■ Put Wall OI 升 → 红色</span>
+            <div style="display:flex; gap:12px; font-size:12px; font-weight:900;">
+                <span style="color:#15803d;">■ 数量增加 → 绿色</span>
+                <span style="color:#b91c1c;">■ 数量减少 → 红色</span>
+                <span style="color:#ca8a04;">■ 变动很小/基准 → 黄/黑</span>
             </div>
         </div>
-        <div style="background:#f8fafc; border:1px solid #cbd5e1; border-radius:5px; padding:4px 8px; margin-bottom:7px; font-size:12.5px; font-weight:800; display:flex; justify-content:space-between;">
-            <span>过去10天快照已沉淀: <b>{hist_days_cnt}/10 天</b>（从当前/最近读取自动累积）</span>
+        <div style="background:#f8fafc; border:1px solid #cbd5e1; border-radius:5px; padding:3px 8px; margin-bottom:5px; font-size:12px; font-weight:800; display:flex; justify-content:space-between;">
+            <span>过去10天快照已沉淀: <b>{hist_days_cnt}/10 天</b>（从当前/最近数据自动累积）</span>
             <span style="color:{c_monitor_color};">{c_trend_txt}</span>
             <span style="color:{p_monitor_color};">{p_trend_txt}</span>
         </div>
 
-        <table style="width:100%; border-collapse:collapse; table-layout:fixed; border:2px solid #1e293b; font-size:14px;">
+        <table style="width:100%; border-collapse:collapse; table-layout:fixed; border:2px solid #1e293b; font-size:12px;">
             <thead>
                 <tr style="background:#f1f5f9; border-bottom:2px solid #1e293b;">
-                    <th style="border:1px solid #334155; padding:7px 5px; font-weight:900; color:#0f172a; text-align:center;">期权</th>
-                    <th style="border:1px solid #334155; padding:7px 5px; font-weight:900; color:#0f172a; text-align:center;">价位</th>
+                    <th style="border:1px solid #334155; padding:5px 3px; font-weight:900; color:#0f172a; text-align:center; width:62px;">期权</th>
+                    <th style="border:1px solid #334155; padding:5px 3px; font-weight:900; color:#0f172a; text-align:center; width:62px;">价位</th>
                     {ths_html}
                 </tr>
             </thead>
             <tbody>
                 {up_html}
                 <tr style="background:#fef9c3; border-top:2px solid #1e293b; border-bottom:2px solid #1e293b;">
-                    <td style="border:1px solid #334155; padding:7px 5px; font-weight:900; color:#0f172a; background:#fef08a; text-align:center;">当天价</td>
-                    <td style="border:1px solid #334155; padding:7px 5px; font-weight:900; color:#0f172a; background:#fef08a; text-align:center;">{spot:.2f}</td>
+                    <td style="border:1px solid #334155; padding:5px 3px; font-weight:900; color:#0f172a; background:#fef08a; text-align:center;">当天价</td>
+                    <td style="border:1px solid #334155; padding:5px 3px; font-weight:900; color:#0f172a; background:#fef08a; text-align:center;">{spot:.2f}</td>
                     {spot_tds_html}
                 </tr>
                 {dn_html}
@@ -2219,12 +2237,12 @@ def render_12m_cycle_block_above_options(
     now_dt = datetime.today()
     rows, meta = build_12m_stock_series(symbol, ref_dt=now_dt, m_data=m_data, cdf=cdf, pdf=pdf)
 
-    st.markdown("<div class='module-container' style='padding:12px 14px; margin-bottom:10px;'>", unsafe_allow_html=True)
+    st.markdown("<div class='module-container' style='padding:10px 12px; margin-bottom:6px;'>", unsafe_allow_html=True)
 
     top_h1, top_h2 = st.columns([4.2, 2.2])
     top_h1.markdown(
         f"<div class='card-header' style='margin-bottom:2px;'>🧭 {symbol} 独立五行12月能量面板 · 生克加权引擎 ({meta['engine_id']})</div>"
-        f"<div style='font-size:13.5px; color:#cbd5e1;'>"
+        f"<div style='font-size:13px; color:#cbd5e1;'>"
         f"① 个股独立五行盘({meta['cohort_type']}·{meta['vol_regime']}): <b>{meta['birthday_mode']} · 日柱 {meta['ganzhi']} · {meta['wuxing_positioning']}</b><br>"
         f"② 加权推演公式: <b>{meta['era_phase']}</b> | <b>{meta['era_trend']}</b><br>"
         f"本月指数: <b><span style='color:#93c5fd;'>{meta['cur_split_desc']}</span></b> | "
@@ -2279,7 +2297,7 @@ def render_12m_cycle_block_above_options(
 
     if meta["alerts"]:
         st.markdown(
-            f"<div style='background:#1e1b4b; border:1px solid #facc15; border-radius:7px; padding:6px 10px; margin:6px 0; font-size:13px; color:#fde047; font-weight:800;'>"
+            f"<div style='background:#1e1b4b; border:1px solid #facc15; border-radius:7px; padding:5px 9px; margin:4px 0; font-size:12.5px; color:#fde047; font-weight:800;'>"
             + " ｜ ".join(meta["alerts"])
             + "</div>",
             unsafe_allow_html=True,
@@ -2304,9 +2322,9 @@ def render_12m_cycle_block_above_options(
         name=f"红线：{symbol} [属{meta['element']}] 综合能量线",
         text=[f"{v:.0f}" for v in red_y],
         textposition=red_text_pos,
-        textfont=dict(size=12.5, color="#b91c1c"),
+        textfont=dict(size=12, color="#b91c1c"),
         line=dict(color="#ef4444", width=3.0),
-        marker=dict(size=9, color="#ef4444", line=dict(color="#ffffff", width=1.2)),
+        marker=dict(size=8.5, color="#ef4444", line=dict(color="#ffffff", width=1.2)),
         hovertemplate=upper_hover,
     ))
     fig_upper.add_trace(go.Scatter(
@@ -2318,7 +2336,7 @@ def render_12m_cycle_block_above_options(
         textposition=green_text_pos,
         textfont=dict(size=12, color="#15803d"),
         line=dict(color="#16a34a", width=3.0),
-        marker=dict(size=9, color="#16a34a", line=dict(color="#ffffff", width=1.2)),
+        marker=dict(size=8.5, color="#16a34a", line=dict(color="#ffffff", width=1.2)),
         hovertemplate="%{x}<br>绿线(实体外卖店): %{y:.1f}<extra></extra>",
     ))
     fig_upper.add_vrect(x0=-0.45, x1=0.45, fillcolor="rgba(148, 163, 184, 0.16)", line_width=0)
@@ -2342,8 +2360,8 @@ def render_12m_cycle_block_above_options(
         template="plotly_white",
         paper_bgcolor="#ffffff",
         plot_bgcolor="#ffffff",
-        height=325,
-        margin=dict(l=20, r=16, t=54, b=66),
+        height=315,
+        margin=dict(l=20, r=16, t=50, b=62),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
     )
     fig_upper.update_xaxes(tickfont=dict(size=10.5, color="#0f172a"))
@@ -2402,16 +2420,17 @@ def render_12m_cycle_block_above_options(
         template="plotly_white",
         paper_bgcolor="#ffffff",
         plot_bgcolor="#ffffff",
-        height=300,
-        margin=dict(l=20, r=16, t=46, b=76),
+        height=290,
+        margin=dict(l=20, r=16, t=44, b=72),
         showlegend=False,
     )
     fig_lower.update_xaxes(tickfont=dict(size=10.5, color="#0f172a"))
     fig_lower.update_yaxes(range=[-24, 24], title="资金进出场幅度", gridcolor="#e2e8f0")
     st.plotly_chart(fig_lower, use_container_width=True)
 
+    # 紧凑高度去除底部黑色空间
     oi_handwritten_html = build_handwritten_style_oi_table_html(symbol, spot_price, prev_spot=prev_spot)
-    st.components.v1.html(oi_handwritten_html, height=455, scrolling=False)
+    st.components.v1.html(oi_handwritten_html, height=345, scrolling=False)
     st.markdown("</div>", unsafe_allow_html=True)
 
 
@@ -2434,7 +2453,7 @@ if n3.button("3. Options Intelligence", use_container_width=True):
     st.rerun()
 st.session_state.use_live_api = n4.toggle("启用行情接口", value=st.session_state.use_live_api)
 
-st.markdown("<div style='border-bottom: 1px solid #1e3a8a; margin: 4px 0 6px 0;'></div>", unsafe_allow_html=True)
+st.markdown("<div style='border-bottom: 1px solid #1e3a8a; margin: 3px 0 4px 0;'></div>", unsafe_allow_html=True)
 
 
 # ==================== PAGE 1: MARKET WATCH ====================
@@ -2715,8 +2734,9 @@ elif st.session_state.page == "Options Intelligence":
 
     render_12m_cycle_block_above_options(sym, m_data=m_opt, cdf=cdf, pdf=pdf, spot_price=spot, prev_spot=prev_spot_val)
 
+    # 紧凑高度去掉底部黑色空间
     matrix_html = build_custom_option_matrix_html(sym, spot)
-    st.components.v1.html(matrix_html, height=665, scrolling=False)
+    st.components.v1.html(matrix_html, height=585, scrolling=False)
 
     st.markdown("<div class='module-container'>", unsafe_allow_html=True)
     hdr_c1, hdr_c2 = st.columns([4.5, 1.5])
