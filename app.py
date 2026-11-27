@@ -249,6 +249,44 @@ def _save_oi_snapshots(snap_data: dict[str, Any]) -> None:
         pass
 
 
+def _record_10d_wall_oi_snapshot(symbol: str, d_key: str, call_strike: float | None, call_oi: int, put_strike: float | None, put_oi: int, spot: float) -> list[dict[str, Any]]:
+    clean_sym = str(symbol or "").upper().strip()
+    today_str = datetime.today().strftime("%Y-%m-%d")
+
+    disk_snaps = _load_oi_snapshots()
+    hist_root = disk_snaps.setdefault("_10d_wall_history", {})
+    sym_hist: list[dict[str, Any]] = list(hist_root.get(clean_sym, []))
+
+    mem_hist_root = st.session_state.setdefault("_10d_wall_history_mem", {})
+    mem_hist: list[dict[str, Any]] = list(mem_hist_root.get(clean_sym, []))
+
+    merged_by_date: dict[str, dict[str, Any]] = {}
+    for item in sym_hist + mem_hist:
+        dt_k = str(item.get("date", "")).strip()
+        if dt_k:
+            merged_by_date[dt_k] = item
+
+    cur_rec = {
+        "date": today_str,
+        "exp_key": d_key,
+        "spot": round(float(spot), 2),
+        "call_strike": float(call_strike) if call_strike is not None else None,
+        "call_oi": int(call_oi),
+        "put_strike": float(put_strike) if put_strike is not None else None,
+        "put_oi": int(put_oi),
+        "updated_at": datetime.now().strftime("%H:%M:%S"),
+    }
+    merged_by_date[today_str] = cur_rec
+
+    sorted_dates = sorted(merged_by_date.keys())[-10:]
+    trimmed_list = [merged_by_date[k] for k in sorted_dates]
+
+    hist_root[clean_sym] = trimmed_list
+    mem_hist_root[clean_sym] = trimmed_list
+    _save_oi_snapshots(disk_snaps)
+    return trimmed_list
+
+
 def _ts_or_str_to_ymd(val: Any) -> str | None:
     if val is None:
         return None
@@ -1110,6 +1148,11 @@ def _score_wall_strength(df: pd.DataFrame, delta_days: int = 3) -> pd.DataFrame:
 
 
 def extract_top3_walls(col_cdf, col_pdf, curr_p, delta_days: int = 3):
+    """
+    提取上方 Call 墙与下方 Put 墙：
+    1) 当现价 curr_p 高过候选 Call 墙（strike <= curr_p）时，自动把上方 Call 墙往上一档（取 > curr_p 的行权价）。
+    2) 当现价 curr_p 砸破当前候选 Put 墙（curr_p < candidate_put 或贴近击穿）时，自动把 Put 墙往下跳动到更低支撑行权价。
+    """
     if not _is_valid_chain_pair(col_cdf, col_pdf):
         return [], None, [], None
 
@@ -1119,25 +1162,29 @@ def extract_top3_walls(col_cdf, col_pdf, curr_p, delta_days: int = 3):
     cdf_clean = cdf_scored.sort_values("wall_power", ascending=False).drop_duplicates(subset=["strike"])
     pdf_clean = pdf_scored.sort_values("wall_power", ascending=False).drop_duplicates(subset=["strike"])
 
-    if delta_days <= 7:
-        c_min_bound, c_max_bound = curr_p * 0.96, curr_p * 1.12
-    else:
-        c_min_bound, c_max_bound = curr_p * 0.98, curr_p * 1.18
+    # 上方 Call 墙：严格高于现价 curr_p，若现价超过低档 Call 墙则自动往上一档
+    strict_above = cdf_clean[cdf_clean["strike"] > curr_p].copy()
+    if strict_above.empty:
+        strict_above = cdf_clean.sort_values("strike", ascending=False).head(3).copy()
 
-    above_df = cdf_clean[(cdf_clean["strike"] >= c_min_bound) & (cdf_clean["strike"] <= c_max_bound)].copy()
-    if len(above_df) < 3:
-        above_df = cdf_clean[(cdf_clean["strike"] >= curr_p * 0.94) & (cdf_clean["strike"] <= curr_p * 1.25)].copy()
-    if above_df.empty:
-        above_df = cdf_clean.copy()
+    band_above = strict_above[strict_above["strike"] <= curr_p * 1.25].copy()
+    if len(band_above) < 3:
+        band_above = strict_above.copy()
 
     top3_calls = (
-        above_df.sort_values(by="wall_power", ascending=False)
+        band_above.sort_values(by="wall_power", ascending=False)
         .head(3)
         .sort_values(by="strike", ascending=False)
     )
     c_top_list = [(float(r["strike"]), int(r["wall_power"])) for _, r in top3_calls.iterrows()]
-    call_wall_val = max(c_top_list, key=lambda x: x[1])[0] if c_top_list else None
+    above_only = [x for x in c_top_list if x[0] > curr_p]
+    if above_only:
+        call_wall_val = max(above_only, key=lambda x: x[1])[0]
+    else:
+        higher_strikes = sorted([float(s) for s in cdf_clean["strike"] if float(s) > curr_p])
+        call_wall_val = higher_strikes[0] if higher_strikes else (c_top_list[0][0] if c_top_list else None)
 
+    # 下方 Put 墙：若股价砸破或逼近击穿候选 Put 墙，自动往下跳动到更低档位
     if delta_days <= 7:
         p_min_bound, p_max_bound = curr_p * 0.85, curr_p * 1.005
     else:
@@ -1157,7 +1204,29 @@ def extract_top3_walls(col_cdf, col_pdf, curr_p, delta_days: int = 3):
         .sort_values(by="strike", ascending=True)
     )
     p_bot_list = [(float(r["strike"]), int(r["wall_power"])) for _, r in top3_puts.iterrows()]
-    put_wall_val = max(p_bot_list, key=lambda x: x[1])[0] if p_bot_list else None
+
+    raw_put_wall = max(p_bot_list, key=lambda x: x[1])[0] if p_bot_list else None
+    if raw_put_wall is not None:
+        # 股价砸破（或跌至击穿边缘 curr_p <= raw_put_wall * 1.003）时，自动往下跳到更低一档 Put 墙
+        if curr_p <= raw_put_wall * 1.003:
+            lower_candidates = sorted(
+                [float(s) for s in pdf_clean["strike"] if float(s) < min(raw_put_wall, curr_p)],
+                reverse=True,
+            )
+            if lower_candidates:
+                lower_power_map = {
+                    float(r["strike"]): float(r["wall_power"])
+                    for _, r in pdf_clean.iterrows()
+                    if float(r["strike"]) < min(raw_put_wall, curr_p)
+                }
+                top_lower_pool = lower_candidates[:4]
+                put_wall_val = max(top_lower_pool, key=lambda s: (lower_power_map.get(s, 0.0), s))
+            else:
+                put_wall_val = raw_put_wall
+        else:
+            put_wall_val = raw_put_wall
+    else:
+        put_wall_val = None
 
     return c_top_list, call_wall_val, p_bot_list, put_wall_val
 
@@ -1177,11 +1246,17 @@ def compute_aggregate_real_walls(combined_by_day: dict[str, dict[str, Any]], spo
     c_all["power"] = c_all["openInterest"] + c_all["volume"] * 1.3
     p_all["power"] = p_all["openInterest"] + p_all["volume"] * 1.3
 
-    c_band = c_all[(c_all["strike"] >= spot * 0.94) & (c_all["strike"] <= spot * 1.15)].sort_values("power", ascending=False).head(3)
-    p_band = p_all[(p_all["strike"] >= spot * 0.75) & (p_all["strike"] <= spot * 0.99)].sort_values("power", ascending=False).head(3)
+    c_above = c_all[(c_all["strike"] > spot) & (c_all["strike"] <= spot * 1.25)].sort_values("power", ascending=False).head(3)
+    if c_above.empty:
+        c_above = c_all[c_all["strike"] > spot].sort_values("strike", ascending=True).head(3)
 
-    c_list = [(float(r["strike"]), int(r["power"]), float(r["strike"]) < spot) for _, r in c_band.iterrows()]
-    p_list = [(float(r["strike"]), int(r["power"]), float(r["strike"]) > spot) for _, r in p_band.iterrows()]
+    # 下方 Put 墙优先取严格低于现价（< spot）的支撑档，避免把已被砸破的价位算作稳固支撑
+    p_below = p_all[(p_all["strike"] < spot * 0.997) & (p_all["strike"] >= spot * 0.75)].sort_values("power", ascending=False).head(3)
+    if p_below.empty:
+        p_below = p_all[p_all["strike"] < spot].sort_values("strike", ascending=False).head(3)
+
+    c_list = [(float(r["strike"]), int(r["power"]), False) for _, r in c_above.iterrows()]
+    p_list = [(float(r["strike"]), int(r["power"]), float(r["strike"]) > spot) for _, r in p_below.iterrows()]
     return {"call_walls": c_list, "put_walls": p_list}
 
 
@@ -1256,20 +1331,16 @@ def _style_oi_cell(cur_val: int, ref_val: int, is_put: bool = False) -> tuple[st
     diff = cur_val - ref_val
     pct = (diff / ref_val) * 100.0
     if not is_put:
-        if diff > 0 and abs(pct) >= 1.0:
+        if diff > 0 and abs(pct) >= 0.5:
             return "#15803d", "#dcfce7"
         return "#0f172a", "#ffffff"
     else:
-        if diff > 0 and pct >= 1.0:
+        if diff > 0 and abs(pct) >= 0.5:
             return "#b91c1c", "#fee2e2"
         return "#0f172a", "#ffffff"
 
 
 def build_handwritten_style_oi_table_html(symbol: str, spot: float, prev_spot: float | None = None) -> str:
-    """
-    按手画稿演变格式渲染（列 = 今天/最近到期日 + 未来4个真实期权到期日，共5列）：
-    行：上3档、上2档、上1档、当天价（横跨整行）、下1档、下2档、下3档
-    """
     clean_sym = str(symbol or "").upper().strip()
     today = datetime.today()
     today_str = today.strftime("%Y-%m-%d")
@@ -1323,11 +1394,36 @@ def build_handwritten_style_oi_table_html(symbol: str, spot: float, prev_spot: f
         })
 
     first_col = exp_cols[0]
-    c_top_list, _, p_bot_list, _ = extract_top3_walls(first_col["cdf"], first_col["pdf"], spot, delta_days=0)
+    c_top_list, main_call_wall, p_bot_list, main_put_wall = extract_top3_walls(first_col["cdf"], first_col["pdf"], spot, delta_days=0)
+
+    main_c_oi = int(first_col["c_oi"].get(float(main_call_wall), 0)) if main_call_wall is not None else 0
+    main_p_oi = int(first_col["p_oi"].get(float(main_put_wall), 0)) if main_put_wall is not None else 0
+    hist_10d = _record_10d_wall_oi_snapshot(
+        symbol=clean_sym,
+        d_key=first_col["d_key"],
+        call_strike=main_call_wall,
+        call_oi=main_c_oi,
+        put_strike=main_put_wall,
+        put_oi=main_p_oi,
+        spot=spot,
+    )
+
+    prev_snap = hist_10d[-2] if len(hist_10d) >= 2 else None
+    prev_c_oi = int(prev_snap.get("call_oi", 0)) if prev_snap else 0
+    prev_p_oi = int(prev_snap.get("put_oi", 0)) if prev_snap else 0
+
+    c_diff = main_c_oi - prev_c_oi if prev_snap and prev_c_oi > 0 else 0
+    p_diff = main_p_oi - prev_p_oi if prev_snap and prev_p_oi > 0 else 0
+
+    c_monitor_color = "#15803d" if c_diff > 0 else "#0f172a"
+    p_monitor_color = "#b91c1c" if p_diff > 0 else "#0f172a"
+
+    c_trend_txt = f"Call Wall({main_call_wall:g}) OI: {main_c_oi:,} ({c_diff:+,})" if main_call_wall is not None else "Call Wall: —"
+    p_trend_txt = f"Put Wall({main_put_wall:g}) OI: {main_p_oi:,} ({p_diff:+,})" if main_put_wall is not None else "Put Wall: —"
 
     up_strikes = [float(k) for k, _ in c_top_list]
     if len(up_strikes) < 3:
-        avail_c = sorted([k for k in first_col["c_oi"].keys() if k >= spot * 0.98])
+        avail_c = sorted([k for k in first_col["c_oi"].keys() if k > spot])
         for k in avail_c:
             if k not in up_strikes:
                 up_strikes.append(k)
@@ -1335,15 +1431,22 @@ def build_handwritten_style_oi_table_html(symbol: str, spot: float, prev_spot: f
                 break
         up_strikes = sorted(up_strikes, reverse=True)[:3]
 
-    dn_strikes = [float(k) for k, _ in p_bot_list]
+    # 下方档位优先放当前 Put Wall 及低于现价的支撑行权价，被砸破时随 Put Wall 往下顺移
+    dn_strikes: list[float] = []
+    if main_put_wall is not None:
+        dn_strikes.append(float(main_put_wall))
+    for k, _ in p_bot_list:
+        fk = float(k)
+        if fk < spot and fk not in dn_strikes:
+            dn_strikes.append(fk)
     if len(dn_strikes) < 3:
-        avail_p = sorted([k for k in first_col["p_oi"].keys() if k <= spot * 1.02], reverse=True)
+        avail_p = sorted([k for k in first_col["p_oi"].keys() if k < spot], reverse=True)
         for k in avail_p:
             if k not in dn_strikes:
                 dn_strikes.append(k)
             if len(dn_strikes) >= 3:
                 break
-        dn_strikes = sorted(dn_strikes, reverse=True)[:3]
+    dn_strikes = sorted(dn_strikes, reverse=True)[:3]
 
     def _build_side_rows(strikes_list: list[float], labels_list: list[str], is_put_side: bool) -> list[dict[str, Any]]:
         built: list[dict[str, Any]] = []
@@ -1352,6 +1455,7 @@ def build_handwritten_style_oi_table_html(symbol: str, spot: float, prev_spot: f
             k_val = strikes_list[idx_s] if idx_s < len(strikes_list) else None
             if k_val is not None:
                 day_cells: list[dict[str, str]] = []
+                ref_oi_val = (prev_p_oi if is_put_side else prev_c_oi) if prev_snap else 0
                 prev_val: int | None = None
                 for d_idx in range(5):
                     col_obj = exp_cols[d_idx]
@@ -1362,7 +1466,10 @@ def build_handwritten_style_oi_table_html(symbol: str, spot: float, prev_spot: f
 
                     val_i = int(oi_map.get(k_val, 0))
                     if d_idx == 0:
-                        fg_c, bg_c = "#0f172a", "#fef9c3"
+                        if ref_oi_val > 0 and idx_s == 0:
+                            fg_c, bg_c = _style_oi_cell(val_i, ref_oi_val, is_put=is_put_side)
+                        else:
+                            fg_c, bg_c = "#0f172a", "#fef9c3"
                     else:
                         if prev_val is not None and prev_val > 0:
                             fg_c, bg_c = _style_oi_cell(val_i, prev_val, is_put=is_put_side)
@@ -1396,6 +1503,7 @@ def build_handwritten_style_oi_table_html(symbol: str, spot: float, prev_spot: f
     cache_tag = f" | 缓存:{cache_time}" if cache_time else ""
     today_dm = today.strftime("%d/%m")
     exp_list_txt = " / ".join([c["d_key"] for c in exp_cols if c["d_key"] != "—"])
+    hist_days_cnt = len(hist_10d)
 
     def _render_data_tr(r_obj: dict[str, Any]) -> str:
         tds = "".join([
@@ -1423,15 +1531,20 @@ def build_handwritten_style_oi_table_html(symbol: str, spot: float, prev_spot: f
 
     html = f"""
     <div style="background:#ffffff; border:2px solid #1e293b; border-radius:8px; padding:10px 12px; margin-top:8px; font-family:sans-serif; color:#0f172a; width:100%; box-sizing:border-box;">
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; padding-bottom:5px; border-bottom:2px solid #1e293b;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; padding-bottom:5px; border-bottom:2px solid #1e293b;">
             <div style="font-size:15px; font-weight:900; color:#0f172a;">
                 📝 {today_dm} {clean_sym} 期权未平仓数量（今天起 + 未来4个到期日: {exp_list_txt}）· {status_msg}{cache_tag}
             </div>
             <div style="display:flex; gap:14px; font-size:12.5px; font-weight:900;">
-                <span style="color:#15803d;">■ Call OI 升 → 绿色</span>
+                <span style="color:#15803d;">■ Call Wall OI 升 → 绿色</span>
                 <span style="color:#0f172a;">■ 变动很小 → 黑色</span>
-                <span style="color:#b91c1c;">■ Put OI 升多 → 红色</span>
+                <span style="color:#b91c1c;">■ Put Wall OI 升 → 红色</span>
             </div>
+        </div>
+        <div style="background:#f8fafc; border:1px solid #cbd5e1; border-radius:5px; padding:4px 8px; margin-bottom:7px; font-size:12.5px; font-weight:800; display:flex; justify-content:space-between;">
+            <span>过去10天快照已沉淀: <b>{hist_days_cnt}/10 天</b>（从当前/最近读取自动累积）</span>
+            <span style="color:{c_monitor_color};">{c_trend_txt}</span>
+            <span style="color:{p_monitor_color};">{p_trend_txt}</span>
         </div>
 
         <table style="width:100%; border-collapse:collapse; table-layout:fixed; border:2px solid #1e293b; font-size:14px;">
@@ -1546,7 +1659,7 @@ def build_custom_option_matrix_html(symbol, spot):
     cache_tag = f" | 缓存:{cache_time}" if cache_time else ""
     status_badge = f"{status_msg}{cache_tag}"
 
-    agg_c_str = " / ".join([f"${k:g}{'(已冲破转支撑)' if broken else ''}" for k, _, broken in agg_walls.get("call_walls", [])]) or "—"
+    agg_c_str = " / ".join([f"${k:g}" for k, _, _ in agg_walls.get("call_walls", [])]) or "—"
     agg_p_str = " / ".join([f"${k:g}" for k, _, _ in agg_walls.get("put_walls", [])]) or "—"
 
     html = f"""
@@ -1556,15 +1669,15 @@ def build_custom_option_matrix_html(symbol, spot):
                 📊 {symbol} 真实期权墙矩阵 ({status_badge} | Spot: <span style="background:#fef08a; padding:1px 6px; border-radius:4px;">${spot:.2f}</span>)
             </div>
             <div style="display:flex; gap:16px; font-size:13px; font-weight:900;">
-                <span style="color:#16a34a;">━━ Call Wall (OI+实时量)</span>
+                <span style="color:#16a34a;">━━ Call Wall (高于现价自动上移)</span>
                 <span style="color:#2563eb;">╌╌ Max Pain</span>
                 <span style="color:#0f172a;">━━ Spot</span>
-                <span style="color:#dc2626;">━━ Put Wall (OI+实时量)</span>
+                <span style="color:#dc2626;">━━ Put Wall (跌破自动下移)</span>
             </div>
         </div>
         <div style="background:#f8fafc; border:1px solid #cbd5e1; border-radius:5px; padding:3px 8px; margin-bottom:6px; font-size:12.5px; font-weight:800; display:flex; justify-content:space-between;">
-            <span style="color:#15803d;">🟢 全期限累计主力 Call 墙 Top3: {agg_c_str}</span>
-            <span style="color:#b91c1c;">🔴 全期限累计主力 Put 墙 Top3: {agg_p_str}</span>
+            <span style="color:#15803d;">🟢 上方有效主力 Call 墙 Top3: {agg_c_str}</span>
+            <span style="color:#b91c1c;">🔴 下方有效主力 Put 墙 Top3: {agg_p_str}</span>
         </div>
 
         <div style="display:flex; width:100%;">
@@ -1575,14 +1688,14 @@ def build_custom_option_matrix_html(symbol, spot):
                 </div>
                 <div style="height:{top3_h}px; border-bottom:2px solid #1e293b; display:flex; flex-direction:column; align-items:center; justify-content:center; font-weight:900; font-size:13px; color:#15803d; background:#f0fdf4; text-align:center; box-sizing:border-box;">
                     <span>上3档 Call</span>
-                    <span style="font-size:10.5px; font-weight:800;">OI+实时量加权</span>
+                    <span style="font-size:10.5px; font-weight:800;">高于现价上移</span>
                 </div>
                 <div style="height:{svg_h}px; position:relative; border-bottom:2px solid #1e293b; background:#ffffff; box-sizing:border-box;">
                     {y_ticks_html}
                 </div>
                 <div style="height:{bot3_h}px; border-bottom:1px solid #cbd5e1; display:flex; flex-direction:column; align-items:center; justify-content:center; font-weight:900; font-size:13px; color:#b91c1c; background:#fef2f2; text-align:center; box-sizing:border-box;">
                     <span>下3档 Put</span>
-                    <span style="font-size:10.5px; font-weight:800;">OI+实时量加权</span>
+                    <span style="font-size:10.5px; font-weight:800;">跌破自动下移</span>
                 </div>
                 <div style="height:{footer_h}px; display:flex; flex-direction:column; align-items:center; justify-content:center; font-weight:900; font-size:13px; background:#f8fafc; box-sizing:border-box;">
                     <span>到期轴</span>
@@ -1682,7 +1795,7 @@ def build_custom_option_matrix_html(symbol, spot):
     return html
 
 
-# ==================== 3. 虚实双向套利五行生克引擎（上下轨锁定，下方为手画稿演变OI表） ====================
+# ==================== 3. 虚实双向套利五行生克引擎 ====================
 
 TIANGAN = ["甲", "乙", "丙", "丁", "戊", "己", "庚", "辛", "壬", "癸"]
 DIZHI = ["子", "丑", "寅", "卯", "辰", "巳", "午", "未", "申", "酉", "戌", "亥"]
@@ -2172,7 +2285,6 @@ def render_12m_cycle_block_above_options(
             unsafe_allow_html=True,
         )
 
-    # ==================== 上轨（锁定不变） ====================
     upper_x = [r["upper_x"] for r in rows]
     red_y = [r["total_score"] for r in rows]
     green_y = [r["flow_score"] for r in rows]
@@ -2238,7 +2350,6 @@ def render_12m_cycle_block_above_options(
     fig_upper.update_yaxes(range=[0, 108], title="相对能量 / 利潤指数 (0-100)", gridcolor="#e2e8f0")
     st.plotly_chart(fig_upper, use_container_width=True)
 
-    # ==================== 下轨（锁定不变） ====================
     lower_x = [r["lower_x"] for r in rows]
     lower_labels = [r["flow_arrow_txt"] for r in rows]
     lower_hover = [
@@ -2299,9 +2410,8 @@ def render_12m_cycle_block_above_options(
     fig_lower.update_yaxes(range=[-24, 24], title="资金进出场幅度", gridcolor="#e2e8f0")
     st.plotly_chart(fig_lower, use_container_width=True)
 
-    # ==================== 第三步：期权未平仓数量对比表（今天起 + 未来4个到期日） ====================
     oi_handwritten_html = build_handwritten_style_oi_table_html(symbol, spot_price, prev_spot=prev_spot)
-    st.components.v1.html(oi_handwritten_html, height=435, scrolling=False)
+    st.components.v1.html(oi_handwritten_html, height=455, scrolling=False)
     st.markdown("</div>", unsafe_allow_html=True)
 
 
@@ -2309,7 +2419,7 @@ def render_12m_cycle_block_above_options(
 
 active_natal = step1_resolve_individual_stock_fundamentals(st.session_state.selected_ticker)
 
-top_bar_html = "<div class='top-bar'><div class='brand-title'>CAPITAL QUANT v2</div><div class='live-badge'>Auto-Sync Every 3m (180s) | " + datetime.now().strftime('%b %d, %Y %H:%M:%S') + " | OI Table</div></div>"
+top_bar_html = "<div class='top-bar'><div class='brand-title'>CAPITAL QUANT v2</div><div class='live-badge'>Auto-Sync Every 3m (180s) | " + datetime.now().strftime('%b %d, %Y %H:%M:%S') + " | 10D OI Monitor</div></div>"
 st.markdown(top_bar_html, unsafe_allow_html=True)
 
 n1, n2, n3, n4 = st.columns([1.3, 1.3, 1.6, 2.2])
