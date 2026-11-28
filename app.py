@@ -1428,7 +1428,6 @@ def build_handwritten_style_oi_table_html(symbol: str, spot: float, prev_spot: f
     today = datetime.today()
     today_date = today.date()
 
-    # 生成过去 10 个日历日（索引 0 为 9 天前，索引 9 为今天）
     past_10_dates: list[str] = [
         (today_date - timedelta(days=9 - i)).strftime("%Y-%m-%d")
         for i in range(10)
@@ -1473,7 +1472,6 @@ def build_handwritten_style_oi_table_html(symbol: str, spot: float, prev_spot: f
         str(item.get("date", "")): item for item in hist_10d if item.get("date")
     }
 
-    # 读取真实历史每日收盘价，对齐过去10天“当天价”行
     hist_close_by_date: dict[str, float] = {}
     nonce = int(st.session_state.get("calc_refresh_nonce", 0))
     df_h_1m = fetch_history_df(clean_sym, "1个月", spot, refresh_nonce=nonce)
@@ -1602,7 +1600,6 @@ def build_handwritten_style_oi_table_html(symbol: str, spot: float, prev_spot: f
     up_rows, up_col_sums = _build_side_rows(up_strikes, ["上3档", "上2档", "上1档"], is_put_side=False)
     dn_rows, dn_col_sums = _build_side_rows(dn_strikes, ["下1档", "下2档", "下3档"], is_put_side=True)
 
-    # 净多空差 = 当日上3档 Call OI 总和 - 当日下3档 Put OI 总和（对比前一日净差变化着色）
     net_diff_cells: list[dict[str, str]] = []
     prev_net_val: int | None = None
     for d_idx in range(10):
@@ -1645,14 +1642,24 @@ def build_handwritten_style_oi_table_html(symbol: str, spot: float, prev_spot: f
 
     up_html = "".join([_render_data_tr(x) for x in up_rows])
     dn_html = "".join([_render_data_tr(x) for x in dn_rows])
-    ths_html = "".join([
-        f"<th style='border:1px solid #334155; padding:5px 3px; font-weight:900; color:#0f172a; text-align:center; font-size:11.5px; background:{'#fef08a' if c_obj.get('is_today') else '#f1f5f9'};'>{c_obj['col_title']}</th>"
-        for c_obj in day_cols
-    ])
-    spot_tds_html = "".join([
-        f"<td style='border:1px solid #334155; padding:5px 3px; font-weight:900; color:#0f172a; text-align:center; font-size:12px; background:{'#fde047' if c_obj.get('is_today') else '#fef9c3'};'>{f\"{c_obj['spot_px']:.2f}\" if c_obj['spot_px'] is not None else '—'}</td>"
-        for c_obj in day_cols
-    ])
+
+    ths_parts: list[str] = []
+    for c_obj in day_cols:
+        bg_th = "#fef08a" if c_obj.get("is_today") else "#f1f5f9"
+        ths_parts.append(
+            f"<th style='border:1px solid #334155; padding:5px 3px; font-weight:900; color:#0f172a; text-align:center; font-size:11.5px; background:{bg_th};'>{c_obj['col_title']}</th>"
+        )
+    ths_html = "".join(ths_parts)
+
+    spot_tds_parts: list[str] = []
+    for c_obj in day_cols:
+        bg_s = "#fde047" if c_obj.get("is_today") else "#fef9c3"
+        px_txt = f"{c_obj['spot_px']:.2f}" if c_obj["spot_px"] is not None else "—"
+        spot_tds_parts.append(
+            f"<td style='border:1px solid #334155; padding:5px 3px; font-weight:900; color:#0f172a; text-align:center; font-size:12px; background:{bg_s};'>{px_txt}</td>"
+        )
+    spot_tds_html = "".join(spot_tds_parts)
+
     net_tds_html = "".join([
         f"<td style='border:1px solid #334155; padding:5px 3px; font-weight:900; color:{nc['fg']}; background:{nc['bg']}; text-align:center; font-size:12px;'>{nc['txt']}</td>"
         for nc in net_diff_cells
