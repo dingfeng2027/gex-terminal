@@ -252,7 +252,7 @@ def _sync_snapshots_to_github(snap_data: dict[str, Any]) -> None:
         sha_val = get_r.json().get("sha") if get_r.status_code == 200 else None
         raw_bytes = json.dumps(snap_data, ensure_ascii=False, indent=2).encode("utf-8")
         payload: dict[str, Any] = {
-            "message": f"chore: sync 10d option wall snapshot ({datetime.now().strftime('%Y-%m-%d %H:%M')})",
+            "message": f"chore: sync option wall snapshot ({datetime.now().strftime('%Y-%m-%d %H:%M')})",
             "content": base64.b64encode(raw_bytes).decode("ascii"),
         }
         if sha_val:
@@ -301,6 +301,44 @@ def _save_oi_snapshots(snap_data: dict[str, Any]) -> None:
     except Exception:
         pass
     _sync_snapshots_to_github(snap_data)
+
+
+def _record_and_get_prev_day_matrix_oi(
+    symbol: str,
+    today_exp_strikes: dict[str, dict[str, dict[str, int]]],
+) -> tuple[dict[str, dict[str, dict[str, int]]], str]:
+    """
+    按日期持久化保存每个到期日(exp_key)下各行权价的真实 Call/Put OI，
+    并返回前一个已存档交易日同到期日同价位的 OI 映射，用于计算准确的日增减。
+    """
+    clean_sym = str(symbol or "").upper().strip()
+    today_str = datetime.today().strftime("%Y-%m-%d")
+
+    disk_snaps = _load_oi_snapshots()
+    matrix_root = disk_snaps.setdefault("_matrix_exp_oi_history", {})
+    sym_days: dict[str, Any] = dict(matrix_root.get(clean_sym, {}))
+
+    mem_root = st.session_state.setdefault("_matrix_exp_oi_mem", {})
+    mem_days: dict[str, Any] = dict(mem_root.get(clean_sym, {}))
+    for k_d, v_d in mem_days.items():
+        if k_d not in sym_days:
+            sym_days[k_d] = v_d
+
+    prev_dates = sorted([d for d in sym_days.keys() if d < today_str])
+    prev_date_str = prev_dates[-1] if prev_dates else ""
+    prev_day_map: dict[str, dict[str, dict[str, int]]] = (
+        sym_days.get(prev_date_str, {}) if prev_date_str else {}
+    )
+
+    if today_exp_strikes:
+        sym_days[today_str] = today_exp_strikes
+        keep_dates = sorted(sym_days.keys())[-10:]
+        trimmed = {d: sym_days[d] for d in keep_dates}
+        matrix_root[clean_sym] = trimmed
+        mem_root[clean_sym] = trimmed
+        _save_oi_snapshots(disk_snaps)
+
+    return prev_day_map, prev_date_str
 
 
 def _record_10d_wall_oi_snapshot(
@@ -1212,11 +1250,11 @@ def _build_company_real_day_keys(real_day_keys: list[str], base_dt: datetime, ma
 
 
 def _score_wall_strength(df: pd.DataFrame, delta_days: int = 3) -> pd.DataFrame:
+    _ = delta_days
     out = df.copy()
     oi_s = pd.to_numeric(out.get("openInterest", 0), errors="coerce").fillna(0.0)
-    vol_s = pd.to_numeric(out.get("volume", 0), errors="coerce").fillna(0.0)
-    vol_weight = 1.6 if delta_days <= 7 else 0.9
-    out["wall_power"] = oi_s + vol_s * vol_weight
+    # 统一使用真实未平仓合约数 OI 作为墙体强度与展示数量，避免混乘成交量造成对比错位
+    out["wall_power"] = oi_s
     return out
 
 
@@ -1264,7 +1302,6 @@ def extract_top3_walls(col_cdf, col_pdf, curr_p, delta_days: int = 3):
     if below_df.empty:
         below_df = pdf_clean.copy()
 
-    # 下3档 Put 按行权价降序排列：大数字在上面，小数字在下面
     top3_puts = (
         below_df.sort_values(by="wall_power", ascending=False)
         .head(3)
@@ -1309,8 +1346,8 @@ def compute_aggregate_real_walls(combined_by_day: dict[str, dict[str, Any]], spo
 
     c_all = pd.concat(c_frames, ignore_index=True).groupby("strike", as_index=False).sum()
     p_all = pd.concat(p_frames, ignore_index=True).groupby("strike", as_index=False).sum()
-    c_all["power"] = c_all["openInterest"] + c_all["volume"] * 1.3
-    p_all["power"] = p_all["openInterest"] + p_all["volume"] * 1.3
+    c_all["power"] = c_all["openInterest"]
+    p_all["power"] = p_all["openInterest"]
 
     c_above = c_all[(c_all["strike"] > spot) & (c_all["strike"] <= spot * 1.25)].sort_values("power", ascending=False).head(3)
     if c_above.empty:
@@ -1325,17 +1362,33 @@ def compute_aggregate_real_walls(combined_by_day: dict[str, dict[str, Any]], spo
     return {"call_walls": c_list, "put_walls": p_list}
 
 
-def pull_and_filter_real_expirations_locally(symbol: str, spot: float, max_cols: int = 8) -> tuple[list[dict[str, Any]], bool, int, str, str, dict[str, Any]]:
+def pull_and_filter_real_expirations_locally(symbol: str, spot: float, max_cols: int = 8) -> tuple[list[dict[str, Any]], bool, int, str, str, dict[str, Any], str]:
     today = datetime.today()
     all_days, combined_by_day, live_count, status_msg, cache_time = _collect_multi_source_options(symbol)
     chosen_days = _build_company_real_day_keys(all_days, today, max_cols=max_cols)
     agg_walls = compute_aggregate_real_walls(combined_by_day, spot)
 
+    # 先构建当天各到期日全链的真实 OI 快照，并与前一日快照同到期日同价位做对比
+    today_exp_strikes: dict[str, dict[str, dict[str, int]]] = {}
+    for d_key in chosen_days:
+        rec = combined_by_day.get(d_key, {})
+        col_cdf = rec.get("cdf", pd.DataFrame())
+        col_pdf = rec.get("pdf", pd.DataFrame())
+        if _is_valid_chain_pair(col_cdf, col_pdf):
+            c_dict: dict[str, int] = {}
+            p_dict: dict[str, int] = {}
+            for _, r_c in col_cdf.iterrows():
+                k_s = f"{float(r_c['strike']):g}"
+                c_dict[k_s] = int(_parse_float_clean(r_c.get("openInterest")) or 0)
+            for _, r_p in col_pdf.iterrows():
+                k_s = f"{float(r_p['strike']):g}"
+                p_dict[k_s] = int(_parse_float_clean(r_p.get("openInterest")) or 0)
+            today_exp_strikes[d_key] = {"c": c_dict, "p": p_dict}
+
+    prev_day_map, prev_date_str = _record_and_get_prev_day_matrix_oi(symbol, today_exp_strikes)
+
     cols_data = []
     has_any_real_data = False
-
-    prev_c_oi_map: dict[float, int] | None = None
-    prev_p_oi_map: dict[float, int] | None = None
 
     for d_key in chosen_days:
         dt = datetime.strptime(d_key, "%Y-%m-%d")
@@ -1356,13 +1409,9 @@ def pull_and_filter_real_expirations_locally(symbol: str, spot: float, max_cols:
         if has_chain:
             has_any_real_data = True
 
-        c_oi_map: dict[float, int] = {}
-        p_oi_map: dict[float, int] = {}
-        if has_chain:
-            for _, r_c in col_cdf.iterrows():
-                c_oi_map[float(r_c["strike"])] = int(_parse_float_clean(r_c.get("openInterest")) or 0)
-            for _, r_p in col_pdf.iterrows():
-                p_oi_map[float(r_p["strike"])] = int(_parse_float_clean(r_p.get("openInterest")) or 0)
+        prev_exp_rec = prev_day_map.get(d_key, {}) if prev_day_map else {}
+        prev_c_dict: dict[str, int] = prev_exp_rec.get("c", {}) if isinstance(prev_exp_rec, dict) else {}
+        prev_p_dict: dict[str, int] = prev_exp_rec.get("p", {}) if isinstance(prev_exp_rec, dict) else {}
 
         if is_today and not has_chain:
             c_top_list, call_wall_val, p_bot_list, put_wall_val = [], None, [], None
@@ -1382,27 +1431,22 @@ def pull_and_filter_real_expirations_locally(symbol: str, spot: float, max_cols:
             put_wall_px_label = f"Put {put_wall_val:g}" if put_wall_val is not None else "—"
 
             c_top_with_diff = []
-            for k_val, pwr_val in c_top_list:
-                cur_oi = int(c_oi_map.get(float(k_val), pwr_val))
-                if prev_c_oi_map is not None:
-                    prev_oi = int(prev_c_oi_map.get(float(k_val), 0))
-                    diff_val: int | None = cur_oi - prev_oi
+            for k_val, cur_oi in c_top_list:
+                k_str = f"{float(k_val):g}"
+                if prev_c_dict and k_str in prev_c_dict:
+                    diff_val: int | None = int(cur_oi) - int(prev_c_dict[k_str])
                 else:
                     diff_val = None
-                c_top_with_diff.append((float(k_val), int(pwr_val), diff_val))
+                c_top_with_diff.append((float(k_val), int(cur_oi), diff_val))
 
             p_bot_with_diff = []
-            for k_val, pwr_val in p_bot_list:
-                cur_oi = int(p_oi_map.get(float(k_val), pwr_val))
-                if prev_p_oi_map is not None:
-                    prev_oi = int(prev_p_oi_map.get(float(k_val), 0))
-                    diff_val = cur_oi - prev_oi
+            for k_val, cur_oi in p_bot_list:
+                k_str = f"{float(k_val):g}"
+                if prev_p_dict and k_str in prev_p_dict:
+                    diff_val = int(cur_oi) - int(prev_p_dict[k_str])
                 else:
                     diff_val = None
-                p_bot_with_diff.append((float(k_val), int(pwr_val), diff_val))
-
-            prev_c_oi_map = c_oi_map
-            prev_p_oi_map = p_oi_map
+                p_bot_with_diff.append((float(k_val), int(cur_oi), diff_val))
         else:
             c_top_list, call_wall_val, p_bot_list, put_wall_val = [], None, [], None
             raw_mp = None
@@ -1430,7 +1474,7 @@ def pull_and_filter_real_expirations_locally(symbol: str, spot: float, max_cols:
             "put_wall": put_wall_val,
         })
 
-    return cols_data, has_any_real_data, live_count, status_msg, cache_time, agg_walls
+    return cols_data, has_any_real_data, live_count, status_msg, cache_time, agg_walls, prev_date_str
 
 
 def _style_wall_count_cell(cur_val: int, ref_val: int | None, is_baseline_col: bool = False) -> tuple[str, str]:
@@ -1796,7 +1840,7 @@ def _fmt_exp_diff_badge(diff_val: int | None) -> str:
 
 def build_custom_option_matrix_html(symbol, spot):
     layout_cols = 8
-    cols_data, _, _, status_msg, cache_time, agg_walls = pull_and_filter_real_expirations_locally(symbol, spot, max_cols=layout_cols)
+    cols_data, _, _, status_msg, cache_time, agg_walls, prev_date_str = pull_and_filter_real_expirations_locally(symbol, spot, max_cols=layout_cols)
 
     all_vals = []
     for c in cols_data:
@@ -1885,6 +1929,11 @@ def build_custom_option_matrix_html(symbol, spot):
 
     agg_c_str = " / ".join([f"${k:g}" for k, _, _ in agg_walls.get("call_walls", [])]) or "—"
     agg_p_str = " / ".join([f"${k:g}" for k, _, _ in agg_walls.get("put_walls", [])]) or "—"
+    diff_tip = (
+        f"括号内为同到期日同价位 OI 较前一日({prev_date_str})真实增减（绿增/红减）"
+        if prev_date_str
+        else "已建立今日各到期日 OI 基准快照（次日对比自动显示括号增减）"
+    )
 
     html = f"""
     <div style="background:#ffffff; border:2px solid #1e293b; border-radius:8px; padding:8px 10px; font-family:sans-serif; color:#0f172a; width:100%; box-sizing:border-box; overflow:hidden;">
@@ -1903,7 +1952,7 @@ def build_custom_option_matrix_html(symbol, spot):
         </div>
         <div style="background:#f8fafc; border:1px solid #cbd5e1; border-radius:5px; padding:3px 8px; margin-bottom:6px; font-size:13px; font-weight:800; display:flex; justify-content:space-between;">
             <span style="color:#15803d;">🟢 上方有效主力 Call 墙 Top3: {agg_c_str}</span>
-            <span>上下6档每档旁括号为较上一到期日 OI 变动（绿增/红减）</span>
+            <span>{diff_tip}</span>
             <span style="color:#b91c1c;">🔴 下方有效主力 Put 墙 Top3: {agg_p_str}</span>
         </div>
 
@@ -1915,7 +1964,7 @@ def build_custom_option_matrix_html(symbol, spot):
                 </div>
                 <div style="height:{top3_h}px; border-bottom:2px solid #1e293b; display:flex; flex-direction:column; align-items:center; justify-content:center; font-weight:900; font-size:14px; color:#15803d; background:#f0fdf4; text-align:center; box-sizing:border-box;">
                     <span>上3档 Call</span>
-                    <span style="font-size:11px; font-weight:800;">较前期增减</span>
+                    <span style="font-size:11px; font-weight:800;">较前一日OI</span>
                 </div>
                 <div style="height:{svg_h}px; position:relative; border-bottom:2px solid #1e293b; background:#ffffff; box-sizing:border-box;">
                     {y_ticks_html}
