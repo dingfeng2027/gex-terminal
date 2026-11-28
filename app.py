@@ -1419,10 +1419,10 @@ def _style_wall_count_cell(cur_val: int, ref_val: int | None, is_baseline_col: b
 
 def build_handwritten_style_oi_table_html(symbol: str, spot: float, prev_spot: float | None = None) -> str:
     """
-    过去 10 个日历日快照矩阵（最右侧第 10 栏为今天，如 27/11，左侧 9 栏为过去 9 天）：
-    - 随每日快照沉淀逐步攒齐过去 10 天历史数据；未沉淀日期显示空白/待积累，不混入未来到期日
-    - “当天价”行读取真实历史收盘价（若无历史K线则回退到快照或现价）
-    - 新增“净多空差”行，直观显示 Call OI 增量减去 Put OI 增量
+    过去 10 个日历日快照矩阵 + 右侧“今日增减”列：
+    - 第 1~10 列为过去 10 天（最右侧第 10 栏为今天，如 28/11）
+    - 第 11 列为“今日增减”，逐行显示上下 6 档每档较前一日快照的 OI 增减（增多绿、减少红）
+    - 最底部汇总行在该列显示上下 6 档的变动总数/净差
     """
     clean_sym = str(symbol or "").upper().strip()
     today = datetime.today()
@@ -1556,9 +1556,18 @@ def build_handwritten_style_oi_table_html(symbol: str, spot: float, prev_spot: f
             "spot_px": px_val,
         })
 
-    def _build_side_rows(strikes_list: list[float], labels_list: list[str], is_put_side: bool) -> tuple[list[dict[str, Any]], list[int]]:
+    prev_day_col = day_cols[8] if day_cols[8]["has_snap"] else None
+    today_day_col = day_cols[9]
+
+    def _build_side_rows(
+        strikes_list: list[float],
+        labels_list: list[str],
+        is_put_side: bool,
+    ) -> tuple[list[dict[str, Any]], list[int], int]:
         built: list[dict[str, Any]] = []
         col_sums: list[int] = [0] * 10
+        side_today_delta_sum = 0
+
         for idx_s in range(3):
             lbl = labels_list[idx_s]
             k_val = strikes_list[idx_s] if idx_s < len(strikes_list) else None
@@ -1584,21 +1593,37 @@ def build_handwritten_style_oi_table_html(symbol: str, spot: float, prev_spot: f
                     })
                     prev_val = val_i
 
+                if today_day_col["has_snap"] and prev_day_col is not None:
+                    now_oi = int((today_day_col["p_map"] if is_put_side else today_day_col["c_map"]).get(k_val, 0))
+                    old_oi = int((prev_day_col["p_map"] if is_put_side else prev_day_col["c_map"]).get(k_val, 0))
+                    delta_oi = now_oi - old_oi
+                    side_today_delta_sum += delta_oi
+                    if delta_oi > 0:
+                        d_cell = {"txt": f"{delta_oi:+,}", "fg": "#15803d", "bg": "#dcfce7"}
+                    elif delta_oi < 0:
+                        d_cell = {"txt": f"{delta_oi:+,}", "fg": "#b91c1c", "bg": "#fee2e2"}
+                    else:
+                        d_cell = {"txt": "+0", "fg": "#ca8a04", "bg": "#fef9c3"}
+                else:
+                    d_cell = {"txt": "—", "fg": "#64748b", "bg": "#f8fafc"}
+
                 built.append({
                     "label": lbl,
                     "strike_txt": f"{k_val:g}",
                     "cells": day_cells,
+                    "delta_cell": d_cell,
                 })
             else:
                 built.append({
                     "label": lbl,
                     "strike_txt": "—",
                     "cells": [{"txt": "—", "fg": "#64748b", "bg": "#f8fafc"} for _ in range(10)],
+                    "delta_cell": {"txt": "—", "fg": "#64748b", "bg": "#f8fafc"},
                 })
-        return built, col_sums
+        return built, col_sums, side_today_delta_sum
 
-    up_rows, up_col_sums = _build_side_rows(up_strikes, ["上3档", "上2档", "上1档"], is_put_side=False)
-    dn_rows, dn_col_sums = _build_side_rows(dn_strikes, ["下1档", "下2档", "下3档"], is_put_side=True)
+    up_rows, up_col_sums, up_6d_delta = _build_side_rows(up_strikes, ["上3档", "上2档", "上1档"], is_put_side=False)
+    dn_rows, dn_col_sums, dn_6d_delta = _build_side_rows(dn_strikes, ["下1档", "下2档", "下3档"], is_put_side=True)
 
     net_diff_cells: list[dict[str, str]] = []
     prev_net_val: int | None = None
@@ -1623,6 +1648,17 @@ def build_handwritten_style_oi_table_html(symbol: str, spot: float, prev_spot: f
         net_diff_cells.append({"txt": f"{net_now:+,}", "fg": fg_n, "bg": bg_n})
         prev_net_val = net_now
 
+    if today_day_col["has_snap"] and prev_day_col is not None:
+        total_6档_net_chg = int(up_6d_delta - dn_6d_delta)
+        if total_6档_net_chg > 0:
+            total_delta_cell = {"txt": f"总 {total_6档_net_chg:+,}", "fg": "#15803d", "bg": "#dcfce7"}
+        elif total_6档_net_chg < 0:
+            total_delta_cell = {"txt": f"总 {total_6档_net_chg:+,}", "fg": "#b91c1c", "bg": "#fee2e2"}
+        else:
+            total_delta_cell = {"txt": "总 +0", "fg": "#ca8a04", "bg": "#fef9c3"}
+    else:
+        total_delta_cell = {"txt": "总 —", "fg": "#64748b", "bg": "#f8fafc"}
+
     cache_tag = f" | 缓存:{cache_time}" if cache_time else ""
     today_dm = today.strftime("%d/%m")
     hist_days_cnt = len(hist_10d)
@@ -1632,11 +1668,14 @@ def build_handwritten_style_oi_table_html(symbol: str, spot: float, prev_spot: f
             f"<td style='border:1px solid #334155; padding:5px 3px; font-weight:900; color:{c['fg']}; background:{c['bg']}; text-align:center; font-size:12px;'>{c['txt']}</td>"
             for c in r_obj["cells"]
         ])
+        dc = r_obj["delta_cell"]
+        delta_td = f"<td style='border:1px solid #334155; border-left:2px solid #1e293b; padding:5px 3px; font-weight:900; color:{dc['fg']}; background:{dc['bg']}; text-align:center; font-size:12px;'>{dc['txt']}</td>"
         return f"""
         <tr>
             <td style="border:1px solid #334155; padding:5px 3px; font-weight:900; color:#0f172a; background:#f8fafc; text-align:center; font-size:12px;">{r_obj['label']}</td>
             <td style="border:1px solid #334155; padding:5px 3px; font-weight:900; color:#0f172a; background:#ffffff; text-align:center; font-size:12px;">{r_obj['strike_txt']}</td>
             {tds}
+            {delta_td}
         </tr>
         """
 
@@ -1649,6 +1688,9 @@ def build_handwritten_style_oi_table_html(symbol: str, spot: float, prev_spot: f
         ths_parts.append(
             f"<th style='border:1px solid #334155; padding:5px 3px; font-weight:900; color:#0f172a; text-align:center; font-size:11.5px; background:{bg_th};'>{c_obj['col_title']}</th>"
         )
+    ths_parts.append(
+        "<th style='border:1px solid #334155; border-left:2px solid #1e293b; padding:5px 3px; font-weight:900; color:#0f172a; text-align:center; font-size:11.5px; background:#dbeafe;'>今日增减</th>"
+    )
     ths_html = "".join(ths_parts)
 
     spot_tds_parts: list[str] = []
@@ -1658,27 +1700,34 @@ def build_handwritten_style_oi_table_html(symbol: str, spot: float, prev_spot: f
         spot_tds_parts.append(
             f"<td style='border:1px solid #334155; padding:5px 3px; font-weight:900; color:#0f172a; text-align:center; font-size:12px; background:{bg_s};'>{px_txt}</td>"
         )
+    spot_tds_parts.append(
+        "<td style='border:1px solid #334155; border-left:2px solid #1e293b; padding:5px 3px; font-weight:800; color:#475569; text-align:center; font-size:11.5px; background:#fef9c3;'>上下6档</td>"
+    )
     spot_tds_html = "".join(spot_tds_parts)
 
-    net_tds_html = "".join([
+    net_tds_parts = [
         f"<td style='border:1px solid #334155; padding:5px 3px; font-weight:900; color:{nc['fg']}; background:{nc['bg']}; text-align:center; font-size:12px;'>{nc['txt']}</td>"
         for nc in net_diff_cells
-    ])
+    ]
+    net_tds_parts.append(
+        f"<td style='border:1px solid #334155; border-left:2px solid #1e293b; padding:5px 3px; font-weight:900; color:{total_delta_cell['fg']}; background:{total_delta_cell['bg']}; text-align:center; font-size:12px;'>{total_delta_cell['txt']}</td>"
+    )
+    net_tds_html = "".join(net_tds_parts)
 
     html = f"""
     <div style="background:#ffffff; border:2px solid #1e293b; border-radius:8px; padding:8px 10px; margin:0; font-family:sans-serif; color:#0f172a; width:100%; box-sizing:border-box;">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px; padding-bottom:4px; border-bottom:2px solid #1e293b;">
             <div style="font-size:14px; font-weight:900; color:#0f172a;">
-                📝 {today_dm} {clean_sym} 过去10天期权墙数量轨迹（第10栏为 {today_dm} 今天基准）· {status_msg}{cache_tag}
+                📝 {today_dm} {clean_sym} 过去10天期权墙数量轨迹 + 右侧上下6档增减汇总 · {status_msg}{cache_tag}
             </div>
             <div style="display:flex; gap:12px; font-size:12px; font-weight:900;">
-                <span style="color:#15803d;">■ 数量增加 → 绿色</span>
-                <span style="color:#b91c1c;">■ 数量减少 → 红色</span>
-                <span style="color:#ca8a04;">■ 变动很小/基准 → 黄/黑</span>
+                <span style="color:#15803d;">■ 增多 → 绿色</span>
+                <span style="color:#b91c1c;">■ 减少 → 红色</span>
+                <span style="color:#ca8a04;">■ 持平/基准 → 黄/黑</span>
             </div>
         </div>
         <div style="background:#f8fafc; border:1px solid #cbd5e1; border-radius:5px; padding:3px 8px; margin-bottom:5px; font-size:12px; font-weight:800; display:flex; justify-content:space-between;">
-            <span>过去10天快照已沉淀: <b>{hist_days_cnt}/10 天</b>（逐日自动累积，第10天齐后开启完整10日对比）</span>
+            <span>过去10天快照已沉淀: <b>{hist_days_cnt}/10 天</b>（右侧“今日增减”逐档对比前一日快照并汇总上下6档）</span>
             <span style="color:{c_monitor_color};">{c_trend_txt}</span>
             <span style="color:{p_monitor_color};">{p_trend_txt}</span>
         </div>
