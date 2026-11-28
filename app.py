@@ -1264,10 +1264,11 @@ def extract_top3_walls(col_cdf, col_pdf, curr_p, delta_days: int = 3):
     if below_df.empty:
         below_df = pdf_clean.copy()
 
+    # 下3档 Put 按行权价降序排列：大数字在上面，小数字在下面
     top3_puts = (
         below_df.sort_values(by="wall_power", ascending=False)
         .head(3)
-        .sort_values(by="strike", ascending=True)
+        .sort_values(by="strike", ascending=False)
     )
     p_bot_list = [(float(r["strike"]), int(r["wall_power"])) for _, r in top3_puts.iterrows()]
 
@@ -1333,7 +1334,6 @@ def pull_and_filter_real_expirations_locally(symbol: str, spot: float, max_cols:
     cols_data = []
     has_any_real_data = False
 
-    # 先提取各到期日全链 OI 映射，供相邻到期日之间逐档计算 OI 增减
     prev_c_oi_map: dict[float, int] | None = None
     prev_p_oi_map: dict[float, int] | None = None
 
@@ -1689,15 +1689,15 @@ def build_handwritten_style_oi_table_html(symbol: str, spot: float, prev_spot: f
 
     def _render_data_tr(r_obj: dict[str, Any]) -> str:
         tds = "".join([
-            f"<td style='border:1px solid #334155; padding:5px 3px; font-weight:900; color:{c['fg']}; background:{c['bg']}; text-align:center; font-size:12px;'>{c['txt']}</td>"
+            f"<td style='border:1px solid #334155; padding:5px 3px; font-weight:900; color:{c['fg']}; background:{c['bg']}; text-align:center; font-size:13px;'>{c['txt']}</td>"
             for c in r_obj["cells"]
         ])
         dc = r_obj["delta_cell"]
-        delta_td = f"<td style='border:1px solid #334155; border-left:2px solid #1e293b; padding:5px 3px; font-weight:900; color:{dc['fg']}; background:{dc['bg']}; text-align:center; font-size:12px;'>{dc['txt']}</td>"
+        delta_td = f"<td style='border:1px solid #334155; border-left:2px solid #1e293b; padding:5px 3px; font-weight:900; color:{dc['fg']}; background:{dc['bg']}; text-align:center; font-size:13px;'>{dc['txt']}</td>"
         return f"""
         <tr>
-            <td style="border:1px solid #334155; padding:5px 3px; font-weight:900; color:#0f172a; background:#f8fafc; text-align:center; font-size:12px;">{r_obj['label']}</td>
-            <td style="border:1px solid #334155; padding:5px 3px; font-weight:900; color:#0f172a; background:#ffffff; text-align:center; font-size:12px;">{r_obj['strike_txt']}</td>
+            <td style="border:1px solid #334155; padding:5px 3px; font-weight:900; color:#0f172a; background:#f8fafc; text-align:center; font-size:13px;">{r_obj['label']}</td>
+            <td style="border:1px solid #334155; padding:5px 3px; font-weight:900; color:#0f172a; background:#ffffff; text-align:center; font-size:13px;">{r_obj['strike_txt']}</td>
             {tds}
             {delta_td}
         </tr>
@@ -1710,10 +1710,10 @@ def build_handwritten_style_oi_table_html(symbol: str, spot: float, prev_spot: f
     for c_obj in day_cols:
         bg_th = "#fef08a" if c_obj.get("is_today") else "#f1f5f9"
         ths_parts.append(
-            f"<th style='border:1px solid #334155; padding:5px 3px; font-weight:900; color:#0f172a; text-align:center; font-size:11.5px; background:{bg_th};'>{c_obj['col_title']}</th>"
+            f"<th style='border:1px solid #334155; padding:5px 3px; font-weight:900; color:#0f172a; text-align:center; font-size:12.5px; background:{bg_th};'>{c_obj['col_title']}</th>"
         )
     ths_parts.append(
-        "<th style='border:1px solid #334155; border-left:2px solid #1e293b; padding:5px 3px; font-weight:900; color:#0f172a; text-align:center; font-size:11.5px; background:#dbeafe;'>今日增减</th>"
+        "<th style='border:1px solid #334155; border-left:2px solid #1e293b; padding:5px 3px; font-weight:900; color:#0f172a; text-align:center; font-size:12.5px; background:#dbeafe;'>今日增减</th>"
     )
     ths_html = "".join(ths_parts)
 
@@ -1722,45 +1722,45 @@ def build_handwritten_style_oi_table_html(symbol: str, spot: float, prev_spot: f
         bg_s = "#fde047" if c_obj.get("is_today") else "#fef9c3"
         px_txt = f"{c_obj['spot_px']:.2f}" if c_obj["spot_px"] is not None else "—"
         spot_tds_parts.append(
-            f"<td style='border:1px solid #334155; padding:5px 3px; font-weight:900; color:#0f172a; text-align:center; font-size:12px; background:{bg_s};'>{px_txt}</td>"
+            f"<td style='border:1px solid #334155; padding:5px 3px; font-weight:900; color:#0f172a; text-align:center; font-size:13px; background:{bg_s};'>{px_txt}</td>"
         )
     spot_tds_parts.append(
-        "<td style='border:1px solid #334155; border-left:2px solid #1e293b; padding:5px 3px; font-weight:800; color:#475569; text-align:center; font-size:11.5px; background:#fef9c3;'>上下6档</td>"
+        "<td style='border:1px solid #334155; border-left:2px solid #1e293b; padding:5px 3px; font-weight:800; color:#475569; text-align:center; font-size:12.5px; background:#fef9c3;'>上下6档</td>"
     )
     spot_tds_html = "".join(spot_tds_parts)
 
     net_tds_parts = [
-        f"<td style='border:1px solid #334155; padding:5px 3px; font-weight:900; color:{nc['fg']}; background:{nc['bg']}; text-align:center; font-size:12px;'>{nc['txt']}</td>"
+        f"<td style='border:1px solid #334155; padding:5px 3px; font-weight:900; color:{nc['fg']}; background:{nc['bg']}; text-align:center; font-size:13px;'>{nc['txt']}</td>"
         for nc in net_diff_cells
     ]
     net_tds_parts.append(
-        f"<td style='border:1px solid #334155; border-left:2px solid #1e293b; padding:5px 3px; font-weight:900; color:{total_delta_cell['fg']}; background:{total_delta_cell['bg']}; text-align:center; font-size:12px;'>{total_delta_cell['txt']}</td>"
+        f"<td style='border:1px solid #334155; border-left:2px solid #1e293b; padding:5px 3px; font-weight:900; color:{total_delta_cell['fg']}; background:{total_delta_cell['bg']}; text-align:center; font-size:13px;'>{total_delta_cell['txt']}</td>"
     )
     net_tds_html = "".join(net_tds_parts)
 
     html = f"""
     <div style="background:#ffffff; border:2px solid #1e293b; border-radius:8px; padding:8px 10px; margin:0; font-family:sans-serif; color:#0f172a; width:100%; box-sizing:border-box;">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px; padding-bottom:4px; border-bottom:2px solid #1e293b;">
-            <div style="font-size:14px; font-weight:900; color:#0f172a;">
+            <div style="font-size:15px; font-weight:900; color:#0f172a;">
                 📝 {today_dm} {clean_sym} 过去10天期权墙数量轨迹 + 右侧上下6档增减汇总 · {status_msg}{cache_tag}
             </div>
-            <div style="display:flex; gap:12px; font-size:12px; font-weight:900;">
+            <div style="display:flex; gap:12px; font-size:12.5px; font-weight:900;">
                 <span style="color:#15803d;">■ 增多 → 绿色</span>
                 <span style="color:#b91c1c;">■ 减少 → 红色</span>
                 <span style="color:#ca8a04;">■ 持平/基准 → 黄/黑</span>
             </div>
         </div>
-        <div style="background:#f8fafc; border:1px solid #cbd5e1; border-radius:5px; padding:3px 8px; margin-bottom:5px; font-size:12px; font-weight:800; display:flex; justify-content:space-between;">
+        <div style="background:#f8fafc; border:1px solid #cbd5e1; border-radius:5px; padding:3px 8px; margin-bottom:5px; font-size:12.5px; font-weight:800; display:flex; justify-content:space-between;">
             <span>过去10天快照已沉淀: <b>{hist_days_cnt}/10 天</b>（右侧“今日增减”逐档对比前一日快照并汇总上下6档）</span>
             <span style="color:{c_monitor_color};">{c_trend_txt}</span>
             <span style="color:{p_monitor_color};">{p_trend_txt}</span>
         </div>
 
-        <table style="width:100%; border-collapse:collapse; table-layout:fixed; border:2px solid #1e293b; font-size:12px;">
+        <table style="width:100%; border-collapse:collapse; table-layout:fixed; border:2px solid #1e293b; font-size:13px;">
             <thead>
                 <tr style="background:#f1f5f9; border-bottom:2px solid #1e293b;">
-                    <th style="border:1px solid #334155; padding:5px 3px; font-weight:900; color:#0f172a; text-align:center; width:62px;">期权</th>
-                    <th style="border:1px solid #334155; padding:5px 3px; font-weight:900; color:#0f172a; text-align:center; width:62px;">价位</th>
+                    <th style="border:1px solid #334155; padding:5px 3px; font-weight:900; color:#0f172a; text-align:center; width:64px;">期权</th>
+                    <th style="border:1px solid #334155; padding:5px 3px; font-weight:900; color:#0f172a; text-align:center; width:64px;">价位</th>
                     {ths_html}
                 </tr>
             </thead>
@@ -1788,10 +1788,10 @@ def _fmt_exp_diff_badge(diff_val: int | None) -> str:
     if diff_val is None:
         return ""
     if diff_val > 0:
-        return f"<span style='color:#15803d; font-weight:900; font-size:11px;'>({diff_val:+,})</span>"
+        return f"<span style='color:#15803d; font-weight:900; font-size:12.5px;'>({diff_val:+,})</span>"
     if diff_val < 0:
-        return f"<span style='color:#b91c1c; font-weight:900; font-size:11px;'>({diff_val:+,})</span>"
-    return "<span style='color:#64748b; font-weight:800; font-size:11px;'>(+0)</span>"
+        return f"<span style='color:#b91c1c; font-weight:900; font-size:12.5px;'>({diff_val:+,})</span>"
+    return "<span style='color:#64748b; font-weight:800; font-size:12.5px;'>(+0)</span>"
 
 
 def build_custom_option_matrix_html(symbol, spot):
@@ -1813,13 +1813,13 @@ def build_custom_option_matrix_html(symbol, spot):
     y_high = v_max + v_span * 0.25
 
     col_w = 160
-    left_axis_w = 96
+    left_axis_w = 98
     total_chart_w = layout_cols * col_w
-    header_h = 54
-    top3_h = 99
-    svg_h = 246
-    bot3_h = 99
-    footer_h = 48
+    header_h = 56
+    top3_h = 108
+    svg_h = 250
+    bot3_h = 108
+    footer_h = 50
 
     def val_to_y(v):
         ratio = (v - y_low) / (y_high - y_low)
@@ -1832,7 +1832,7 @@ def build_custom_option_matrix_html(symbol, spot):
         tick_val = y_low + (y_high - y_low) * (t_i / num_ticks)
         ty = val_to_y(tick_val)
         svg_elements += f"<line x1='0' y1='{ty}' x2='{total_chart_w}' y2='{ty}' stroke='#e2e8f0' stroke-width='1' stroke-dasharray='4,4' />"
-        y_ticks_html += f"<div style='position:absolute; top:{ty - 9}px; right:6px; font-size:13px; font-weight:800; color:#334155;'>{tick_val:.1f}</div>"
+        y_ticks_html += f"<div style='position:absolute; top:{ty - 10}px; right:6px; font-size:14px; font-weight:800; color:#334155;'>{tick_val:.1f}</div>"
 
     for idx in range(layout_cols):
         x_left = idx * col_w
@@ -1866,19 +1866,19 @@ def build_custom_option_matrix_html(symbol, spot):
 
     for cx, cy, val in pts_call:
         svg_elements += f"<circle cx='{cx}' cy='{cy}' r='4.5' fill='#16a34a' stroke='#fff' stroke-width='1.2' />"
-        svg_elements += f"<text x='{cx}' y='{cy - 8}' text-anchor='middle' font-size='13' font-weight='900' fill='#15803d'>{val:g}</text>"
+        svg_elements += f"<text x='{cx}' y='{cy - 8}' text-anchor='middle' font-size='14.5' font-weight='900' fill='#15803d'>{val:g}</text>"
 
     for px, py, pval in pts_put:
         svg_elements += f"<circle cx='{px}' cy='{py}' r='4.5' fill='#dc2626' stroke='#fff' stroke-width='1.2' />"
-        svg_elements += f"<text x='{px}' y='{py + 16}' text-anchor='middle' font-size='13' font-weight='900' fill='#b91c1c'>{pval:g}</text>"
+        svg_elements += f"<text x='{px}' y='{py + 18}' text-anchor='middle' font-size='14.5' font-weight='900' fill='#b91c1c'>{pval:g}</text>"
 
     for mx, my, mval in pts_mp:
         svg_elements += f"<circle cx='{mx}' cy='{my}' r='4' fill='#2563eb' />"
-        svg_elements += f"<text x='{mx}' y='{my - 8}' text-anchor='middle' font-size='12.5' font-weight='800' fill='#1d4ed8'>{mval:g}</text>"
+        svg_elements += f"<text x='{mx}' y='{my - 8}' text-anchor='middle' font-size='13.5' font-weight='800' fill='#1d4ed8'>{mval:g}</text>"
 
     for sx, sy, sval in pts_spot:
         svg_elements += f"<circle cx='{sx}' cy='{sy}' r='5' fill='#0f172a' stroke='#facc15' stroke-width='1.5' />"
-        svg_elements += f"<text x='{sx}' y='{sy + 17}' text-anchor='middle' font-size='13.5' font-weight='900' fill='#0f172a'>{sval:g}</text>"
+        svg_elements += f"<text x='{sx}' y='{sy + 18}' text-anchor='middle' font-size='14.5' font-weight='900' fill='#0f172a'>{sval:g}</text>"
 
     cache_tag = f" | 缓存:{cache_time}" if cache_time else ""
     status_badge = f"{status_msg}{cache_tag}"
@@ -1888,11 +1888,11 @@ def build_custom_option_matrix_html(symbol, spot):
 
     html = f"""
     <div style="background:#ffffff; border:2px solid #1e293b; border-radius:8px; padding:8px 10px; font-family:sans-serif; color:#0f172a; width:100%; box-sizing:border-box; overflow:hidden;">
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px; padding-bottom:4px; border-bottom:1px solid #cbd5e1; height:28px; box-sizing:border-box;">
-            <div style="font-size:15px; font-weight:900; color:#0f172a;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px; padding-bottom:4px; border-bottom:1px solid #cbd5e1; height:30px; box-sizing:border-box;">
+            <div style="font-size:15.5px; font-weight:900; color:#0f172a;">
                 📊 {symbol} 真实期权墙矩阵 ({status_badge} | Spot: <span style="background:#fef08a; padding:1px 6px; border-radius:4px;">${spot:.2f}</span>)
             </div>
-            <div style="display:flex; gap:14px; font-size:12.5px; font-weight:900;">
+            <div style="display:flex; gap:14px; font-size:13px; font-weight:900;">
                 <span style="color:#16a34a;">━━ Call Wall</span>
                 <span style="color:#2563eb;">╌╌ Max Pain</span>
                 <span style="color:#0f172a;">━━ Spot</span>
@@ -1901,7 +1901,7 @@ def build_custom_option_matrix_html(symbol, spot):
                 <span style="color:#b91c1c;">(-减红)</span>
             </div>
         </div>
-        <div style="background:#f8fafc; border:1px solid #cbd5e1; border-radius:5px; padding:3px 8px; margin-bottom:6px; font-size:12.5px; font-weight:800; display:flex; justify-content:space-between;">
+        <div style="background:#f8fafc; border:1px solid #cbd5e1; border-radius:5px; padding:3px 8px; margin-bottom:6px; font-size:13px; font-weight:800; display:flex; justify-content:space-between;">
             <span style="color:#15803d;">🟢 上方有效主力 Call 墙 Top3: {agg_c_str}</span>
             <span>上下6档每档旁括号为较上一到期日 OI 变动（绿增/红减）</span>
             <span style="color:#b91c1c;">🔴 下方有效主力 Put 墙 Top3: {agg_p_str}</span>
@@ -1909,24 +1909,24 @@ def build_custom_option_matrix_html(symbol, spot):
 
         <div style="display:flex; width:100%;">
             <div style="width:{left_axis_w}px; flex-shrink:0; border-right:2px solid #1e293b; display:flex; flex-direction:column; box-sizing:border-box;">
-                <div style="height:{header_h}px; border-bottom:1px solid #cbd5e1; display:flex; flex-direction:column; align-items:center; justify-content:center; font-weight:900; font-size:13px; background:#f8fafc; box-sizing:border-box;">
+                <div style="height:{header_h}px; border-bottom:1px solid #cbd5e1; display:flex; flex-direction:column; align-items:center; justify-content:center; font-weight:900; font-size:14px; background:#f8fafc; box-sizing:border-box;">
                     <span>到期日</span>
-                    <span style="font-size:10.5px; font-weight:800; color:#15803d;">Call Wall 价</span>
+                    <span style="font-size:11.5px; font-weight:800; color:#15803d;">Call Wall 价</span>
                 </div>
-                <div style="height:{top3_h}px; border-bottom:2px solid #1e293b; display:flex; flex-direction:column; align-items:center; justify-content:center; font-weight:900; font-size:13px; color:#15803d; background:#f0fdf4; text-align:center; box-sizing:border-box;">
+                <div style="height:{top3_h}px; border-bottom:2px solid #1e293b; display:flex; flex-direction:column; align-items:center; justify-content:center; font-weight:900; font-size:14px; color:#15803d; background:#f0fdf4; text-align:center; box-sizing:border-box;">
                     <span>上3档 Call</span>
-                    <span style="font-size:10.5px; font-weight:800;">较前期增减</span>
+                    <span style="font-size:11px; font-weight:800;">较前期增减</span>
                 </div>
                 <div style="height:{svg_h}px; position:relative; border-bottom:2px solid #1e293b; background:#ffffff; box-sizing:border-box;">
                     {y_ticks_html}
                 </div>
-                <div style="height:{bot3_h}px; border-bottom:1px solid #cbd5e1; display:flex; flex-direction:column; align-items:center; justify-content:center; font-weight:900; font-size:13px; color:#b91c1c; background:#fef2f2; text-align:center; box-sizing:border-box;">
+                <div style="height:{bot3_h}px; border-bottom:1px solid #cbd5e1; display:flex; flex-direction:column; align-items:center; justify-content:center; font-weight:900; font-size:14px; color:#b91c1c; background:#fef2f2; text-align:center; box-sizing:border-box;">
                     <span>下3档 Put</span>
-                    <span style="font-size:10.5px; font-weight:800;">较前期增减</span>
+                    <span style="font-size:11px; font-weight:800;">高价→低价</span>
                 </div>
-                <div style="height:{footer_h}px; display:flex; flex-direction:column; align-items:center; justify-content:center; font-weight:900; font-size:13px; background:#f8fafc; box-sizing:border-box;">
+                <div style="height:{footer_h}px; display:flex; flex-direction:column; align-items:center; justify-content:center; font-weight:900; font-size:14px; background:#f8fafc; box-sizing:border-box;">
                     <span>到期轴</span>
-                    <span style="font-size:10.5px; font-weight:800; color:#b91c1c;">Put Wall 价</span>
+                    <span style="font-size:11.5px; font-weight:800; color:#b91c1c;">Put Wall 价</span>
                 </div>
             </div>
 
@@ -1939,12 +1939,12 @@ def build_custom_option_matrix_html(symbol, spot):
 
         if c["is_today"] and not c["has_chain"]:
             c_rows_html = """
-                <div style="height:99px; display:flex; align-items:center; justify-content:center; font-size:14px; color:#64748b; font-weight:800;">
+                <div style="height:108px; display:flex; align-items:center; justify-content:center; font-size:15px; color:#64748b; font-weight:800;">
                     —
                 </div>
             """
             p_rows_html = """
-                <div style="height:99px; display:flex; align-items:center; justify-content:center; font-size:14px; color:#64748b; font-weight:800;">
+                <div style="height:108px; display:flex; align-items:center; justify-content:center; font-size:15px; color:#64748b; font-weight:800;">
                     —
                 </div>
             """
@@ -1956,15 +1956,15 @@ def build_custom_option_matrix_html(symbol, spot):
                     hi_style = "background:#dcfce7; font-weight:900; color:#14532d;" if is_max_c else "font-weight:800; color:#0f172a;"
                     diff_badge = _fmt_exp_diff_badge(diff_val)
                     c_rows_html += f"""
-                        <div style="height:33px; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between; align-items:center; padding:0 5px; font-size:12px; box-sizing:border-box; {hi_style}">
-                            <span>{k_val:g}</span>
+                        <div style="height:36px; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between; align-items:center; padding:0 6px; font-size:13.5px; box-sizing:border-box; {hi_style}">
+                            <span style="font-weight:900;">{k_val:g}</span>
                             <span style="color:#cbd5e1;">|</span>
                             <span>{oi_val:,} {diff_badge}</span>
                         </div>
                     """
             else:
                 c_rows_html = """
-                    <div style="height:99px; display:flex; align-items:center; justify-content:center; font-size:14px; color:#64748b; font-weight:800;">
+                    <div style="height:108px; display:flex; align-items:center; justify-content:center; font-size:15px; color:#64748b; font-weight:800;">
                         —
                     </div>
                 """
@@ -1976,15 +1976,15 @@ def build_custom_option_matrix_html(symbol, spot):
                     hi_style = "background:#fee2e2; font-weight:900; color:#7f1d1d;" if is_max_p else "font-weight:800; color:#0f172a;"
                     diff_badge = _fmt_exp_diff_badge(diff_val)
                     p_rows_html += f"""
-                        <div style="height:33px; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between; align-items:center; padding:0 5px; font-size:12px; box-sizing:border-box; {hi_style}">
-                            <span>{k_val:g}</span>
+                        <div style="height:36px; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between; align-items:center; padding:0 6px; font-size:13.5px; box-sizing:border-box; {hi_style}">
+                            <span style="font-weight:900;">{k_val:g}</span>
                             <span style="color:#cbd5e1;">|</span>
                             <span>{oi_val:,} {diff_badge}</span>
                         </div>
                     """
             else:
                 p_rows_html = """
-                    <div style="height:99px; display:flex; align-items:center; justify-content:center; font-size:14px; color:#64748b; font-weight:800;">
+                    <div style="height:108px; display:flex; align-items:center; justify-content:center; font-size:15px; color:#64748b; font-weight:800;">
                         —
                     </div>
                 """
@@ -1992,8 +1992,8 @@ def build_custom_option_matrix_html(symbol, spot):
         html += f"""
                 <div style="flex:1; min-width:0; border-right:1px solid #cbd5e1; box-sizing:border-box; display:flex; flex-direction:column;">
                     <div style="height:{header_h}px; border-bottom:1px solid #cbd5e1; display:flex; flex-direction:column; align-items:center; justify-content:center; box-sizing:border-box; {bg_col}">
-                        <span style="font-size:12.5px; font-weight:900; color:#0f172a;">{c['date_str']} <span style="color:#475569; font-size:10.5px;">{c['exp_label']}</span></span>
-                        <span style="font-size:11.5px; font-weight:900; color:#15803d;">{c['call_wall_px_label']}</span>
+                        <span style="font-size:13.5px; font-weight:900; color:#0f172a;">{c['date_str']} <span style="color:#475569; font-size:11.5px;">{c['exp_label']}</span></span>
+                        <span style="font-size:12.5px; font-weight:900; color:#15803d;">{c['call_wall_px_label']}</span>
                     </div>
                     <div style="height:{top3_h}px; border-bottom:2px solid #1e293b; box-sizing:border-box; {bg_cell}">
                         {c_rows_html}
@@ -2003,8 +2003,8 @@ def build_custom_option_matrix_html(symbol, spot):
                         {p_rows_html}
                     </div>
                     <div style="height:{footer_h}px; display:flex; flex-direction:column; align-items:center; justify-content:center; box-sizing:border-box; {bg_col}">
-                        <span style="font-size:12.5px; font-weight:900; color:#0f172a;">{c['date_str']}</span>
-                        <span style="font-size:11.5px; font-weight:900; color:#b91c1c;">{c['put_wall_px_label']}</span>
+                        <span style="font-size:13.5px; font-weight:900; color:#0f172a;">{c['date_str']}</span>
+                        <span style="font-size:12.5px; font-weight:900; color:#b91c1c;">{c['put_wall_px_label']}</span>
                     </div>
                 </div>
         """
@@ -2012,11 +2012,11 @@ def build_custom_option_matrix_html(symbol, spot):
     for _ in range(max(0, layout_cols - len(cols_data))):
         html += f"""
                 <div style="flex:1; min-width:0; border-right:1px solid #e2e8f0; box-sizing:border-box; display:flex; flex-direction:column; background:#fafafa;">
-                    <div style="height:{header_h}px; border-bottom:1px solid #e2e8f0; display:flex; align-items:center; justify-content:center; font-size:11px; color:#94a3b8;">—</div>
+                    <div style="height:{header_h}px; border-bottom:1px solid #e2e8f0; display:flex; align-items:center; justify-content:center; font-size:12px; color:#94a3b8;">—</div>
                     <div style="height:{top3_h}px; border-bottom:2px solid #1e293b;"></div>
                     <div style="height:{svg_h}px; border-bottom:2px solid #1e293b;"></div>
                     <div style="height:{bot3_h}px; border-bottom:1px solid #e2e8f0;"></div>
-                    <div style="height:{footer_h}px; display:flex; align-items:center; justify-content:center; font-size:11px; color:#94a3b8;">—</div>
+                    <div style="height:{footer_h}px; display:flex; align-items:center; justify-content:center; font-size:12px; color:#94a3b8;">—</div>
                 </div>
         """
 
@@ -2652,7 +2652,7 @@ def render_12m_cycle_block_above_options(
     st.plotly_chart(fig_lower, use_container_width=True)
 
     oi_handwritten_html = build_handwritten_style_oi_table_html(symbol, spot_price, prev_spot=prev_spot)
-    st.components.v1.html(oi_handwritten_html, height=375, scrolling=False)
+    st.components.v1.html(oi_handwritten_html, height=385, scrolling=False)
     st.markdown("</div>", unsafe_allow_html=True)
 
 
@@ -2957,7 +2957,7 @@ elif st.session_state.page == "Options Intelligence":
     render_12m_cycle_block_above_options(sym, m_data=m_opt, cdf=cdf, pdf=pdf, spot_price=spot, prev_spot=prev_spot_val)
 
     matrix_html = build_custom_option_matrix_html(sym, spot)
-    st.components.v1.html(matrix_html, height=585, scrolling=False)
+    st.components.v1.html(matrix_html, height=615, scrolling=False)
 
     st.markdown("<div class='module-container'>", unsafe_allow_html=True)
     hdr_c1, hdr_c2 = st.columns([4.5, 1.5])
