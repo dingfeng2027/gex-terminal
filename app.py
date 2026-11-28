@@ -1,3 +1,4 @@
+import base64
 import hashlib
 import hmac
 import json
@@ -229,12 +230,67 @@ def _save_birthday_cache(cache: dict[str, dict[str, str]]) -> None:
         pass
 
 
+def _sync_snapshots_to_github(snap_data: dict[str, Any]) -> None:
+    """
+    可选将过去10天期权快照同步至 GitHub 仓库，防止云端容器重启丢失历史数据。
+    需在环境变量或 st.secrets 中配置 GITHUB_TOKEN 与 GITHUB_REPO（格式 owner/repo）。
+    """
+    token = _get_secret_or_env("GITHUB_TOKEN")
+    repo = _get_secret_or_env("GITHUB_REPO")
+    gh_path = _get_secret_or_env("GITHUB_OI_SNAPSHOT_PATH") or "oi_daily_snapshots.json"
+    if not token or not repo:
+        return
+
+    sync_guard_key = "_gh_last_sync_ts"
+    now_ts = datetime.now().timestamp()
+    if now_ts - float(st.session_state.get(sync_guard_key, 0.0)) < 120.0:
+        return
+
+    url = f"https://api.github.com/repos/{repo}/contents/{gh_path}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+    }
+    try:
+        get_r = requests.get(url, headers=headers, timeout=4.0)
+        sha_val = get_r.json().get("sha") if get_r.status_code == 200 else None
+        raw_bytes = json.dumps(snap_data, ensure_ascii=False, indent=2).encode("utf-8")
+        payload: dict[str, Any] = {
+            "message": f"chore: sync 10d option wall snapshot ({datetime.now().strftime('%Y-%m-%d %H:%M')})",
+            "content": base64.b64encode(raw_bytes).decode("ascii"),
+        }
+        if sha_val:
+            payload["sha"] = sha_val
+        put_r = requests.put(url, headers=headers, json=payload, timeout=5.0)
+        if put_r.status_code in (200, 201):
+            st.session_state[sync_guard_key] = now_ts
+    except Exception:
+        pass
+
+
 def _load_oi_snapshots() -> dict[str, Any]:
     if OI_SNAPSHOT_FILE.exists():
         try:
             data = json.loads(OI_SNAPSHOT_FILE.read_text(encoding="utf-8"))
             if isinstance(data, dict):
                 return data
+        except Exception:
+            pass
+
+    token = _get_secret_or_env("GITHUB_TOKEN")
+    repo = _get_secret_or_env("GITHUB_REPO")
+    gh_path = _get_secret_or_env("GITHUB_OI_SNAPSHOT_PATH") or "oi_daily_snapshots.json"
+    if token and repo:
+        try:
+            url = f"https://api.github.com/repos/{repo}/contents/{gh_path}"
+            headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"}
+            r = requests.get(url, headers=headers, timeout=4.0)
+            if r.status_code == 200 and r.json().get("content"):
+                decoded = base64.b64decode(r.json()["content"]).decode("utf-8")
+                parsed = json.loads(decoded)
+                if isinstance(parsed, dict):
+                    OI_SNAPSHOT_FILE.write_text(json.dumps(parsed, ensure_ascii=False, indent=2), encoding="utf-8")
+                    return parsed
         except Exception:
             pass
     return {}
@@ -248,6 +304,7 @@ def _save_oi_snapshots(snap_data: dict[str, Any]) -> None:
         )
     except Exception:
         pass
+    _sync_snapshots_to_github(snap_data)
 
 
 def _record_10d_wall_oi_snapshot(
@@ -258,10 +315,11 @@ def _record_10d_wall_oi_snapshot(
     put_strike: float | None,
     put_oi: int,
     spot: float,
+    strike_oi_map: dict[float, dict[str, int]] | None = None,
 ) -> list[dict[str, Any]]:
     """
-    沉淀过往最多10个交易日/到期日的期权墙 OI 快照（若无历史则从当前/最近数据开始记录）。
-    返回近10条历史快照列表（按日期升序）。
+    记录并保留过去 10 个日历日快照（按 YYYY-MM-DD 升序，最右侧为今天）。
+    同时保存关键行权价的 call/put OI 明细，供过去10天历史矩阵逐日回溯。
     """
     clean_sym = str(symbol or "").upper().strip()
     today_str = datetime.today().strftime("%Y-%m-%d")
@@ -279,6 +337,14 @@ def _record_10d_wall_oi_snapshot(
         if dt_k:
             merged_by_date[dt_k] = item
 
+    strikes_serializable: dict[str, dict[str, int]] = {}
+    if strike_oi_map:
+        for k_f, pair_d in strike_oi_map.items():
+            strikes_serializable[f"{float(k_f):g}"] = {
+                "c": int(pair_d.get("c", 0)),
+                "p": int(pair_d.get("p", 0)),
+            }
+
     cur_rec = {
         "date": today_str,
         "exp_key": d_key,
@@ -287,12 +353,14 @@ def _record_10d_wall_oi_snapshot(
         "call_oi": int(call_oi),
         "put_strike": float(put_strike) if put_strike is not None else None,
         "put_oi": int(put_oi),
+        "strikes": strikes_serializable,
         "updated_at": datetime.now().strftime("%H:%M:%S"),
     }
     merged_by_date[today_str] = cur_rec
 
-    sorted_dates = sorted(merged_by_date.keys())[-10:]
-    trimmed_list = [merged_by_date[k] for k in sorted_dates]
+    cutoff_date = (datetime.today().date() - timedelta(days=9)).strftime("%Y-%m-%d")
+    valid_dates = sorted([k for k in merged_by_date.keys() if k >= cutoff_date])[-10:]
+    trimmed_list = [merged_by_date[k] for k in valid_dates]
 
     hist_root[clean_sym] = trimmed_list
     mem_hist_root[clean_sym] = trimmed_list
@@ -1334,7 +1402,7 @@ def _style_wall_count_cell(cur_val: int, ref_val: int | None, is_baseline_col: b
     统一 Call Wall 与 Put Wall 数量变动变色规则：
     - 数量增加 -> 绿色 (#15803d / #dcfce7)
     - 数量减少 -> 红色 (#b91c1c / #fee2e2)
-    - 变动很小 / 持平 -> 黑色 (#0f172a) 或黄色 (#ca8a04 / #fef9c3)
+    - 变动很小 / 持平 -> 黄色 (#ca8a04 / #fef9c3) 或黑色 (#0f172a)
     """
     if is_baseline_col:
         return "#0f172a", "#fef08a"
@@ -1351,89 +1419,74 @@ def _style_wall_count_cell(cur_val: int, ref_val: int | None, is_baseline_col: b
 
 def build_handwritten_style_oi_table_html(symbol: str, spot: float, prev_spot: float | None = None) -> str:
     """
-    10 个期权到期日列（最新/今天到期日如 27/11 放在最右侧第 10 栏）：
-    - 左侧 9 栏为较早/前面 9 个期权到期日，最右侧第 10 栏为当前/最近到期日（如 27/11），随每日沉淀逐步攒齐过去10天对比
-    - Call Wall 与 Put Wall 数量：增加变绿、减少变红、变动很小保持黑/黄
+    过去 10 个日历日快照矩阵（最右侧第 10 栏为今天，如 27/11，左侧 9 栏为过去 9 天）：
+    - 随每日快照沉淀逐步攒齐过去 10 天历史数据；未沉淀日期显示空白/待积累，不混入未来到期日
+    - “当天价”行读取真实历史收盘价（若无历史K线则回退到快照或现价）
+    - 新增“净多空差”行，直观显示 Call OI 增量减去 Put OI 增量
     """
     clean_sym = str(symbol or "").upper().strip()
     today = datetime.today()
-    today_str = today.strftime("%Y-%m-%d")
+    today_date = today.date()
+
+    # 生成过去 10 个日历日（索引 0 为 9 天前，索引 9 为今天）
+    past_10_dates: list[str] = [
+        (today_date - timedelta(days=9 - i)).strftime("%Y-%m-%d")
+        for i in range(10)
+    ]
 
     all_days, combined_by_day, _, status_msg, cache_time = _collect_multi_source_options(clean_sym)
-    exp_keys = _build_company_real_day_keys(all_days, today, max_cols=10)
-    if not exp_keys:
-        exp_keys = [today_str]
+    nearest_exp_key = all_days[0] if all_days else today_date.strftime("%Y-%m-%d")
+    nearest_rec = combined_by_day.get(nearest_exp_key, {})
+    first_cdf = nearest_rec.get("cdf", pd.DataFrame())
+    first_pdf = nearest_rec.get("pdf", pd.DataFrame())
 
-    # 最右侧（第10栏）放今天/最近到期日（exp_keys[0]），左侧按时间顺序排列前面9栏
-    ordered_keys = list(reversed(exp_keys[:10]))
-    while len(ordered_keys) < 10:
-        ordered_keys.insert(0, "—")
+    c_oi_today: dict[float, int] = {}
+    if first_cdf is not None and not first_cdf.empty and "strike" in first_cdf.columns:
+        for _, r in first_cdf.iterrows():
+            c_oi_today[float(r["strike"])] = int(_parse_float_clean(r.get("openInterest")) or 0)
 
-    exp_cols: list[dict[str, Any]] = []
-    for idx_e, d_key in enumerate(ordered_keys):
-        if d_key == "—":
-            exp_cols.append({
-                "d_key": "—",
-                "col_title": "—",
-                "is_latest_col": (idx_e == 9),
-                "cdf": pd.DataFrame(),
-                "pdf": pd.DataFrame(),
-                "c_oi": {},
-                "p_oi": {},
-            })
-            continue
+    p_oi_today: dict[float, int] = {}
+    if first_pdf is not None and not first_pdf.empty and "strike" in first_pdf.columns:
+        for _, r in first_pdf.iterrows():
+            p_oi_today[float(r["strike"])] = int(_parse_float_clean(r.get("openInterest")) or 0)
 
-        dt_e = datetime.strptime(d_key, "%Y-%m-%d")
-        dm_e = dt_e.strftime("%d/%m")
-        delta_e = (dt_e.date() - today.date()).days
-        is_latest_col = (idx_e == 9)
-        if is_latest_col:
-            col_title = f"{dm_e} (今天)" if delta_e == 0 else f"{dm_e} (最新)"
-        elif delta_e == 0:
-            col_title = f"{dm_e}"
-        else:
-            col_title = f"{dm_e} (+{delta_e}d)"
+    c_top_list, main_call_wall, p_bot_list, main_put_wall = extract_top3_walls(first_cdf, first_pdf, spot, delta_days=0)
+    main_c_oi = int(c_oi_today.get(float(main_call_wall), 0)) if main_call_wall is not None else 0
+    main_p_oi = int(p_oi_today.get(float(main_put_wall), 0)) if main_put_wall is not None else 0
 
-        rec_e = combined_by_day.get(d_key, {})
-        cdf_e = rec_e.get("cdf", pd.DataFrame())
-        pdf_e = rec_e.get("pdf", pd.DataFrame())
+    strike_pair_map: dict[float, dict[str, int]] = {}
+    all_k_set = set(c_oi_today.keys()) | set(p_oi_today.keys())
+    for k_f in all_k_set:
+        strike_pair_map[k_f] = {"c": int(c_oi_today.get(k_f, 0)), "p": int(p_oi_today.get(k_f, 0))}
 
-        c_oi_e: dict[float, int] = {}
-        if cdf_e is not None and not cdf_e.empty and "strike" in cdf_e.columns:
-            for _, r in cdf_e.iterrows():
-                c_oi_e[float(r["strike"])] = int(_parse_float_clean(r.get("openInterest")) or 0)
-
-        p_oi_e: dict[float, int] = {}
-        if pdf_e is not None and not pdf_e.empty and "strike" in pdf_e.columns:
-            for _, r in pdf_e.iterrows():
-                p_oi_e[float(r["strike"])] = int(_parse_float_clean(r.get("openInterest")) or 0)
-
-        exp_cols.append({
-            "d_key": d_key,
-            "col_title": col_title,
-            "is_latest_col": is_latest_col,
-            "cdf": cdf_e,
-            "pdf": pdf_e,
-            "c_oi": c_oi_e,
-            "p_oi": p_oi_e,
-        })
-
-    latest_col = exp_cols[-1]
-    c_top_list, main_call_wall, p_bot_list, main_put_wall = extract_top3_walls(
-        latest_col["cdf"], latest_col["pdf"], spot, delta_days=0
-    )
-
-    main_c_oi = int(latest_col["c_oi"].get(float(main_call_wall), 0)) if main_call_wall is not None else 0
-    main_p_oi = int(latest_col["p_oi"].get(float(main_put_wall), 0)) if main_put_wall is not None else 0
     hist_10d = _record_10d_wall_oi_snapshot(
         symbol=clean_sym,
-        d_key=latest_col["d_key"],
+        d_key=nearest_exp_key,
         call_strike=main_call_wall,
         call_oi=main_c_oi,
         put_strike=main_put_wall,
         put_oi=main_p_oi,
         spot=spot,
+        strike_oi_map=strike_pair_map,
     )
+    snap_by_date: dict[str, dict[str, Any]] = {
+        str(item.get("date", "")): item for item in hist_10d if item.get("date")
+    }
+
+    # 读取真实历史每日收盘价，对齐过去10天“当天价”行
+    hist_close_by_date: dict[str, float] = {}
+    nonce = int(st.session_state.get("calc_refresh_nonce", 0))
+    df_h_1m = fetch_history_df(clean_sym, "1个月", spot, refresh_nonce=nonce)
+    if df_h_1m is not None and not df_h_1m.empty and "Date" in df_h_1m.columns and "Close" in df_h_1m.columns:
+        for _, hr in df_h_1m.iterrows():
+            try:
+                dk = pd.to_datetime(hr["Date"]).strftime("%Y-%m-%d")
+                cv = _parse_float_clean(hr["Close"])
+                if cv is not None and cv > 0:
+                    hist_close_by_date[dk] = round(float(cv), 2)
+            except Exception:
+                continue
+    hist_close_by_date[today_date.strftime("%Y-%m-%d")] = round(float(spot), 2)
 
     prev_snap = hist_10d[-2] if len(hist_10d) >= 2 else None
     prev_c_oi = int(prev_snap.get("call_oi", 0)) if prev_snap else 0
@@ -1450,7 +1503,7 @@ def build_handwritten_style_oi_table_html(symbol: str, spot: float, prev_spot: f
 
     up_strikes = [float(k) for k, _ in c_top_list]
     if len(up_strikes) < 3:
-        avail_c = sorted([k for k in latest_col["c_oi"].keys() if k > spot])
+        avail_c = sorted([k for k in c_oi_today.keys() if k > spot])
         for k in avail_c:
             if k not in up_strikes:
                 up_strikes.append(k)
@@ -1466,7 +1519,7 @@ def build_handwritten_style_oi_table_html(symbol: str, spot: float, prev_spot: f
         if fk < spot and fk not in dn_strikes:
             dn_strikes.append(fk)
     if len(dn_strikes) < 3:
-        avail_p = sorted([k for k in latest_col["p_oi"].keys() if k < spot], reverse=True)
+        avail_p = sorted([k for k in p_oi_today.keys() if k < spot], reverse=True)
         for k in avail_p:
             if k not in dn_strikes:
                 dn_strikes.append(k)
@@ -1474,8 +1527,40 @@ def build_handwritten_style_oi_table_html(symbol: str, spot: float, prev_spot: f
                 break
     dn_strikes = sorted(dn_strikes, reverse=True)[:3]
 
-    def _build_side_rows(strikes_list: list[float], labels_list: list[str], is_put_side: bool) -> list[dict[str, Any]]:
+    day_cols: list[dict[str, Any]] = []
+    for idx_d, d_str in enumerate(past_10_dates):
+        dt_obj = datetime.strptime(d_str, "%Y-%m-%d")
+        dm_label = dt_obj.strftime("%d/%m")
+        is_today_col = (idx_d == 9)
+        col_title = f"{dm_label} (今天)" if is_today_col else dm_label
+        snap_rec = snap_by_date.get(d_str)
+
+        c_day_map: dict[float, int] = {}
+        p_day_map: dict[float, int] = {}
+        if snap_rec and isinstance(snap_rec.get("strikes"), dict):
+            for k_s, pair_d in snap_rec["strikes"].items():
+                kf = _parse_float_clean(k_s)
+                if kf is not None:
+                    c_day_map[kf] = int(pair_d.get("c", 0))
+                    p_day_map[kf] = int(pair_d.get("p", 0))
+
+        px_val: float | None = hist_close_by_date.get(d_str)
+        if px_val is None and snap_rec and snap_rec.get("spot") is not None:
+            px_val = float(snap_rec["spot"])
+
+        day_cols.append({
+            "date": d_str,
+            "col_title": col_title,
+            "is_today": is_today_col,
+            "has_snap": snap_rec is not None,
+            "c_map": c_day_map,
+            "p_map": p_day_map,
+            "spot_px": px_val,
+        })
+
+    def _build_side_rows(strikes_list: list[float], labels_list: list[str], is_put_side: bool) -> tuple[list[dict[str, Any]], list[int]]:
         built: list[dict[str, Any]] = []
+        col_sums: list[int] = [0] * 10
         for idx_s in range(3):
             lbl = labels_list[idx_s]
             k_val = strikes_list[idx_s] if idx_s < len(strikes_list) else None
@@ -1483,16 +1568,17 @@ def build_handwritten_style_oi_table_html(symbol: str, spot: float, prev_spot: f
                 day_cells: list[dict[str, str]] = []
                 prev_val: int | None = None
                 for d_idx in range(10):
-                    col_obj = exp_cols[d_idx]
-                    oi_map = col_obj["p_oi"] if is_put_side else col_obj["c_oi"]
-                    if col_obj["d_key"] == "—":
-                        day_cells.append({"txt": "—", "fg": "#0f172a", "bg": "#ffffff"})
+                    col_obj = day_cols[d_idx]
+                    if not col_obj["has_snap"]:
+                        day_cells.append({"txt": "—", "fg": "#64748b", "bg": "#f8fafc"})
                         continue
 
-                    val_i = int(oi_map.get(k_val, 0))
-                    is_last = col_obj.get("is_latest_col", False)
-                    fg_c, bg_c = _style_wall_count_cell(val_i, prev_val, is_baseline_col=is_last)
+                    oi_d = col_obj["p_map"] if is_put_side else col_obj["c_map"]
+                    val_i = int(oi_d.get(k_val, 0))
+                    col_sums[d_idx] += val_i
 
+                    is_last = col_obj.get("is_today", False)
+                    fg_c, bg_c = _style_wall_count_cell(val_i, prev_val, is_baseline_col=is_last)
                     day_cells.append({
                         "txt": f"{val_i:,}",
                         "fg": fg_c,
@@ -1509,18 +1595,39 @@ def build_handwritten_style_oi_table_html(symbol: str, spot: float, prev_spot: f
                 built.append({
                     "label": lbl,
                     "strike_txt": "—",
-                    "cells": [{"txt": "—", "fg": "#0f172a", "bg": "#ffffff"} for _ in range(10)],
+                    "cells": [{"txt": "—", "fg": "#64748b", "bg": "#f8fafc"} for _ in range(10)],
                 })
-        return built
+        return built, col_sums
 
-    up_rows = _build_side_rows(up_strikes, ["上3档", "上2档", "上1档"], is_put_side=False)
-    dn_rows = _build_side_rows(dn_strikes, ["下1档", "下2档", "下3档"], is_put_side=True)
+    up_rows, up_col_sums = _build_side_rows(up_strikes, ["上3档", "上2档", "上1档"], is_put_side=False)
+    dn_rows, dn_col_sums = _build_side_rows(dn_strikes, ["下1档", "下2档", "下3档"], is_put_side=True)
 
-    spot_cells = [round(spot * (1.0 + 0.001 * (i - 9)), 2) for i in range(10)]
-    spot_cells[-1] = round(spot, 2)
+    # 净多空差 = 当日上3档 Call OI 总和 - 当日下3档 Put OI 总和（对比前一日净差变化着色）
+    net_diff_cells: list[dict[str, str]] = []
+    prev_net_val: int | None = None
+    for d_idx in range(10):
+        col_obj = day_cols[d_idx]
+        if not col_obj["has_snap"]:
+            net_diff_cells.append({"txt": "—", "fg": "#64748b", "bg": "#f8fafc"})
+            continue
+        net_now = int(up_col_sums[d_idx] - dn_col_sums[d_idx])
+        if col_obj.get("is_today"):
+            fg_n, bg_n = "#0f172a", "#fef08a"
+        elif prev_net_val is not None:
+            delta_net = net_now - prev_net_val
+            if delta_net > 0:
+                fg_n, bg_n = "#15803d", "#dcfce7"
+            elif delta_net < 0:
+                fg_n, bg_n = "#b91c1c", "#fee2e2"
+            else:
+                fg_n, bg_n = "#ca8a04", "#fef9c3"
+        else:
+            fg_n, bg_n = "#0f172a", "#f8fafc"
+        net_diff_cells.append({"txt": f"{net_now:+,}", "fg": fg_n, "bg": bg_n})
+        prev_net_val = net_now
 
     cache_tag = f" | 缓存:{cache_time}" if cache_time else ""
-    latest_dm = latest_col["col_title"].split(" ")[0] if latest_col["d_key"] != "—" else today.strftime("%d/%m")
+    today_dm = today.strftime("%d/%m")
     hist_days_cnt = len(hist_10d)
 
     def _render_data_tr(r_obj: dict[str, Any]) -> str:
@@ -1539,19 +1646,23 @@ def build_handwritten_style_oi_table_html(symbol: str, spot: float, prev_spot: f
     up_html = "".join([_render_data_tr(x) for x in up_rows])
     dn_html = "".join([_render_data_tr(x) for x in dn_rows])
     ths_html = "".join([
-        f"<th style='border:1px solid #334155; padding:5px 3px; font-weight:900; color:#0f172a; text-align:center; font-size:11.5px; background:{'#fef08a' if c_obj.get('is_latest_col') else '#f1f5f9'};'>{c_obj['col_title']}</th>"
-        for c_obj in exp_cols
+        f"<th style='border:1px solid #334155; padding:5px 3px; font-weight:900; color:#0f172a; text-align:center; font-size:11.5px; background:{'#fef08a' if c_obj.get('is_today') else '#f1f5f9'};'>{c_obj['col_title']}</th>"
+        for c_obj in day_cols
     ])
     spot_tds_html = "".join([
-        f"<td style='border:1px solid #334155; padding:5px 3px; font-weight:900; color:#0f172a; text-align:center; font-size:12px; background:{'#fde047' if idx_s == 9 else '#fef9c3'};'>{sp_v:.2f}</td>"
-        for idx_s, sp_v in enumerate(spot_cells)
+        f"<td style='border:1px solid #334155; padding:5px 3px; font-weight:900; color:#0f172a; text-align:center; font-size:12px; background:{'#fde047' if c_obj.get('is_today') else '#fef9c3'};'>{f\"{c_obj['spot_px']:.2f}\" if c_obj['spot_px'] is not None else '—'}</td>"
+        for c_obj in day_cols
+    ])
+    net_tds_html = "".join([
+        f"<td style='border:1px solid #334155; padding:5px 3px; font-weight:900; color:{nc['fg']}; background:{nc['bg']}; text-align:center; font-size:12px;'>{nc['txt']}</td>"
+        for nc in net_diff_cells
     ])
 
     html = f"""
     <div style="background:#ffffff; border:2px solid #1e293b; border-radius:8px; padding:8px 10px; margin:0; font-family:sans-serif; color:#0f172a; width:100%; box-sizing:border-box;">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px; padding-bottom:4px; border-bottom:2px solid #1e293b;">
             <div style="font-size:14px; font-weight:900; color:#0f172a;">
-                📝 {latest_dm} {clean_sym} 期权墙数量10期对比（第10栏为 {latest_dm} 最新基准）· {status_msg}{cache_tag}
+                📝 {today_dm} {clean_sym} 过去10天期权墙数量轨迹（第10栏为 {today_dm} 今天基准）· {status_msg}{cache_tag}
             </div>
             <div style="display:flex; gap:12px; font-size:12px; font-weight:900;">
                 <span style="color:#15803d;">■ 数量增加 → 绿色</span>
@@ -1560,7 +1671,7 @@ def build_handwritten_style_oi_table_html(symbol: str, spot: float, prev_spot: f
             </div>
         </div>
         <div style="background:#f8fafc; border:1px solid #cbd5e1; border-radius:5px; padding:3px 8px; margin-bottom:5px; font-size:12px; font-weight:800; display:flex; justify-content:space-between;">
-            <span>过去10天快照已沉淀: <b>{hist_days_cnt}/10 天</b>（从当前/最近数据自动累积）</span>
+            <span>过去10天快照已沉淀: <b>{hist_days_cnt}/10 天</b>（逐日自动累积，第10天齐后开启完整10日对比）</span>
             <span style="color:{c_monitor_color};">{c_trend_txt}</span>
             <span style="color:{p_monitor_color};">{p_trend_txt}</span>
         </div>
@@ -1581,6 +1692,11 @@ def build_handwritten_style_oi_table_html(symbol: str, spot: float, prev_spot: f
                     {spot_tds_html}
                 </tr>
                 {dn_html}
+                <tr style="border-top:2px solid #1e293b; background:#f8fafc;">
+                    <td style="border:1px solid #334155; padding:5px 3px; font-weight:900; color:#0f172a; background:#e2e8f0; text-align:center;">净多空差</td>
+                    <td style="border:1px solid #334155; padding:5px 3px; font-weight:800; color:#334155; background:#f1f5f9; text-align:center;">C-P</td>
+                    {net_tds_html}
+                </tr>
             </tbody>
         </table>
     </div>
@@ -2428,9 +2544,8 @@ def render_12m_cycle_block_above_options(
     fig_lower.update_yaxes(range=[-24, 24], title="资金进出场幅度", gridcolor="#e2e8f0")
     st.plotly_chart(fig_lower, use_container_width=True)
 
-    # 紧凑高度去除底部黑色空间
     oi_handwritten_html = build_handwritten_style_oi_table_html(symbol, spot_price, prev_spot=prev_spot)
-    st.components.v1.html(oi_handwritten_html, height=345, scrolling=False)
+    st.components.v1.html(oi_handwritten_html, height=375, scrolling=False)
     st.markdown("</div>", unsafe_allow_html=True)
 
 
@@ -2734,7 +2849,6 @@ elif st.session_state.page == "Options Intelligence":
 
     render_12m_cycle_block_above_options(sym, m_data=m_opt, cdf=cdf, pdf=pdf, spot_price=spot, prev_spot=prev_spot_val)
 
-    # 紧凑高度去掉底部黑色空间
     matrix_html = build_custom_option_matrix_html(sym, spot)
     st.components.v1.html(matrix_html, height=585, scrolling=False)
 
