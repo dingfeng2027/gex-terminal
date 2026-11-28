@@ -1360,20 +1360,26 @@ def pull_and_filter_real_expirations_locally(symbol: str, spot: float, max_cols:
         if has_chain:
             has_any_real_data = True
 
-        if has_chain:
+        # 今天到期日暂时没有链数据时显示“—”留白，等过了今天下个到期日有数据时自动显示
+        if is_today and not has_chain:
+            c_top_list, call_wall_val, p_bot_list, put_wall_val = [], None, [], None
+            raw_mp = None
+            call_wall_px_label = "—"
+            put_wall_px_label = "—"
+        elif has_chain:
             c_top_list, call_wall_val, p_bot_list, put_wall_val = extract_top3_walls(col_cdf, col_pdf, spot, delta_days=max(0, delta_days))
             raw_mp = (
                 round((spot * 0.55 + call_wall_val * 0.25 + put_wall_val * 0.20), 2)
                 if (call_wall_val is not None and put_wall_val is not None)
                 else None
             )
-            call_wall_px_label = f"Call {call_wall_val:g}" if call_wall_val is not None else "Call —"
-            put_wall_px_label = f"Put {put_wall_val:g}" if put_wall_val is not None else "Put —"
+            call_wall_px_label = f"Call {call_wall_val:g}" if call_wall_val is not None else "—"
+            put_wall_px_label = f"Put {put_wall_val:g}" if put_wall_val is not None else "—"
         else:
             c_top_list, call_wall_val, p_bot_list, put_wall_val = [], None, [], None
             raw_mp = None
-            call_wall_px_label = "Call —"
-            put_wall_px_label = "Put —"
+            call_wall_px_label = "—"
+            put_wall_px_label = "—"
 
         cols_data.append({
             "day_key": d_key,
@@ -1900,43 +1906,55 @@ def build_custom_option_matrix_html(symbol, spot):
         bg_col = "background:#fef08a;" if c["is_today"] else ""
         bg_cell = "background:rgba(254,240,138,0.25);" if c["is_today"] else "background:#ffffff;"
 
-        c_rows_html = ""
-        if c["c_top"]:
-            for k_val, oi_val in c["c_top"]:
-                is_max_c = (k_val == c["call_wall"])
-                hi_style = "background:#dcfce7; font-weight:900; color:#14532d;" if is_max_c else "font-weight:800; color:#0f172a;"
-                c_rows_html += f"""
-                    <div style="height:33px; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between; align-items:center; padding:0 6px; font-size:13px; box-sizing:border-box; {hi_style}">
-                        <span>{k_val:g}</span>
-                        <span style="color:#cbd5e1;">|</span>
-                        <span>{oi_val:,}</span>
-                    </div>
-                """
-        else:
+        if c["is_today"] and not c["has_chain"]:
             c_rows_html = """
-                <div style="height:99px; display:flex; align-items:center; justify-content:center; font-size:13px; color:#64748b; font-weight:800;">
-                    无真实链数据
+                <div style="height:99px; display:flex; align-items:center; justify-content:center; font-size:14px; color:#64748b; font-weight:800;">
+                    —
                 </div>
             """
-
-        p_rows_html = ""
-        if c["p_bot"]:
-            for k_val, oi_val in c["p_bot"]:
-                is_max_p = (k_val == c["put_wall"])
-                hi_style = "background:#fee2e2; font-weight:900; color:#7f1d1d;" if is_max_p else "font-weight:800; color:#0f172a;"
-                p_rows_html += f"""
-                    <div style="height:33px; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between; align-items:center; padding:0 6px; font-size:13px; box-sizing:border-box; {hi_style}">
-                        <span>{k_val:g}</span>
-                        <span style="color:#cbd5e1;">|</span>
-                        <span>{oi_val:,}</span>
+            p_rows_html = """
+                <div style="height:99px; display:flex; align-items:center; justify-content:center; font-size:14px; color:#64748b; font-weight:800;">
+                    —
+                </div>
+            """
+        else:
+            c_rows_html = ""
+            if c["c_top"]:
+                for k_val, oi_val in c["c_top"]:
+                    is_max_c = (k_val == c["call_wall"])
+                    hi_style = "background:#dcfce7; font-weight:900; color:#14532d;" if is_max_c else "font-weight:800; color:#0f172a;"
+                    c_rows_html += f"""
+                        <div style="height:33px; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between; align-items:center; padding:0 6px; font-size:13px; box-sizing:border-box; {hi_style}">
+                            <span>{k_val:g}</span>
+                            <span style="color:#cbd5e1;">|</span>
+                            <span>{oi_val:,}</span>
+                        </div>
+                    """
+            else:
+                c_rows_html = """
+                    <div style="height:99px; display:flex; align-items:center; justify-content:center; font-size:14px; color:#64748b; font-weight:800;">
+                        —
                     </div>
                 """
-        else:
-            p_rows_html = """
-                <div style="height:99px; display:flex; align-items:center; justify-content:center; font-size:13px; color:#64748b; font-weight:800;">
-                    无真实链数据
-                </div>
-            """
+
+            p_rows_html = ""
+            if c["p_bot"]:
+                for k_val, oi_val in c["p_bot"]:
+                    is_max_p = (k_val == c["put_wall"])
+                    hi_style = "background:#fee2e2; font-weight:900; color:#7f1d1d;" if is_max_p else "font-weight:800; color:#0f172a;"
+                    p_rows_html += f"""
+                        <div style="height:33px; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between; align-items:center; padding:0 6px; font-size:13px; box-sizing:border-box; {hi_style}">
+                            <span>{k_val:g}</span>
+                            <span style="color:#cbd5e1;">|</span>
+                            <span>{oi_val:,}</span>
+                        </div>
+                    """
+            else:
+                p_rows_html = """
+                    <div style="height:99px; display:flex; align-items:center; justify-content:center; font-size:14px; color:#64748b; font-weight:800;">
+                        —
+                    </div>
+                """
 
         html += f"""
                 <div style="flex:1; min-width:0; border-right:1px solid #cbd5e1; box-sizing:border-box; display:flex; flex-direction:column;">
