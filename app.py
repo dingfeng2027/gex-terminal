@@ -231,10 +231,6 @@ def _save_birthday_cache(cache: dict[str, dict[str, str]]) -> None:
 
 
 def _sync_snapshots_to_github(snap_data: dict[str, Any]) -> None:
-    """
-    可选将过去10天期权快照同步至 GitHub 仓库，防止云端容器重启丢失历史数据。
-    需在环境变量或 st.secrets 中配置 GITHUB_TOKEN 与 GITHUB_REPO（格式 owner/repo）。
-    """
     token = _get_secret_or_env("GITHUB_TOKEN")
     repo = _get_secret_or_env("GITHUB_REPO")
     gh_path = _get_secret_or_env("GITHUB_OI_SNAPSHOT_PATH") or "oi_daily_snapshots.json"
@@ -317,10 +313,6 @@ def _record_10d_wall_oi_snapshot(
     spot: float,
     strike_oi_map: dict[float, dict[str, int]] | None = None,
 ) -> list[dict[str, Any]]:
-    """
-    记录并保留过去 10 个日历日快照（按 YYYY-MM-DD 升序，最右侧为今天）。
-    同时保存关键行权价的 call/put OI 明细，供过去10天历史矩阵逐日回溯。
-    """
     clean_sym = str(symbol or "").upper().strip()
     today_str = datetime.today().strftime("%Y-%m-%d")
 
@@ -1208,7 +1200,7 @@ def fetch_real_option_chain_for_date(symbol, target_dt_timestamp=None, spot=None
     return exp_ts_list, pd.DataFrame(), pd.DataFrame()
 
 
-def _build_company_real_day_keys(real_day_keys: list[str], base_dt: datetime, max_cols: int = 10) -> list[str]:
+def _build_company_real_day_keys(real_day_keys: list[str], base_dt: datetime, max_cols: int = 8) -> list[str]:
     today_date = base_dt.date()
     unique_sorted = sorted({d for d in (real_day_keys or []) if d})
     active_or_future = [
@@ -1332,7 +1324,7 @@ def compute_aggregate_real_walls(combined_by_day: dict[str, dict[str, Any]], spo
     return {"call_walls": c_list, "put_walls": p_list}
 
 
-def pull_and_filter_real_expirations_locally(symbol: str, spot: float, max_cols: int = 10) -> tuple[list[dict[str, Any]], bool, int, str, str, dict[str, Any]]:
+def pull_and_filter_real_expirations_locally(symbol: str, spot: float, max_cols: int = 8) -> tuple[list[dict[str, Any]], bool, int, str, str, dict[str, Any]]:
     today = datetime.today()
     all_days, combined_by_day, live_count, status_msg, cache_time = _collect_multi_source_options(symbol)
     chosen_days = _build_company_real_day_keys(all_days, today, max_cols=max_cols)
@@ -1340,6 +1332,10 @@ def pull_and_filter_real_expirations_locally(symbol: str, spot: float, max_cols:
 
     cols_data = []
     has_any_real_data = False
+
+    # 先提取各到期日全链 OI 映射，供相邻到期日之间逐档计算 OI 增减
+    prev_c_oi_map: dict[float, int] | None = None
+    prev_p_oi_map: dict[float, int] | None = None
 
     for d_key in chosen_days:
         dt = datetime.strptime(d_key, "%Y-%m-%d")
@@ -1360,12 +1356,21 @@ def pull_and_filter_real_expirations_locally(symbol: str, spot: float, max_cols:
         if has_chain:
             has_any_real_data = True
 
-        # 今天到期日暂时没有链数据时显示“—”留白，等过了今天下个到期日有数据时自动显示
+        c_oi_map: dict[float, int] = {}
+        p_oi_map: dict[float, int] = {}
+        if has_chain:
+            for _, r_c in col_cdf.iterrows():
+                c_oi_map[float(r_c["strike"])] = int(_parse_float_clean(r_c.get("openInterest")) or 0)
+            for _, r_p in col_pdf.iterrows():
+                p_oi_map[float(r_p["strike"])] = int(_parse_float_clean(r_p.get("openInterest")) or 0)
+
         if is_today and not has_chain:
             c_top_list, call_wall_val, p_bot_list, put_wall_val = [], None, [], None
             raw_mp = None
             call_wall_px_label = "—"
             put_wall_px_label = "—"
+            c_top_with_diff: list[tuple[float, int, int | None]] = []
+            p_bot_with_diff: list[tuple[float, int, int | None]] = []
         elif has_chain:
             c_top_list, call_wall_val, p_bot_list, put_wall_val = extract_top3_walls(col_cdf, col_pdf, spot, delta_days=max(0, delta_days))
             raw_mp = (
@@ -1375,11 +1380,36 @@ def pull_and_filter_real_expirations_locally(symbol: str, spot: float, max_cols:
             )
             call_wall_px_label = f"Call {call_wall_val:g}" if call_wall_val is not None else "—"
             put_wall_px_label = f"Put {put_wall_val:g}" if put_wall_val is not None else "—"
+
+            c_top_with_diff = []
+            for k_val, pwr_val in c_top_list:
+                cur_oi = int(c_oi_map.get(float(k_val), pwr_val))
+                if prev_c_oi_map is not None:
+                    prev_oi = int(prev_c_oi_map.get(float(k_val), 0))
+                    diff_val: int | None = cur_oi - prev_oi
+                else:
+                    diff_val = None
+                c_top_with_diff.append((float(k_val), int(pwr_val), diff_val))
+
+            p_bot_with_diff = []
+            for k_val, pwr_val in p_bot_list:
+                cur_oi = int(p_oi_map.get(float(k_val), pwr_val))
+                if prev_p_oi_map is not None:
+                    prev_oi = int(prev_p_oi_map.get(float(k_val), 0))
+                    diff_val = cur_oi - prev_oi
+                else:
+                    diff_val = None
+                p_bot_with_diff.append((float(k_val), int(pwr_val), diff_val))
+
+            prev_c_oi_map = c_oi_map
+            prev_p_oi_map = p_oi_map
         else:
             c_top_list, call_wall_val, p_bot_list, put_wall_val = [], None, [], None
             raw_mp = None
             call_wall_px_label = "—"
             put_wall_px_label = "—"
+            c_top_with_diff = []
+            p_bot_with_diff = []
 
         cols_data.append({
             "day_key": d_key,
@@ -1392,8 +1422,8 @@ def pull_and_filter_real_expirations_locally(symbol: str, spot: float, max_cols:
             "is_today": is_today,
             "delta": delta_days,
             "has_chain": has_chain,
-            "c_top": c_top_list,
-            "p_bot": p_bot_list,
+            "c_top": c_top_with_diff,
+            "p_bot": p_bot_with_diff,
             "call_wall": call_wall_val,
             "max_pain": raw_mp,
             "spot": spot,
@@ -1404,12 +1434,6 @@ def pull_and_filter_real_expirations_locally(symbol: str, spot: float, max_cols:
 
 
 def _style_wall_count_cell(cur_val: int, ref_val: int | None, is_baseline_col: bool = False) -> tuple[str, str]:
-    """
-    统一 Call Wall 与 Put Wall 数量变动变色规则：
-    - 数量增加 -> 绿色 (#15803d / #dcfce7)
-    - 数量减少 -> 红色 (#b91c1c / #fee2e2)
-    - 变动很小 / 持平 -> 黄色 (#ca8a04 / #fef9c3) 或黑色 (#0f172a)
-    """
     if is_baseline_col:
         return "#0f172a", "#fef08a"
     if ref_val is None or ref_val <= 0:
@@ -1424,12 +1448,6 @@ def _style_wall_count_cell(cur_val: int, ref_val: int | None, is_baseline_col: b
 
 
 def build_handwritten_style_oi_table_html(symbol: str, spot: float, prev_spot: float | None = None) -> str:
-    """
-    过去 10 个日历日快照矩阵 + 右侧“今日增减”列：
-    - 第 1~10 列为过去 10 天（最右侧第 10 栏为今天，如 28/11）
-    - 第 11 列为“今日增减”，逐行显示上下 6 档每档较前一日快照的 OI 增减（增多绿、减少红）
-    - 最底部汇总行在该列显示上下 6 档的变动总数/净差
-    """
     clean_sym = str(symbol or "").upper().strip()
     today = datetime.today()
     today_date = today.date()
@@ -1766,8 +1784,19 @@ def build_handwritten_style_oi_table_html(symbol: str, spot: float, prev_spot: f
     return html
 
 
+def _fmt_exp_diff_badge(diff_val: int | None) -> str:
+    if diff_val is None:
+        return ""
+    if diff_val > 0:
+        return f"<span style='color:#15803d; font-weight:900; font-size:11px;'>({diff_val:+,})</span>"
+    if diff_val < 0:
+        return f"<span style='color:#b91c1c; font-weight:900; font-size:11px;'>({diff_val:+,})</span>"
+    return "<span style='color:#64748b; font-weight:800; font-size:11px;'>(+0)</span>"
+
+
 def build_custom_option_matrix_html(symbol, spot):
-    cols_data, _, _, status_msg, cache_time, agg_walls = pull_and_filter_real_expirations_locally(symbol, spot, max_cols=10)
+    layout_cols = 8
+    cols_data, _, _, status_msg, cache_time, agg_walls = pull_and_filter_real_expirations_locally(symbol, spot, max_cols=layout_cols)
 
     all_vals = []
     for c in cols_data:
@@ -1783,8 +1812,7 @@ def build_custom_option_matrix_html(symbol, spot):
     y_low = v_min - v_span * 0.25
     y_high = v_max + v_span * 0.25
 
-    layout_cols = 10
-    col_w = 128
+    col_w = 160
     left_axis_w = 96
     total_chart_w = layout_cols * col_w
     header_h = 54
@@ -1864,15 +1892,18 @@ def build_custom_option_matrix_html(symbol, spot):
             <div style="font-size:15px; font-weight:900; color:#0f172a;">
                 📊 {symbol} 真实期权墙矩阵 ({status_badge} | Spot: <span style="background:#fef08a; padding:1px 6px; border-radius:4px;">${spot:.2f}</span>)
             </div>
-            <div style="display:flex; gap:16px; font-size:13px; font-weight:900;">
-                <span style="color:#16a34a;">━━ Call Wall (高于现价自动上移)</span>
+            <div style="display:flex; gap:14px; font-size:12.5px; font-weight:900;">
+                <span style="color:#16a34a;">━━ Call Wall</span>
                 <span style="color:#2563eb;">╌╌ Max Pain</span>
                 <span style="color:#0f172a;">━━ Spot</span>
-                <span style="color:#dc2626;">━━ Put Wall (跌破自动下移)</span>
+                <span style="color:#dc2626;">━━ Put Wall</span>
+                <span style="color:#15803d;">(+增绿)</span>
+                <span style="color:#b91c1c;">(-减红)</span>
             </div>
         </div>
         <div style="background:#f8fafc; border:1px solid #cbd5e1; border-radius:5px; padding:3px 8px; margin-bottom:6px; font-size:12.5px; font-weight:800; display:flex; justify-content:space-between;">
             <span style="color:#15803d;">🟢 上方有效主力 Call 墙 Top3: {agg_c_str}</span>
+            <span>上下6档每档旁括号为较上一到期日 OI 变动（绿增/红减）</span>
             <span style="color:#b91c1c;">🔴 下方有效主力 Put 墙 Top3: {agg_p_str}</span>
         </div>
 
@@ -1884,14 +1915,14 @@ def build_custom_option_matrix_html(symbol, spot):
                 </div>
                 <div style="height:{top3_h}px; border-bottom:2px solid #1e293b; display:flex; flex-direction:column; align-items:center; justify-content:center; font-weight:900; font-size:13px; color:#15803d; background:#f0fdf4; text-align:center; box-sizing:border-box;">
                     <span>上3档 Call</span>
-                    <span style="font-size:10.5px; font-weight:800;">高于现价上移</span>
+                    <span style="font-size:10.5px; font-weight:800;">较前期增减</span>
                 </div>
                 <div style="height:{svg_h}px; position:relative; border-bottom:2px solid #1e293b; background:#ffffff; box-sizing:border-box;">
                     {y_ticks_html}
                 </div>
                 <div style="height:{bot3_h}px; border-bottom:1px solid #cbd5e1; display:flex; flex-direction:column; align-items:center; justify-content:center; font-weight:900; font-size:13px; color:#b91c1c; background:#fef2f2; text-align:center; box-sizing:border-box;">
                     <span>下3档 Put</span>
-                    <span style="font-size:10.5px; font-weight:800;">跌破自动下移</span>
+                    <span style="font-size:10.5px; font-weight:800;">较前期增减</span>
                 </div>
                 <div style="height:{footer_h}px; display:flex; flex-direction:column; align-items:center; justify-content:center; font-weight:900; font-size:13px; background:#f8fafc; box-sizing:border-box;">
                     <span>到期轴</span>
@@ -1920,14 +1951,15 @@ def build_custom_option_matrix_html(symbol, spot):
         else:
             c_rows_html = ""
             if c["c_top"]:
-                for k_val, oi_val in c["c_top"]:
+                for k_val, oi_val, diff_val in c["c_top"]:
                     is_max_c = (k_val == c["call_wall"])
                     hi_style = "background:#dcfce7; font-weight:900; color:#14532d;" if is_max_c else "font-weight:800; color:#0f172a;"
+                    diff_badge = _fmt_exp_diff_badge(diff_val)
                     c_rows_html += f"""
-                        <div style="height:33px; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between; align-items:center; padding:0 6px; font-size:13px; box-sizing:border-box; {hi_style}">
+                        <div style="height:33px; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between; align-items:center; padding:0 5px; font-size:12px; box-sizing:border-box; {hi_style}">
                             <span>{k_val:g}</span>
                             <span style="color:#cbd5e1;">|</span>
-                            <span>{oi_val:,}</span>
+                            <span>{oi_val:,} {diff_badge}</span>
                         </div>
                     """
             else:
@@ -1939,14 +1971,15 @@ def build_custom_option_matrix_html(symbol, spot):
 
             p_rows_html = ""
             if c["p_bot"]:
-                for k_val, oi_val in c["p_bot"]:
+                for k_val, oi_val, diff_val in c["p_bot"]:
                     is_max_p = (k_val == c["put_wall"])
                     hi_style = "background:#fee2e2; font-weight:900; color:#7f1d1d;" if is_max_p else "font-weight:800; color:#0f172a;"
+                    diff_badge = _fmt_exp_diff_badge(diff_val)
                     p_rows_html += f"""
-                        <div style="height:33px; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between; align-items:center; padding:0 6px; font-size:13px; box-sizing:border-box; {hi_style}">
+                        <div style="height:33px; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between; align-items:center; padding:0 5px; font-size:12px; box-sizing:border-box; {hi_style}">
                             <span>{k_val:g}</span>
                             <span style="color:#cbd5e1;">|</span>
-                            <span>{oi_val:,}</span>
+                            <span>{oi_val:,} {diff_badge}</span>
                         </div>
                     """
             else:
